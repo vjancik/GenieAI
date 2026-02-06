@@ -1,9 +1,13 @@
 import { Message as DiscordMessage, Client } from 'discord.js';
 import { Message } from '../../../core/domain/entities/message';
 import { Role } from '../../../core/domain/value-objects/role';
+import type { ILogger } from '../../../core/application/interfaces/logger.interface';
 
 export class MessageChainService {
-    constructor(private readonly client: Client) { }
+    constructor(
+        private readonly client: Client,
+        private readonly logger: ILogger
+    ) { }
 
     /**
      * Traverses the reply chain backwards to build the conversation history.
@@ -39,7 +43,7 @@ export class MessageChainService {
                 chain.push(parent);
                 ptr = parent;
             } catch (error) {
-                console.warn('Failed to fetch parent message in chain:', error);
+                this.logger.warn('Failed to fetch parent message in chain:', error);
                 break; // Stop chain on broken link (deleted message, etc)
             }
         }

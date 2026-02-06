@@ -2,6 +2,7 @@ import { Client, GatewayIntentBits, Events, Message as DiscordMessage } from 'di
 import { SendMessageUseCase } from '../../core/application/use-cases/send-message.use-case';
 import { MessageChainService } from './services/message-chain.service';
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
+import type { ILogger } from '../../core/application/interfaces/logger.interface';
 import { Message, type MessageAttachment } from '../../core/domain/entities/message';
 
 export class DiscordBot {
@@ -10,7 +11,8 @@ export class DiscordBot {
 
     constructor(
         private readonly sendMessageUseCase: SendMessageUseCase,
-        private readonly chatRepo: IChatRepository // Injected for metadata updates
+        private readonly chatRepo: IChatRepository, // Injected for metadata updates
+        private readonly logger: ILogger
     ) {
         this.client = new Client({
             intents: [
@@ -20,13 +22,13 @@ export class DiscordBot {
             ],
         });
 
-        this.chainService = new MessageChainService(this.client);
+        this.chainService = new MessageChainService(this.client, this.logger);
         this.setupListeners();
     }
 
     private setupListeners() {
         this.client.once(Events.ClientReady, (c) => {
-            console.log(`Ready! Logged in as ${c.user.tag}`);
+            this.logger.info(`Ready! Logged in as ${c.user.tag}`);
         });
 
         this.client.on(Events.MessageCreate, async (message: DiscordMessage) => {
@@ -138,7 +140,7 @@ export class DiscordBot {
             await this.chatRepo.updateMessage(updatedMessage);
 
         } catch (error) {
-            console.error('Error handling message:', error);
+            this.logger.error('Error handling message:', error);
             await message.reply('Sorry, I encountered an error processing your request.');
         }
     }

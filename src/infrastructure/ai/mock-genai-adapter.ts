@@ -1,11 +1,13 @@
 import { Message } from '../../core/domain/entities/message';
 import type { IGenerativeAIModel } from '../../core/application/interfaces/illm-provider';
-import { Role } from '../../core/domain/value-objects/role';
+import type { ILogger } from '../../core/application/interfaces/logger.interface';
 
 export class MockGenAIAdapter implements IGenerativeAIModel {
+    constructor(private readonly logger: ILogger) { }
+
     async generateContent(history: Message[], prompt: string): Promise<string> {
-        console.log(`[MockGenAI] Generating response for prompt: "${prompt}"`);
-        console.log(`[MockGenAI] Context history length: ${history.length}`);
+        this.logger.debug(`[MockGenAI] Generating response for prompt: "${prompt}"`);
+        this.logger.debug(`[MockGenAI] Context history length: ${history.length}`);
 
         // Simulate network delay
         await new Promise(resolve => setTimeout(resolve, 800));

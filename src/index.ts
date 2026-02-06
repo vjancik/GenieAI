@@ -3,19 +3,22 @@ import { SendMessageUseCase } from './core/application/use-cases/send-message.us
 import { GoogleGenAIAdapter } from './infrastructure/ai/google-genai-adapter';
 import { InMemoryChatRepository } from './infrastructure/database/in-memory-chat-repo';
 import { DiscordBot } from './interfaces/discord';
+import { PinoLogger } from './infrastructure/logging/pino-logger';
 
 async function main() {
-    console.log('Starting AI Agent Backend...');
+    const logger = new PinoLogger(config.logging.level, config.logging.format);
+
+    logger.info('Starting AI Agent Backend...');
 
     // 1. Initialize Infrastructure
     const chatRepo = new InMemoryChatRepository();
-    const aiAdapter = new GoogleGenAIAdapter(chatRepo);
+    const aiAdapter = new GoogleGenAIAdapter(chatRepo, logger);
 
     // 2. Initialize Application Layer (Use Cases)
     const sendMessageUseCase = new SendMessageUseCase(chatRepo, aiAdapter);
 
     // 3. Initialize Interface Layer
-    const discordBot = new DiscordBot(sendMessageUseCase, chatRepo);
+    const discordBot = new DiscordBot(sendMessageUseCase, chatRepo, logger);
 
     // 4. Start Application
     try {
@@ -23,11 +26,11 @@ async function main() {
         if (config.discord.token) {
             await discordBot.start(config.discord.token);
         } else {
-            console.warn('WARNING: DISCORD_TOKEN is not set in .env. Bot will not connect to Discord.');
-            console.log('Mock setup is complete. To test real discord connection, add DISCORD_TOKEN to .env');
+            logger.warn('WARNING: DISCORD_TOKEN is not set in .env. Bot will not connect to Discord.');
+            logger.info('Mock setup is complete. To test real discord connection, add DISCORD_TOKEN to .env');
         }
     } catch (error) {
-        console.error('Failed to start application:', error);
+        logger.fatal('Failed to start application:', error);
         process.exit(1);
     }
 }

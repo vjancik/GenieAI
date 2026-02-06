@@ -16,16 +16,18 @@
  * handling, using a mature library like discord.js is the recommended approach for most use cases.
  */
 
-// import { bench, run } from 'mitata';
 import { Client, GatewayIntentBits, TextChannel, Message as DiscordMessage } from 'discord.js';
 import { randomUUID } from 'crypto';
+import { PinoLogger } from '../infrastructure/logging/pino-logger';
+
+const logger = new PinoLogger('info', 'text');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CHANNEL_ID = process.env.BENCHMARK_DISCORD_CHANNEL_ID;
 const ITERATIONS = 10;
 
 if (!TOKEN || !CHANNEL_ID) {
-    console.error('Error: DISCORD_TOKEN and BENCHMARK_DISCORD_CHANNEL_ID must be set in .env');
+    logger.error('Error: DISCORD_TOKEN and BENCHMARK_DISCORD_CHANNEL_ID must be set in .env');
     process.exit(1);
 }
 
@@ -48,7 +50,7 @@ class RawDiscordClient {
 
     async connect() {
         return new Promise<void>((resolve, reject) => {
-            console.log('[RawWS] Connecting to Gateway...');
+            logger.info('[RawWS] Connecting to Gateway...');
             this.ws = new WebSocket('wss://gateway.discord.gg/?v=10&encoding=json');
 
             const timeout = setTimeout(() => {
@@ -56,11 +58,11 @@ class RawDiscordClient {
             }, 10000);
 
             this.ws.onclose = (event) => {
-                console.error(`[RawWS] Closed: ${event.code} ${event.reason}`);
+                logger.error(`[RawWS] Closed: ${event.code} ${event.reason}`);
             };
 
             this.ws.onerror = (event) => {
-                console.error('[RawWS] Error:', event);
+                logger.error('[RawWS] Error:', event);
             };
 
             this.ws.onmessage = (event) => {
@@ -73,7 +75,7 @@ class RawDiscordClient {
                     case 10: // Hello
                         clearTimeout(timeout);
                         const heartbeatInterval = d.heartbeat_interval;
-                        console.log(`[RawWS] Received Hello. Heartbeat interval: ${heartbeatInterval}ms`);
+                        logger.info(`[RawWS] Received Hello. Heartbeat interval: ${heartbeatInterval}ms`);
                         setInterval(() => {
                             this.ws?.send(JSON.stringify({ op: 1, d: this.sequence }));
                         }, heartbeatInterval);
@@ -92,7 +94,7 @@ class RawDiscordClient {
                         if (t === 'READY') {
                             this.sessionId = d.session_id;
                             this.resumeUrl = d.resume_gateway_url;
-                            console.log('[RawWS] Ready!');
+                            logger.info('[RawWS] Ready!');
                             resolve();
                         }
                         if (t === 'MESSAGE_CREATE') {
@@ -110,11 +112,11 @@ class RawDiscordClient {
                         break;
 
                     case 7: // Reconnect
-                        console.warn('[RawWS] Gateway requested reconnect (Op 7)');
+                        logger.warn('[RawWS] Gateway requested reconnect (Op 7)');
                         break;
 
                     case 9: // Invalid Session
-                        console.warn('[RawWS] Invalid Session (Op 9)');
+                        logger.warn('[RawWS] Invalid Session (Op 9)');
                         break;
 
                     case 11: // Heartbeat ACK
@@ -155,14 +157,14 @@ class RawDiscordClient {
         if (res.status === 429) {
             const data = (await res.json()) as { retry_after?: number };
             const retryAfter = (data.retry_after || 5) * 1000;
-            console.warn(`\n[RawAPI] Rate limited! (429). Retrying in ${retryAfter}ms...`);
+            logger.warn(`\n[RawAPI] Rate limited! (429). Retrying in ${retryAfter}ms...`);
             await new Promise(resolve => setTimeout(resolve, retryAfter));
             return this.sendMessage(content);
         }
 
         if (!res.ok) {
             const errorText = await res.text();
-            console.error(`\n[RawAPI] Error ${res.status}: ${errorText}`);
+            logger.error(`\n[RawAPI] Error ${res.status}: ${errorText}`);
             throw new Error(`Discord API error: ${res.status} ${res.statusText}`);
         }
 
@@ -173,7 +175,7 @@ class RawDiscordClient {
 const rawClient = new RawDiscordClient();
 await rawClient.connect();
 
-console.log('Setup complete. Starting benchmarks...');
+logger.info('Setup complete. Starting benchmarks...');
 
 // --- Helper for formatting results ---
 function printStats(name: string, durations: number[]) {
@@ -182,12 +184,12 @@ function printStats(name: string, durations: number[]) {
     const min = Math.min(...durations);
     const max = Math.max(...durations);
 
-    console.log(`\n--- ${name} ---`);
-    console.log(`Iterations: ${durations.length}`);
-    console.log(`Average:    ${avg.toFixed(2)}ms`);
-    console.log(`Min:        ${min.toFixed(2)}ms`);
-    console.log(`Max:        ${max.toFixed(2)}ms`);
-    durations.forEach((d, i) => console.log(`  Iter ${i + 1}: ${d.toFixed(2)}ms`));
+    logger.info(`\\n--- ${name} ---`);
+    logger.info(`Iterations: ${durations.length}`);
+    logger.info(`Average:    ${avg.toFixed(2)}ms`);
+    logger.info(`Min:        ${min.toFixed(2)}ms`);
+    logger.info(`Max:        ${max.toFixed(2)}ms`);
+    durations.forEach((d, i) => logger.info(`  Iter ${i + 1}: ${d.toFixed(2)}ms`));
 }
 
 // --- Benchmark Runner ---
@@ -196,7 +198,7 @@ async function runBenchmarks() {
     const djsDurations: number[] = [];
     const rawDurations: number[] = [];
 
-    console.log(`\nRunning Raw API Benchmark (${ITERATIONS} iterations)...`);
+    logger.info(`\\nRunning Raw API Benchmark (${ITERATIONS} iterations)...`);
     for (let i = 0; i < ITERATIONS; i++) {
         const key = `raw-bench-${randomUUID()}`;
         const waitPromise = rawClient.waitForMessage(key);
@@ -210,10 +212,10 @@ async function runBenchmarks() {
     }
     process.stdout.write('\n');
 
-    console.log('\nWaiting for rate limits to settle (2s)...');
+    logger.info('\\nWaiting for rate limits to settle (2s)...');
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    console.log(`\nRunning Discord.js Benchmark (${ITERATIONS} iterations)...`);
+    logger.info(`\\nRunning Discord.js Benchmark (${ITERATIONS} iterations)...`);
     for (let i = 0; i < ITERATIONS; i++) {
         const key = `djs-bench-${randomUUID()}`;
         const waitPromise = new Promise<void>((resolve, reject) => {

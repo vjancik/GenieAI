@@ -5,13 +5,17 @@ import { Role } from '../../core/domain/value-objects/role';
 import { config } from '../../config/env';
 
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
+import type { ILogger } from '../../core/application/interfaces/logger.interface';
 
 export class GoogleGenAIAdapter implements IGenerativeAIModel {
     private client: GoogleGenAI;
     private model: string;
     private systemPrompt: string;
 
-    constructor(private readonly chatRepo: IChatRepository) {
+    constructor(
+        private readonly chatRepo: IChatRepository,
+        private readonly logger: ILogger
+    ) {
         this.client = new GoogleGenAI({ apiKey: config.ai.apiKey });
         this.model = config.ai.model;
         this.systemPrompt = config.ai.systemPrompt;
@@ -97,7 +101,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
                                 genaiExpirationTime: attachment.genaiExpirationTime
                             });
                         } catch (err) {
-                            console.error("Failed to update attachment metadata in repo", err);
+                            this.logger.error("Failed to update attachment metadata in repo", err);
                         }
                     }
 
@@ -110,7 +114,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
                 return { inlineData: { mimeType: attachment.mimeType, data: attachment.data } };
             }
         } catch (error) {
-            console.error("Error resolving attachment:", error);
+            this.logger.error("Error resolving attachment:", error);
         }
 
         return null;
@@ -119,7 +123,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
     private async uploadFile(attachment: MessageAttachment) {
         if (!attachment.url) return null;
 
-        console.log(`Uploading file from ${attachment.url} to Google GenAI...`);
+        this.logger.info(`Uploading file from ${attachment.url} to Google GenAI...`);
         const response = await fetch(attachment.url);
         if (!response.ok) {
             throw new Error(`Failed to fetch attachment from ${attachment.url}`);
@@ -136,7 +140,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
         });
 
         // uploadResponse is the File object directly in this version of the SDK
-        console.log(`File uploaded: ${uploadResponse.uri}`);
+        this.logger.info(`File uploaded: ${uploadResponse.uri}`);
         return uploadResponse;
     }
 
