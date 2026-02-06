@@ -2,30 +2,39 @@ import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { eq, desc, sql } from 'drizzle-orm';
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
 import { Message, type MessageAttachment } from '../../core/domain/entities/message';
-import { messages } from './schema';
+import { messages, discordMessages } from './schema';
 import { Role } from '../../core/domain/value-objects/role';
 
 export class PostgresChatRepository implements IChatRepository {
     constructor(private readonly db: NodePgDatabase<any>) { }
 
-    async saveMessage(message: Message): Promise<void> {
-        await this.db.insert(messages).values({
-            id: message.id,
-            role: message.role as any,
-            content: message.content,
-            timestamp: message.timestamp,
-            metadata: message.metadata,
-            parentId: message.parentId,
-            attachments: message.attachments,
-        }).onConflictDoUpdate({
-            target: [messages.id],
-            set: {
+    async saveMessage(message: Message, externalId?: string): Promise<void> {
+        await this.db.transaction(async (tx) => {
+            await tx.insert(messages).values({
+                id: message.id,
                 role: message.role as any,
                 content: message.content,
                 timestamp: message.timestamp,
                 metadata: message.metadata,
                 parentId: message.parentId,
                 attachments: message.attachments,
+            }).onConflictDoUpdate({
+                target: [messages.id],
+                set: {
+                    role: message.role as any,
+                    content: message.content,
+                    timestamp: message.timestamp,
+                    metadata: message.metadata,
+                    parentId: message.parentId,
+                    attachments: message.attachments,
+                }
+            });
+
+            if (externalId) {
+                await tx.insert(discordMessages).values({
+                    id: externalId,
+                    messageId: message.id,
+                }).onConflictDoNothing();
             }
         });
     }
@@ -54,56 +63,29 @@ export class PostgresChatRepository implements IChatRepository {
     }
 
     async getHistory(messageId: string, limit: number = 50): Promise<Message[]> {
-        /**
-         * We use a Recursive Common Table Expression (CTE) to fetch the message chain.
-         * 1. Start with the given messageId.
-         * 2. Recursively find the parent of each message.
-         * 3. Stop when no parentId exists or limit reached.
-         * This executes as ONE single database request.
-         */
-        const historyCte = this.db.$with('history').as(
-            this.db.select({
-                id: messages.id,
-                role: messages.role,
-                content: messages.content,
-                timestamp: messages.timestamp,
-                metadata: messages.metadata,
-                parentId: messages.parentId,
-                attachments: messages.attachments,
-                level: sql<number>`1`.as('level'),
-            })
-                .from(messages)
-                .where(eq(messages.id, messageId))
-                .unionAll(
-                    this.db.select({
-                        id: messages.id,
-                        role: messages.role,
-                        content: messages.content,
-                        timestamp: messages.timestamp,
-                        metadata: messages.metadata,
-                        parentId: messages.parentId,
-                        attachments: messages.attachments,
-                        level: sql<number>`level + 1`,
-                    })
-                        .from(messages)
-                        .innerJoin(sql`history`, eq(messages.id, sql`history.parent_id`))
-                        .where(sql`level < ${limit}`)
-                )
-        );
+        const results = await this.db.execute(sql`
+            WITH RECURSIVE history AS (
+                SELECT 
+                    id, role, content, timestamp, metadata, parent_id, attachments, 1 as level
+                FROM messages
+                WHERE id = ${messageId}
+                UNION ALL
+                SELECT 
+                    m.id, m.role, m.content, m.timestamp, m.metadata, m.parent_id, m.attachments, h.level + 1
+                FROM messages m
+                INNER JOIN history h ON m.id = h.parent_id
+                WHERE h.level < ${limit}
+            )
+            SELECT * FROM history ORDER BY timestamp DESC
+        `);
 
-        const results = await this.db
-            .with(historyCte)
-            .select()
-            .from(historyCte)
-            .orderBy(desc(sql`timestamp`));
-
-        return results.reverse().map(r => new Message({
+        return (results.rows as any[]).reverse().map(r => new Message({
             id: r.id,
             role: r.role as Role,
             content: r.content,
-            timestamp: r.timestamp,
+            timestamp: new Date(r.timestamp),
             metadata: r.metadata || undefined,
-            parentId: r.parentId || undefined,
+            parentId: r.parent_id || undefined,
             attachments: r.attachments as any,
         }));
     }

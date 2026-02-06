@@ -1,19 +1,19 @@
-import { Client, GatewayIntentBits, Events, Message as DiscordMessage } from 'discord.js';
+import { Client, GatewayIntentBits, Events, Message as DiscordMessage, TextChannel } from 'discord.js';
+import { v4 as uuidv4 } from 'uuid';
 import { SendMessageUseCase } from '../../core/application/use-cases/send-message.use-case';
-import { MessageChainService } from './services/message-chain.service';
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
+import type { IDiscordRepository } from '../../core/domain/repositories/discord-repository';
 import type { ILogger } from '../../core/application/interfaces/logger.interface';
 import { Message, type MessageAttachment } from '../../core/domain/entities/message';
 
 export class DiscordBot {
     private client: Client;
-    private chainService: MessageChainService;
-
     private logger: ILogger;
 
     constructor(
         private readonly sendMessageUseCase: SendMessageUseCase,
-        private readonly chatRepo: IChatRepository, // Injected for metadata updates
+        private readonly chatRepo: IChatRepository,
+        private readonly discordRepo: IDiscordRepository,
         logger: ILogger
     ) {
         this.logger = logger.child({ className: 'DiscordBot' });
@@ -25,7 +25,6 @@ export class DiscordBot {
             ],
         });
 
-        this.chainService = new MessageChainService(this.client, this.logger);
         this.setupListeners();
     }
 
@@ -37,6 +36,33 @@ export class DiscordBot {
         this.client.on(Events.MessageCreate, async (message: DiscordMessage) => {
             await this.handleMessage(message);
         });
+    }
+
+    private splitMessage(text: string, maxLength: number = 2000): string[] {
+        const chunks: string[] = [];
+        let currentPosition = 0;
+
+        while (currentPosition < text.length) {
+            let chunk = text.substring(currentPosition, currentPosition + maxLength);
+
+            // If not at the end, try to find a newline or space to break at
+            if (currentPosition + maxLength < text.length) {
+                const lastNewline = chunk.lastIndexOf('\n');
+                if (lastNewline > maxLength * 0.8) {
+                    chunk = text.substring(currentPosition, currentPosition + lastNewline + 1);
+                } else {
+                    const lastSpace = chunk.lastIndexOf(' ');
+                    if (lastSpace > maxLength * 0.8) {
+                        chunk = text.substring(currentPosition, currentPosition + lastSpace + 1);
+                    }
+                }
+            }
+
+            chunks.push(chunk);
+            currentPosition += chunk.length;
+        }
+
+        return chunks;
     }
 
     private async handleMessage(message: DiscordMessage) {
@@ -88,58 +114,63 @@ export class DiscordBot {
                 return text;
             };
 
+            const formattedContent = formatMessageBlock(message, content);
             let history: Message[] = [];
-            let finalPrompt = "";
+            let finalPrompt = formattedContent;
+            let parentUuid: string | undefined = undefined;
 
             if (message.reference?.messageId) {
-                const refMessage = await message.fetchReference();
+                parentUuid = await this.discordRepo.getMessageId(message.reference.messageId) || undefined;
 
-                if (refMessage.author.id !== this.client.user?.id) {
-                    // Fold referencing message
-                    // Order: Current Message -> Referenced Message (as context)
-
-                    // 1. Format Current Message
-                    // Note: If isCommand, 'content' is already stripped. 
-                    // But if referencing, we might be replying.
-                    const currentBlock = formatMessageBlock(message, content, "Message from user named");
-
-                    // 2. Format Referenced Message
-                    const refBlock = formatMessageBlock(refMessage, undefined, "Referring to message from user named");
-
-                    finalPrompt = `${currentBlock}\n\n${refBlock}`;
+                if (parentUuid) {
+                    // We have history in our DB
+                    history = await this.chatRepo.getHistory(parentUuid);
                 } else {
-                    // Let's apply the formatting to the current message regardless, to be safe and consistent.
-                    finalPrompt = formatMessageBlock(message, content);
-                    history = await this.chainService.getReplyChain(message);
+                    // No history in DB, fetch from Discord to see if we should "fold"
+                    try {
+                        const refMessage = await message.fetchReference();
+                        if (refMessage.author.id !== this.client.user?.id) {
+                            // Fold referencing message for context
+                            const refBlock = formatMessageBlock(refMessage, undefined, "Referring to message from user named");
+                            finalPrompt = `${formattedContent}\n\n${refBlock}`;
+                        }
+                    } catch (e) {
+                        this.logger.warn('Could not fetch reference for context folding');
+                    }
                 }
-            } else {
-                // No reference
-                finalPrompt = formatMessageBlock(message, content);
             }
 
+            // Generate internal UUID for the user message
+            const userUuid = uuidv4();
+
             // Execute Use Case
-            const response = await this.sendMessageUseCase.execute({
-                conversationId: message.id,
-                id: message.id,
+            // Note: conversationId should be the root of the thread. history[0] is oldest.
+            const conversationId = (history.length > 0 && history[0]) ? history[0].id : userUuid;
+
+            const aiMessage = await this.sendMessageUseCase.execute({
+                conversationId,
+                id: userUuid,
                 content: finalPrompt,
                 userId: message.author.id,
                 history: history,
-                parentId: message.reference?.messageId,
-                attachments: allAttachments
+                parentId: parentUuid,
+                attachments: allAttachments,
+                externalId: message.id // Atomic mapping for user message
             });
 
-            // 2. Update the status message with final response
-            const updatedDiscordMsg = await thinkingMsg.edit(response.content);
+            // Split and Send Response
+            const chunks = this.splitMessage(aiMessage.content);
 
-            const updatedMessage = new Message({
-                ...response,
-                metadata: {
-                    ...response.metadata,
-                    externalId: updatedDiscordMsg.id,
-                    discordChannelId: updatedDiscordMsg.channelId,
-                }
-            });
-            await this.chatRepo.updateMessage(updatedMessage);
+            // Delete the "Thinking..." message
+            await thinkingMsg.delete().catch(() => { });
+
+            let lastMsg = message;
+            for (let i = 0; i < chunks.length; i++) {
+                const sentMsg = await lastMsg.reply(chunks[i] || '');
+                // Map each response chunk to the same internal AI message ID
+                await this.discordRepo.saveMapping(sentMsg.id, aiMessage.id);
+                lastMsg = sentMsg;
+            }
 
         } catch (error) {
             this.logger.error('Error handling message:', error);

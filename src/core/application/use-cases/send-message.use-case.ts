@@ -22,6 +22,7 @@ export interface SendMessageDTO {
     id?: string;
     parentId?: string;
     attachments?: MessageAttachment[];
+    externalId?: string;
 }
 
 import type { ILogger } from '../interfaces/logger.interface';
@@ -50,7 +51,7 @@ export class SendMessageUseCase {
                     attachments: dto.attachments
                 });
 
-                await this.chatRepo.saveMessage(userMessage);
+                await this.chatRepo.saveMessage(userMessage, dto.externalId);
 
                 // 2. Load History
                 let history: Message[];
