@@ -11,5 +11,6 @@ export const config = {
     logging: {
         level: process.env.LOG_LEVEL || 'info',
         format: (process.env.LOG_FORMAT as 'json' | 'text') || 'text',
+        useColor: !process.env.LOG_COLOR || ['true', '1'].includes(process.env.LOG_COLOR.toLowerCase()),
     }
 };

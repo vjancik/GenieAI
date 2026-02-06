@@ -4,7 +4,11 @@ import type { ILogger } from '../../core/application/interfaces/logger.interface
 export class PinoLogger implements ILogger {
     private logger: PinoInstance;
 
-    constructor(levelOrInstance: string | PinoInstance, private format: 'json' | 'text' = 'json') {
+    constructor(
+        levelOrInstance: string | PinoInstance,
+        private format: 'json' | 'text' = 'json',
+        private useColor: boolean = true
+    ) {
         if (typeof levelOrInstance !== 'string') {
             this.logger = levelOrInstance;
         } else {
@@ -23,9 +27,14 @@ export class PinoLogger implements ILogger {
 
                             // Extract context (className, serviceName, or context)
                             const context = log.className || log.serviceName || log.context;
-                            const contextStr = context ? ` \x1b[36m[${context}]\x1b[0m` : ''; // Cyan color for context
+                            let contextStr = '';
+                            if (context) {
+                                contextStr = this.useColor ? ` \x1b[36m[${context}]\x1b[0m` : ` [${context}]`;
+                            }
 
-                            process.stdout.write(`[\x1b[90m${time}\x1b[0m] ${levelStr}${contextStr}: ${message}\n`);
+                            const timeStr = this.useColor ? `\x1b[90m${time}\x1b[0m` : time;
+
+                            process.stdout.write(`[${timeStr}] ${levelStr}${contextStr}: ${message}\n`);
                         } catch (e) {
                             process.stdout.write(msg);
                         }
@@ -38,18 +47,33 @@ export class PinoLogger implements ILogger {
     }
 
     child(metadata: Record<string, any>): ILogger {
-        return new PinoLogger(this.logger.child(metadata), this.format);
+        return new PinoLogger(this.logger.child(metadata), this.format, this.useColor);
     }
 
     private formatLevel(level: number): string {
+        const label = this.getLevelLabel(level);
+        if (!this.useColor) return label;
+
         switch (level) {
-            case 10: return '\x1b[90mTRACE\x1b[0m'; // Gray
-            case 20: return '\x1b[34mDEBUG\x1b[0m'; // Blue
-            case 30: return '\x1b[32mINFO\x1b[0m';  // Green
-            case 40: return '\x1b[33mWARN\x1b[0m';  // Yellow
-            case 50: return '\x1b[31mERROR\x1b[0m'; // Red
-            case 60: return '\x1b[41mFATAL\x1b[0m'; // Red background
-            default: return '\x1b[32mINFO\x1b[0m';
+            case 10: return `\x1b[90m${label}\x1b[0m`; // Gray
+            case 20: return `\x1b[34m${label}\x1b[0m`; // Blue
+            case 30: return `\x1b[32m${label}\x1b[0m`;  // Green
+            case 40: return `\x1b[33m${label}\x1b[0m`;  // Yellow
+            case 50: return `\x1b[31m${label}\x1b[0m`; // Red
+            case 60: return `\x1b[41m${label}\x1b[0m`; // Red background
+            default: return `\x1b[32m${label}\x1b[0m`;
+        }
+    }
+
+    private getLevelLabel(level: number): string {
+        switch (level) {
+            case 10: return 'TRACE';
+            case 20: return 'DEBUG';
+            case 30: return 'INFO';
+            case 40: return 'WARN';
+            case 50: return 'ERROR';
+            case 60: return 'FATAL';
+            default: return 'INFO';
         }
     }
 

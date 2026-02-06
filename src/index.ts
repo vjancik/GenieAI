@@ -6,7 +6,7 @@ import { DiscordBot } from './interfaces/discord';
 import { PinoLogger } from './infrastructure/logging/pino-logger';
 
 async function main() {
-    const logger = new PinoLogger(config.logging.level, config.logging.format);
+    const logger = new PinoLogger(config.logging.level, config.logging.format, config.logging.useColor);
 
     logger.info('Starting AI Agent Backend...');
 
