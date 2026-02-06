@@ -13,33 +13,66 @@ export class PinoLogger implements ILogger {
             this.logger = levelOrInstance;
         } else {
             const level = levelOrInstance;
+            const otelEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+            const serviceName = process.env.OTEL_SERVICE_NAME || 'genie-ai-bot';
+
+            const streams: { stream: any; level?: string }[] = [];
+
+            // 1. Console Stream
             if (format === 'text') {
-                this.logger = pino({
-                    level,
-                    transport: undefined,
-                }, {
-                    write: (msg: string) => {
-                        try {
-                            const log = JSON.parse(msg);
-                            const time = new Date(log.time).toLocaleTimeString();
-                            const levelStr = this.formatLevel(log.level);
-                            const message = log.msg;
+                streams.push({
+                    level: level as string,
+                    stream: {
+                        write: (msg: string) => {
+                            try {
+                                const log = JSON.parse(msg);
+                                const time = new Date(log.time).toLocaleTimeString();
+                                const levelStr = this.formatLevel(log.level);
+                                const message = log.msg;
 
-                            // Extract context (className, serviceName, or context)
-                            const context = log.className || log.serviceName || log.context;
-                            let contextStr = '';
-                            if (context) {
-                                contextStr = this.useColor ? ` \x1b[36m[${context}]\x1b[0m` : ` [${context}]`;
+                                const context = log.className || log.serviceName || log.context;
+                                let contextStr = '';
+                                if (context) {
+                                    contextStr = this.useColor ? ` \x1b[36m[${context}]\x1b[0m` : ` [${context}]`;
+                                }
+
+                                const timeStr = this.useColor ? `\x1b[90m${time}\x1b[0m` : time;
+                                process.stdout.write(`[${timeStr}] ${levelStr}${contextStr}: ${message}\n`);
+                            } catch (e) {
+                                process.stdout.write(msg);
                             }
-
-                            const timeStr = this.useColor ? `\x1b[90m${time}\x1b[0m` : time;
-
-                            process.stdout.write(`[${timeStr}] ${levelStr}${contextStr}: ${message}\n`);
-                        } catch (e) {
-                            process.stdout.write(msg);
                         }
                     }
                 });
+            } else {
+                streams.push({ level: level as string, stream: process.stdout });
+            }
+
+            // 2. OpenTelemetry Stream (if configured)
+            if (otelEndpoint) {
+                streams.push({
+                    level: level as string,
+                    stream: pino.transport({
+                        target: 'pino-opentelemetry-transport',
+                        options: {
+                            loggerName: serviceName, // This sets the scope_name in OTel
+                            resourceAttributes: {
+                                'service.name': serviceName,
+                            }
+                        }
+                    })
+                });
+            }
+
+            if (streams.length > 1) {
+                this.logger = pino({ level }, pino.multistream(streams));
+            } else if (streams.length === 1) {
+                const single = streams[0]!;
+                if (format === 'text') {
+                    this.logger = pino({ level }, single.stream);
+                } else {
+                    this.logger = pino({ level });
+                }
             } else {
                 this.logger = pino({ level });
             }

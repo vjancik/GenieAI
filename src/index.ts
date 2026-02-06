@@ -15,7 +15,7 @@ async function main() {
     const aiAdapter = new GoogleGenAIAdapter(chatRepo, logger);
 
     // 2. Initialize Application Layer (Use Cases)
-    const sendMessageUseCase = new SendMessageUseCase(chatRepo, aiAdapter);
+    const sendMessageUseCase = new SendMessageUseCase(chatRepo, aiAdapter, logger);
 
     // 3. Initialize Interface Layer
     const discordBot = new DiscordBot(sendMessageUseCase, chatRepo, logger);
