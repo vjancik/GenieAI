@@ -12,10 +12,13 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
     private model: string;
     private systemPrompt: string;
 
+    private logger: ILogger;
+
     constructor(
         private readonly chatRepo: IChatRepository,
-        private readonly logger: ILogger
+        logger: ILogger
     ) {
+        this.logger = logger.child({ className: 'GoogleGenAIAdapter' });
         this.client = new GoogleGenAI({ apiKey: config.ai.apiKey });
         this.model = config.ai.model;
         this.systemPrompt = config.ai.systemPrompt;

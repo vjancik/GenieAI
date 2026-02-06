@@ -4,4 +4,5 @@ export interface ILogger {
     warn(msg: string, ...args: any[]): void;
     error(msg: string, ...args: any[]): void;
     fatal(msg: string, ...args: any[]): void;
+    child(metadata: Record<string, any>): ILogger;
 }

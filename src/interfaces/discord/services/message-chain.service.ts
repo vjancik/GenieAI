@@ -4,10 +4,13 @@ import { Role } from '../../../core/domain/value-objects/role';
 import type { ILogger } from '../../../core/application/interfaces/logger.interface';
 
 export class MessageChainService {
+    private logger: ILogger;
     constructor(
         private readonly client: Client,
-        private readonly logger: ILogger
-    ) { }
+        logger: ILogger
+    ) {
+        this.logger = logger.child({ serviceName: 'MessageChainService' });
+    }
 
     /**
      * Traverses the reply chain backwards to build the conversation history.

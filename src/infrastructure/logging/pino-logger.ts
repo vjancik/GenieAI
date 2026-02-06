@@ -4,50 +4,52 @@ import type { ILogger } from '../../core/application/interfaces/logger.interface
 export class PinoLogger implements ILogger {
     private logger: PinoInstance;
 
-    constructor(level: string, format: 'json' | 'text') {
-        if (format === 'text') {
-            // Manual "pretty" output for Windows compatibility and user request
-            this.logger = pino({
-                level,
-                transport: undefined, // Don't use external transport
-            }, {
-                write: (msg: string) => {
-                    try {
-                        const log = JSON.parse(msg);
-                        const time = new Date(log.time).toLocaleTimeString();
-                        const levelStr = this.formatLevel(log.level);
-                        const message = log.msg;
-                        const rest = { ...log };
-                        delete rest.time;
-                        delete rest.level;
-                        delete rest.msg;
-                        delete rest.v;
-                        delete rest.pid;
-                        delete rest.hostname;
-
-                        const meta = Object.keys(rest).length > 0 ? ` ${JSON.stringify(rest)}` : '';
-                        process.stdout.write(`[${time}] ${levelStr}: ${message}${meta}\n`);
-                    } catch (e) {
-                        process.stdout.write(msg);
-                    }
-                }
-            });
+    constructor(levelOrInstance: string | PinoInstance, private format: 'json' | 'text' = 'json') {
+        if (typeof levelOrInstance !== 'string') {
+            this.logger = levelOrInstance;
         } else {
-            this.logger = pino({
-                level,
-            });
+            const level = levelOrInstance;
+            if (format === 'text') {
+                this.logger = pino({
+                    level,
+                    transport: undefined,
+                }, {
+                    write: (msg: string) => {
+                        try {
+                            const log = JSON.parse(msg);
+                            const time = new Date(log.time).toLocaleTimeString();
+                            const levelStr = this.formatLevel(log.level);
+                            const message = log.msg;
+
+                            // Extract context (className, serviceName, or context)
+                            const context = log.className || log.serviceName || log.context;
+                            const contextStr = context ? ` \x1b[36m[${context}]\x1b[0m` : ''; // Cyan color for context
+
+                            process.stdout.write(`[\x1b[90m${time}\x1b[0m] ${levelStr}${contextStr}: ${message}\n`);
+                        } catch (e) {
+                            process.stdout.write(msg);
+                        }
+                    }
+                });
+            } else {
+                this.logger = pino({ level });
+            }
         }
+    }
+
+    child(metadata: Record<string, any>): ILogger {
+        return new PinoLogger(this.logger.child(metadata), this.format);
     }
 
     private formatLevel(level: number): string {
         switch (level) {
-            case 10: return 'TRACE';
-            case 20: return 'DEBUG';
-            case 30: return 'INFO';
-            case 40: return 'WARN';
-            case 50: return 'ERROR';
-            case 60: return 'FATAL';
-            default: return 'INFO';
+            case 10: return '\x1b[90mTRACE\x1b[0m'; // Gray
+            case 20: return '\x1b[34mDEBUG\x1b[0m'; // Blue
+            case 30: return '\x1b[32mINFO\x1b[0m';  // Green
+            case 40: return '\x1b[33mWARN\x1b[0m';  // Yellow
+            case 50: return '\x1b[31mERROR\x1b[0m'; // Red
+            case 60: return '\x1b[41mFATAL\x1b[0m'; // Red background
+            default: return '\x1b[32mINFO\x1b[0m';
         }
     }
 

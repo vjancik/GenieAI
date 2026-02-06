@@ -9,11 +9,14 @@ export class DiscordBot {
     private client: Client;
     private chainService: MessageChainService;
 
+    private logger: ILogger;
+
     constructor(
         private readonly sendMessageUseCase: SendMessageUseCase,
         private readonly chatRepo: IChatRepository, // Injected for metadata updates
-        private readonly logger: ILogger
+        logger: ILogger
     ) {
+        this.logger = logger.child({ className: 'DiscordBot' });
         this.client = new Client({
             intents: [
                 GatewayIntentBits.Guilds,

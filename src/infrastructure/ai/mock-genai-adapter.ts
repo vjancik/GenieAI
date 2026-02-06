@@ -3,7 +3,10 @@ import type { IGenerativeAIModel } from '../../core/application/interfaces/illm-
 import type { ILogger } from '../../core/application/interfaces/logger.interface';
 
 export class MockGenAIAdapter implements IGenerativeAIModel {
-    constructor(private readonly logger: ILogger) { }
+    private logger: ILogger;
+    constructor(logger: ILogger) {
+        this.logger = logger.child({ className: 'MockGenAIAdapter' });
+    }
 
     async generateContent(history: Message[], prompt: string): Promise<string> {
         this.logger.debug(`[MockGenAI] Generating response for prompt: "${prompt}"`);

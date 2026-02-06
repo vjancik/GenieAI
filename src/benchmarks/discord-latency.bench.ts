@@ -20,7 +20,8 @@ import { Client, GatewayIntentBits, TextChannel, Message as DiscordMessage } fro
 import { randomUUID } from 'crypto';
 import { PinoLogger } from '../infrastructure/logging/pino-logger';
 
-const logger = new PinoLogger('info', 'text');
+const rootLogger = new PinoLogger('info', 'text');
+const logger = rootLogger.child({ serviceName: 'LatencyBenchmark' });
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CHANNEL_ID = process.env.BENCHMARK_DISCORD_CHANNEL_ID;
