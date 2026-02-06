@@ -141,6 +141,12 @@ export class PinoLogger implements ILogger {
     private mergeArgs(msg: string, args: any[]): any {
         if (args.length === 0) return msg;
         const meta = args.length === 1 && typeof args[0] === 'object' ? args[0] : { args };
+
+        // If meta is an Error, spreading it results in loss of non-enumerable properties (message, stack, etc.)
+        if (meta instanceof Error) {
+            return { err: meta, msg };
+        }
+
         return { ...meta, msg };
     }
 

@@ -6,6 +6,7 @@ import { config } from '../../config/env';
 
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
 import type { ILogger } from '../../core/application/interfaces/logger.interface';
+import { AIProviderError } from '../../core/domain/errors/application-error';
 
 export class GoogleGenAIAdapter implements IGenerativeAIModel {
     private client: GoogleGenAI;
@@ -25,45 +26,50 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
     }
 
     async generateContent(history: Message[], prompt: string): Promise<string> {
-        // The 'history' array includes the latest user message at the end.
-        // We need to separate it because 'sendMessage' takes the new message,
-        // and 'history' in 'chats.create' is strictly past history.
+        try {
+            // The 'history' array includes the latest user message at the end.
+            // We need to separate it because 'sendMessage' takes the new message,
+            // and 'history' in 'chats.create' is strictly past history.
 
-        // Exclude the last message (which is the current prompt)
-        const pastHistoryMessages = history.slice(0, -1);
-        const currentMessage = history[history.length - 1];
+            // Exclude the last message (which is the current prompt)
+            const pastHistoryMessages = history.slice(0, -1);
+            const currentMessage = history[history.length - 1];
 
-        // Process past history concurrently
-        const googleHistory = await Promise.all(pastHistoryMessages.map(msg => this.mapMessageToContent(msg)));
+            // Process past history concurrently
+            const googleHistory = await Promise.all(pastHistoryMessages.map(msg => this.mapMessageToContent(msg)));
 
-        const chat = this.client.chats.create({
-            model: this.model,
-            config: {
-                systemInstruction: this.systemPrompt,
-            },
-            history: googleHistory
-        });
+            const chat = this.client.chats.create({
+                model: this.model,
+                config: {
+                    systemInstruction: this.systemPrompt,
+                },
+                history: googleHistory
+            });
 
-        const currentParts: Content['parts'] = [{ text: prompt }];
-        if (currentMessage?.attachments?.length) {
-            for (const attachment of currentMessage.attachments) {
-                const part = await this.resolveAttachmentPart(attachment, currentMessage.id);
-                if (part) {
-                    currentParts.push(part);
+            const currentParts: Content['parts'] = [{ text: prompt }];
+            if (currentMessage?.attachments?.length) {
+                for (const attachment of currentMessage.attachments) {
+                    const part = await this.resolveAttachmentPart(attachment, currentMessage.id);
+                    if (part) {
+                        currentParts.push(part);
+                    }
                 }
             }
+
+            const result = await chat.sendMessage({
+                message: currentParts
+            });
+
+            const responseText = result.text;
+            if (!responseText) {
+                throw new AIProviderError('Empty response from AI model');
+            }
+
+            return responseText;
+        } catch (error) {
+            if (error instanceof AIProviderError) throw error;
+            throw new AIProviderError('Failed to generate content with Google GenAI', error);
         }
-
-        const result = await chat.sendMessage({
-            message: currentParts
-        });
-
-        const responseText = result.text;
-        if (!responseText) {
-            throw new Error('Empty response from AI model');
-        }
-
-        return responseText;
     }
 
     private async mapMessageToContent(msg: Message): Promise<Content> {
@@ -131,25 +137,29 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
     private async uploadFile(attachment: MessageAttachment) {
         if (!attachment.url) return null;
 
-        this.logger.info(`Uploading file from ${attachment.url} to Google GenAI...`);
-        const response = await fetch(attachment.url);
-        if (!response.ok) {
-            throw new Error(`Failed to fetch attachment from ${attachment.url}`);
-        }
-
-        // We use response.blob() which is compatible with the SDK's expected input
-        const blob = await response.blob();
-
-        const uploadResponse = await this.client.files.upload({
-            file: blob,
-            config: {
-                mimeType: attachment.mimeType,
+        try {
+            this.logger.info(`Uploading file from ${attachment.url} to Google GenAI...`);
+            const response = await fetch(attachment.url);
+            if (!response.ok) {
+                throw new Error(`Failed to fetch attachment from ${attachment.url}`);
             }
-        });
 
-        // uploadResponse is the File object directly in this version of the SDK
-        this.logger.info(`File uploaded: ${uploadResponse.uri}`);
-        return uploadResponse;
+            // We use response.blob() which is compatible with the SDK's expected input
+            const blob = await response.blob();
+
+            const uploadResponse = await this.client.files.upload({
+                file: blob,
+                config: {
+                    mimeType: attachment.mimeType,
+                }
+            });
+
+            // uploadResponse is the File object directly in this version of the SDK
+            this.logger.info(`File uploaded: ${uploadResponse.uri}`);
+            return uploadResponse;
+        } catch (error) {
+            throw new AIProviderError(`Failed to upload file to Google GenAI: ${attachment.url}`, error);
+        }
     }
 
     private mapRole(role: Role): string {

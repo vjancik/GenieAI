@@ -5,6 +5,7 @@ import type { IChatRepository } from '../../core/domain/repositories/chat-reposi
 import type { IDiscordRepository } from '../../core/domain/repositories/discord-repository';
 import type { ILogger } from '../../core/application/interfaces/logger.interface';
 import { Message, type MessageAttachment } from '../../core/domain/entities/message';
+import { ApplicationError, DiscordError } from '../../core/domain/errors/application-error';
 
 export class DiscordBot {
     private client: Client;
@@ -135,7 +136,7 @@ export class DiscordBot {
                             finalPrompt = `${formattedContent}\n\n${refBlock}`;
                         }
                     } catch (e) {
-                        this.logger.warn('Could not fetch reference for context folding');
+                        throw new DiscordError('Failed to fetch referenced message from Discord for context folding', e);
                     }
                 }
             }
@@ -164,18 +165,35 @@ export class DiscordBot {
             // Delete the "Thinking..." message
             await thinkingMsg.delete().catch(() => { });
 
-            let lastMsg = message;
-            for (let i = 0; i < chunks.length; i++) {
-                const sentMsg = await lastMsg.reply(chunks[i] || '');
-                // Map each response chunk to the same internal AI message ID
-                await this.discordRepo.saveMapping(sentMsg.id, aiMessage.id);
-                lastMsg = sentMsg;
+            try {
+                let lastMsg = message;
+                for (let i = 0; i < chunks.length; i++) {
+                    const sentMsg = await lastMsg.reply(chunks[i] || '');
+                    // Map each response chunk to the same internal AI message ID
+                    await this.discordRepo.saveMapping(sentMsg.id, aiMessage.id);
+                    lastMsg = sentMsg;
+                }
+            } catch (error) {
+                // If it's a DatabaseError from saveMapping, it's already caught by the outer catch.
+                // But we want to explicitly pinpoint Discord failures here.
+                if (error instanceof ApplicationError) throw error;
+                throw new DiscordError('Failed to send response chunks to Discord', error);
             }
 
         } catch (error) {
             this.logger.error('Error handling message:', error);
-            // 3. Update status message with error
-            await thinkingMsg.edit(`*Sorry, I encountered an error processing your request.*`);
+
+            let userFriendlyMessage = 'Sorry, I encountered an unexpected error processing your request.';
+
+            if (error instanceof ApplicationError) {
+                userFriendlyMessage = `${error.name}: ${error.message}`;
+            }
+
+            // Update status message with error
+            await thinkingMsg.edit(`*${userFriendlyMessage}*`).catch(() => {
+                // Fallback if thinkingMsg cannot be edited
+                message.reply(`*${userFriendlyMessage}*`).catch(() => { });
+            });
         }
     }
 
