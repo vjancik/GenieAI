@@ -60,7 +60,7 @@ export class PostgresChatRepository implements IChatRepository {
 
     async updateAttachment(messageId: string, attachmentId: string, attachment: Partial<MessageAttachment>): Promise<void> {
         try {
-            const msg = await this.getMessage(messageId);
+            const msg = await this.findById(messageId);
             if (!msg) return;
 
             const updatedAttachments = msg.attachments.map(attr =>
@@ -108,7 +108,7 @@ export class PostgresChatRepository implements IChatRepository {
         }
     }
 
-    async getMessage(id: string): Promise<Message | null> {
+    async findById(id: string): Promise<Message | null> {
         try {
             const [result] = await this.db.select()
                 .from(messages)

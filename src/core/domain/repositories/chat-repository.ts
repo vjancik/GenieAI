@@ -5,4 +5,5 @@ export interface IChatRepository {
     updateMessage(message: Message): Promise<void>;
     updateAttachment(messageId: string, attachmentId: string, attachment: Partial<MessageAttachment>): Promise<void>;
     getHistory(messageId: string, limit?: number): Promise<Message[]>;
+    findById(id: string): Promise<Message | null>;
 }

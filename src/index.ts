@@ -2,7 +2,9 @@ import { config } from './config/env';
 import { SendMessageUseCase } from './core/application/use-cases/send-message.use-case';
 import { GoogleGenAIAdapter } from './infrastructure/ai/google-genai-adapter';
 import { PostgresChatRepository } from './infrastructure/database/postgres-chat-repo';
-import { PostgresDiscordRepository } from './infrastructure/database/postgres-discord-repo';
+import { PostgresDiscordMessageMappingRepository } from './infrastructure/database/postgres-discord-message-mapping-repo';
+import { PostgresDiscordMessagePageRepository } from './infrastructure/database/postgres-discord-message-page-repo';
+import { GetNextMessagePageUseCase } from './core/application/use-cases/get-next-message-page.use-case';
 import { DiscordBot } from './interfaces/discord';
 import { PinoLogger } from './infrastructure/logging/pino-logger';
 import pg from 'pg';
@@ -21,14 +23,16 @@ async function main() {
 
     // 1. Initialize Infrastructure
     const chatRepo = new PostgresChatRepository(db);
-    const discordRepo = new PostgresDiscordRepository(db);
+    const discordMessageMappingRepo = new PostgresDiscordMessageMappingRepository(db);
+    const discordMessagePageRepo = new PostgresDiscordMessagePageRepository(db);
     const aiAdapter = new GoogleGenAIAdapter(chatRepo, logger);
 
     // 2. Initialize Application Layer (Use Cases)
     const sendMessageUseCase = new SendMessageUseCase(chatRepo, aiAdapter, logger);
+    const getNextMessagePageUseCase = new GetNextMessagePageUseCase(discordMessagePageRepo, chatRepo);
 
     // 3. Initialize Interface Layer
-    const discordBot = new DiscordBot(sendMessageUseCase, chatRepo, discordRepo, logger);
+    const discordBot = new DiscordBot(sendMessageUseCase, getNextMessagePageUseCase, chatRepo, discordMessageMappingRepo, discordMessagePageRepo, logger);
 
     // 4. Start Application
     try {

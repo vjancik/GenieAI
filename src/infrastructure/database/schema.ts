@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, uuid, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, uuid, pgEnum, integer } from 'drizzle-orm/pg-core';
 import { Role } from '../../core/domain/value-objects/role';
 
 export const roleEnum = pgEnum('role', [Role.USER, Role.ASSISTANT, Role.SYSTEM]);
@@ -16,4 +16,10 @@ export const messages = pgTable('messages', {
 export const discordMessages = pgTable('discord_messages', {
     id: text('id').primaryKey(), // Discord Snowflake
     messageId: uuid('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+});
+
+export const discordMessagePages = pgTable('discord_message_pages', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    messageId: uuid('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+    offset: integer('offset').notNull(),
 });
