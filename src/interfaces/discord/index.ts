@@ -60,12 +60,10 @@ export class DiscordBot {
             return;
         }
 
-        try {
-            // Trigger "Typing..." indicator
-            if ('sendTyping' in message.channel) {
-                await message.channel.sendTyping();
-            }
+        // 1. Send "Thinking..." status message
+        const thinkingMsg = await message.reply(`Thinking since <t:${Math.round(Date.now() / 1000)}:R>`);
 
+        try {
             const allAttachments: MessageAttachment[] = [];
             let attachmentCounter = 1;
 
@@ -130,21 +128,23 @@ export class DiscordBot {
                 attachments: allAttachments
             });
 
-            const sentDiscordMsg = await message.reply(response.content);
+            // 2. Update the status message with final response
+            const updatedDiscordMsg = await thinkingMsg.edit(response.content);
 
             const updatedMessage = new Message({
                 ...response,
                 metadata: {
                     ...response.metadata,
-                    externalId: sentDiscordMsg.id,
-                    discordChannelId: sentDiscordMsg.channelId,
+                    externalId: updatedDiscordMsg.id,
+                    discordChannelId: updatedDiscordMsg.channelId,
                 }
             });
             await this.chatRepo.updateMessage(updatedMessage);
 
         } catch (error) {
             this.logger.error('Error handling message:', error);
-            await message.reply('Sorry, I encountered an error processing your request.');
+            // 3. Update status message with error
+            await thinkingMsg.edit(`*Sorry, I encountered an error processing your request.*`);
         }
     }
 
