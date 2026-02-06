@@ -58,7 +58,12 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
             message: currentParts
         });
 
-        return result.text || '';
+        const responseText = result.text;
+        if (!responseText) {
+            throw new Error('Empty response from AI model');
+        }
+
+        return responseText;
     }
 
     private async mapMessageToContent(msg: Message): Promise<Content> {

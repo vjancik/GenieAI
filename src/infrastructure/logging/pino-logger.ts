@@ -26,18 +26,26 @@ export class PinoLogger implements ILogger {
                         write: (msg: string) => {
                             try {
                                 const log = JSON.parse(msg);
-                                const time = new Date(log.time).toLocaleTimeString();
-                                const levelStr = this.formatLevel(log.level);
-                                const message = log.msg;
+                                const { level, msg: message, time, className, serviceName, context: logContext, hostname, pid, v, ...rest } = log;
 
-                                const context = log.className || log.serviceName || log.context;
+                                const timeStr = this.useColor ? `\x1b[90m${new Date(time).toLocaleTimeString()}\x1b[0m` : new Date(time).toLocaleTimeString();
+                                const levelStr = this.formatLevel(level);
+
+                                const context = className || serviceName || logContext;
                                 let contextStr = '';
                                 if (context) {
                                     contextStr = this.useColor ? ` \x1b[36m[${context}]\x1b[0m` : ` [${context}]`;
                                 }
 
-                                const timeStr = this.useColor ? `\x1b[90m${time}\x1b[0m` : time;
-                                process.stdout.write(`[${timeStr}] ${levelStr}${contextStr}: ${message}\n`);
+                                let output = `[${timeStr}] ${levelStr}${contextStr}: ${message}`;
+
+                                if (Object.keys(rest).length > 0) {
+                                    const trimmedRest = this.trimStrings(rest);
+                                    const metaStr = JSON.stringify(trimmedRest);
+                                    output += ` ${metaStr}`;
+                                }
+
+                                process.stdout.write(`${output}\n`);
                             } catch (e) {
                                 process.stdout.write(msg);
                             }
@@ -134,5 +142,24 @@ export class PinoLogger implements ILogger {
         if (args.length === 0) return msg;
         const meta = args.length === 1 && typeof args[0] === 'object' ? args[0] : { args };
         return { ...meta, msg };
+    }
+
+    private trimStrings(obj: any, depth: number = 0): any {
+        if (depth >= 10) return '[Max Depth Reached]';
+
+        if (typeof obj === 'string') {
+            return obj.length > 100 ? obj.substring(0, 100) + '...' : obj;
+        }
+        if (typeof obj !== 'object' || obj === null) {
+            return obj;
+        }
+        if (Array.isArray(obj)) {
+            return obj.map(item => this.trimStrings(item, depth + 1));
+        }
+        const trimmed: any = {};
+        for (const key in obj) {
+            trimmed[key] = this.trimStrings(obj[key], depth + 1);
+        }
+        return trimmed;
     }
 }
