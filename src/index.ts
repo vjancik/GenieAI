@@ -1,17 +1,25 @@
 import { config } from './config/env';
 import { SendMessageUseCase } from './core/application/use-cases/send-message.use-case';
 import { GoogleGenAIAdapter } from './infrastructure/ai/google-genai-adapter';
-import { InMemoryChatRepository } from './infrastructure/database/in-memory-chat-repo';
+import { PostgresChatRepository } from './infrastructure/database/postgres-chat-repo';
 import { DiscordBot } from './interfaces/discord';
 import { PinoLogger } from './infrastructure/logging/pino-logger';
+import pg from 'pg';
+import { drizzle } from 'drizzle-orm/node-postgres';
 
 async function main() {
     const logger = new PinoLogger(config.logging.level, config.logging.format, config.logging.useColor);
 
     logger.info('Starting AI Agent Backend...');
 
+    // 0. Initialize Database
+    const pool = new pg.Pool({
+        connectionString: config.database.url,
+    });
+    const db = drizzle(pool);
+
     // 1. Initialize Infrastructure
-    const chatRepo = new InMemoryChatRepository();
+    const chatRepo = new PostgresChatRepository(db);
     const aiAdapter = new GoogleGenAIAdapter(chatRepo, logger);
 
     // 2. Initialize Application Layer (Use Cases)

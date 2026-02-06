@@ -12,5 +12,8 @@ export const config = {
         level: process.env.LOG_LEVEL || 'info',
         format: (process.env.LOG_FORMAT as 'json' | 'text') || 'text',
         useColor: !process.env.LOG_COLOR || ['true', '1'].includes(process.env.LOG_COLOR.toLowerCase()),
+    },
+    database: {
+        url: process.env.DATABASE_URL || 'postgresql://genie:genie_pass@localhost:5432/genie_ai'
     }
 };

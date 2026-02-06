@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: genie-ai-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-genie}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-genie_pass}
+      POSTGRES_DB: ${DB_NAME:-genie_ai}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - ./db/data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U genie -d genie_ai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  default:
+    name: genie-ai-network

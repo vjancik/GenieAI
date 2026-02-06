@@ -68,9 +68,9 @@ export class DiscordBot {
             let attachmentCounter = 1;
 
             // Helper to Format Message Block
-            const formatMessageBlock = (msg: DiscordMessage, customContent?: string, label: string = "Message from user") => {
+            const formatMessageBlock = (msg: DiscordMessage, customContent?: string, label: string = "Message from user named") => {
                 const authorName = msg.member?.displayName ?? msg.author.username;
-                let text = `${label}: ${authorName}\n${customContent || msg.content}`;
+                let text = `${label} ${authorName}\nMessage content:\n${customContent || msg.content}`;
 
                 // Process Attachments for this message
                 if (msg.attachments.size > 0) {
@@ -101,10 +101,10 @@ export class DiscordBot {
                     // 1. Format Current Message
                     // Note: If isCommand, 'content' is already stripped. 
                     // But if referencing, we might be replying.
-                    const currentBlock = formatMessageBlock(message, content, "Message from user");
+                    const currentBlock = formatMessageBlock(message, content, "Message from user named");
 
                     // 2. Format Referenced Message
-                    const refBlock = formatMessageBlock(refMessage, undefined, "Referring to message from user");
+                    const refBlock = formatMessageBlock(refMessage, undefined, "Referring to message from user named");
 
                     finalPrompt = `${currentBlock}\n\n${refBlock}`;
                 } else {

@@ -6,6 +6,9 @@ out
 dist
 *.tgz
 
+# postgres
+db
+
 # code coverage
 coverage
 *.lcov
