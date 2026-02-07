@@ -24,6 +24,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
     private static activeUploads = 0;
     private static readonly uploadQueue: (() => void)[] = [];
     private static readonly MAX_CONCURRENT_UPLOADS = 10;
+    private static getFileGate: Promise<void> = Promise.resolve();
     private readonly MAX_FALLBACK_SIZE = 100 * 1024 * 1024; // 100MB limit for memory fallback
     private readonly MAX_DISK_SIZE = 2000 * 1024 * 1024; // 2GB limit for disk fallback
     private readonly TEMP_DIR = join(tmpdir(), 'genie-ai-bot');
@@ -280,24 +281,24 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
 
         this.logger.info(`File ${fileName} is in state ${fileState}. Waiting for processing...`);
 
-        // Poll for active state
-        const maxRetries = 60; // 5 minutes (5s * 60)
+        // Poll for active state with exponential backoff
         let retries = 0;
+        let currentDelay = 1000;
+        const expGrowthRate = 1.5;
+        const maxDelay = 5000;
+        const startTime = Date.now();
+        const timeout = 5 * 60 * 1000; // 5 minute total timeout
 
-        while (fileState === FileState.PROCESSING && retries < maxRetries) {
-            await new Promise(resolve => setTimeout(resolve, 5000));
+        while (fileState === FileState.PROCESSING && (Date.now() - startTime) < timeout) {
+            await new Promise(resolve => setTimeout(resolve, currentDelay));
+            currentDelay = Math.min(currentDelay * expGrowthRate, maxDelay);
             retries++;
 
             try {
-                const updatedFile = await this.client.files.get({ name: fileName });
-
-                // Inspect response to find the file object
-                // The SDK returns a response wrapper, we need the file data
-                // Assuming it returns the file object directly or in a property based on recent usage
-                // Based on previous tool usage, let's assume standard response structure
+                const updatedFile = await this.getFileWithRateLimit(fileName);
 
                 fileState = updatedFile.state;
-                this.logger.debug(`File ${fileName} state: ${fileState} (attempt ${retries}/${maxRetries})`);
+                this.logger.debug(`File ${fileName} state: ${fileState} (attempt ${retries}, delay ${currentDelay}ms)`);
 
                 if (fileState === FileState.ACTIVE || fileState === FileState.STATE_UNSPECIFIED) {
                     this.logger.info(`File ${fileName} is now active.`);
@@ -309,13 +310,26 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
                 }
             } catch (error) {
                 this.logger.warn(`Error polling file state for ${fileName}:`, error);
-                // Continue polling on transient errors, or breakdown? 
-                // Let's count it as a retry
             }
         }
 
-        throw new AIProviderError(`File ${fileName} timed out processing after ${maxRetries * 5} seconds.`);
+        throw new AIProviderError(`File ${fileName} timed out processing after ${Math.round((Date.now() - startTime) / 1000)}s.`);
     }
+
+    private async getFileWithRateLimit(fileName: string): Promise<File> {
+        const currentGate = GoogleGenAIAdapter.getFileGate;
+        let resolveNext: (() => void) | undefined;
+        GoogleGenAIAdapter.getFileGate = new Promise(r => resolveNext = r);
+
+        await currentGate;
+        try {
+            return await this.client.files.get({ name: fileName });
+        } finally {
+            // Ensure 1s gap before the next call in the gate
+            setTimeout(() => resolveNext?.(), 1000);
+        }
+    }
+
 
     private async readStreamWithTwoTierLimits(
         stream: ReadableStream<Uint8Array>,
