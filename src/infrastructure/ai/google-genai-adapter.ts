@@ -7,6 +7,7 @@ import { config } from '../../config/env';
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
 import type { ILogger } from '../../core/application/interfaces/logger.interface';
 import { AIProviderError } from '../../core/domain/errors/application-error';
+import { GoogleGenAIFileUploader } from './google-genai-file-uploader';
 
 export class GoogleGenAIAdapter implements IGenerativeAIModel {
     private client: GoogleGenAI;
@@ -14,6 +15,10 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
     private systemPrompt: string;
 
     private logger: ILogger;
+    private fileUploader: GoogleGenAIFileUploader;
+
+    private static fallbackQueue: Promise<void> = Promise.resolve();
+    private readonly MAX_FALLBACK_SIZE = 20 * 1024 * 1024; // 20MB limit for memory fallback
 
     constructor(
         private readonly chatRepo: IChatRepository,
@@ -23,6 +28,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
         this.client = new GoogleGenAI({ apiKey: config.ai.apiKey });
         this.model = config.ai.model;
         this.systemPrompt = config.ai.systemPrompt;
+        this.fileUploader = new GoogleGenAIFileUploader(this.client, this.logger);
     }
 
     async generateContent(history: Message[], prompt: string): Promise<string> {
@@ -136,29 +142,84 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
 
     private async uploadFile(attachment: MessageAttachment) {
         if (!attachment.url) return null;
+        let releaseLock: (() => void) | undefined;
 
         try {
-            this.logger.info(`Uploading file from ${attachment.url} to Google GenAI...`);
+            this.logger.info(`Streaming file from ${attachment.url} to Google GenAI...`);
             const response = await fetch(attachment.url);
             if (!response.ok) {
-                throw new Error(`Failed to fetch attachment from ${attachment.url}`);
+                throw new AIProviderError(`Failed to fetch attachment from ${attachment.url}`);
             }
 
-            // We use response.blob() which is compatible with the SDK's expected input
-            const blob = await response.blob();
+            const size = parseInt(response.headers.get('content-length') || '0', 10);
+            const stream = response.body;
 
-            const uploadResponse = await this.client.files.upload({
-                file: blob,
-                config: {
-                    mimeType: attachment.mimeType,
-                }
+            if (!stream) {
+                throw new AIProviderError(`Failed to get readable stream for attachment ${attachment.url}`);
+            }
+
+            if (!size) {
+                // Acquire exclusive access for memory-intensive fallback upload
+                const currentQueue = GoogleGenAIAdapter.fallbackQueue;
+                let resolve: (() => void) | undefined;
+                GoogleGenAIAdapter.fallbackQueue = new Promise(r => resolve = r);
+
+                this.logger.warn(`Attachment ${attachment.url} has no content-length. Waiting for exclusive fallback lock...`);
+                await currentQueue;
+                releaseLock = resolve;
+
+                this.logger.info(`Locked fallback upload. Downloading with ${this.MAX_FALLBACK_SIZE / 1024 / 1024}MB limit...`);
+
+                const buffer = await this.readStreamWithLimit(stream, this.MAX_FALLBACK_SIZE);
+                const blob = new Blob([buffer], { type: attachment.mimeType });
+
+                const uploadResponse = await this.client.files.upload({
+                    file: blob, // Blob is compatible with the SDK's expected input
+                    config: {
+                        mimeType: attachment.mimeType,
+                    }
+                });
+                return uploadResponse;
+            }
+
+            const uploadResponse = await this.fileUploader.uploadStream(stream, {
+                mimeType: attachment.mimeType,
+                size: size,
+                displayName: attachment.name || undefined
             });
 
-            // uploadResponse is the File object directly in this version of the SDK
-            this.logger.info(`File uploaded: ${uploadResponse.uri}`);
+            this.logger.info(`File streamed and uploaded: ${uploadResponse.uri}`);
             return uploadResponse;
         } catch (error) {
-            throw new AIProviderError(`Failed to upload file to Google GenAI: ${attachment.url}`, error);
+            throw new AIProviderError(`Failed to stream upload file to Google GenAI: ${attachment.url}`, error);
+        } finally {
+            if (releaseLock) {
+                this.logger.debug("Releasing fallback upload lock.");
+                releaseLock();
+            }
+        }
+    }
+
+    private async readStreamWithLimit(stream: ReadableStream<Uint8Array>, limit: number): Promise<Buffer> {
+        const chunks: Uint8Array[] = [];
+        let totalSize = 0;
+        const reader = stream.getReader();
+
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                totalSize += value.length;
+                if (totalSize > limit) {
+                    await reader.cancel();
+                    throw new AIProviderError(`File too large: exceeds ${limit / 1024 / 1024}MB limit for attachments without content-length metadata.`);
+                }
+                chunks.push(value);
+            }
+            return Buffer.concat(chunks);
+        } finally {
+            reader.releaseLock();
         }
     }
 

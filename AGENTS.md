@@ -1,3 +1,4 @@
 - use bun commands instead of npm and node commands
 - dont install dotenv, .env is loaded automatically by bun
 - dont use the "any" type to resolve type errors, except where it actually makes sense logically
+- use custom application errors instead of throwing generic errors when possible

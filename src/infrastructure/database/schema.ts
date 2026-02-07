@@ -1,7 +1,7 @@
 import { pgTable, text, timestamp, jsonb, uuid, pgEnum, integer } from 'drizzle-orm/pg-core';
 import { Role } from '../../core/domain/value-objects/role';
 
-export const roleEnum = pgEnum('role', [Role.USER, Role.ASSISTANT, Role.SYSTEM]);
+export const roleEnum = pgEnum('role', [Role.USER, Role.ASSISTANT, Role.SYSTEM, Role.FUNCTION]);
 
 export const messages = pgTable('messages', {
     id: uuid('id').primaryKey(),

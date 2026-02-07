@@ -5,6 +5,7 @@ export interface MessageAttachment {
     mimeType: string;
     data?: string; // Base64 encoded string (optional if using URI)
     url?: string; // Source URL
+    name?: string; // Original filename
     genaiUri?: string; // Google GenAI File URI after upload
     genaiExpirationTime?: Date; // When the GenAI file expires
 }

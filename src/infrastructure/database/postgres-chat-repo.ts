@@ -6,6 +6,16 @@ import { messages, discordMessages } from './schema';
 import { Role } from '../../core/domain/value-objects/role';
 import { DatabaseError } from '../../core/domain/errors/application-error';
 
+interface MessageRow {
+    id: string;
+    role: string;
+    content: string;
+    timestamp: string | number | Date;
+    metadata: Record<string, any> | null;
+    parent_id: string | null;
+    attachments: MessageAttachment[];
+}
+
 export class PostgresChatRepository implements IChatRepository {
     constructor(private readonly db: NodePgDatabase<any>) { }
 
@@ -14,7 +24,7 @@ export class PostgresChatRepository implements IChatRepository {
             await this.db.transaction(async (tx) => {
                 await tx.insert(messages).values({
                     id: message.id,
-                    role: message.role as any,
+                    role: message.role,
                     content: message.content,
                     timestamp: message.timestamp,
                     metadata: message.metadata,
@@ -23,7 +33,7 @@ export class PostgresChatRepository implements IChatRepository {
                 }).onConflictDoUpdate({
                     target: [messages.id],
                     set: {
-                        role: message.role as any,
+                        role: message.role as Role.USER | Role.ASSISTANT | Role.SYSTEM | Role.FUNCTION,
                         content: message.content,
                         timestamp: message.timestamp,
                         metadata: message.metadata,
@@ -93,14 +103,14 @@ export class PostgresChatRepository implements IChatRepository {
                 SELECT * FROM history ORDER BY timestamp DESC
             `);
 
-            return (results.rows as any[]).reverse().map(r => new Message({
+            return (results.rows as unknown as MessageRow[]).reverse().map(r => new Message({
                 id: r.id,
                 role: r.role as Role,
                 content: r.content,
                 timestamp: new Date(r.timestamp),
                 metadata: r.metadata || undefined,
                 parentId: r.parent_id || undefined,
-                attachments: r.attachments as any,
+                attachments: r.attachments,
             }));
         } catch (error) {
             if (error instanceof DatabaseError) throw error;
@@ -123,7 +133,7 @@ export class PostgresChatRepository implements IChatRepository {
                 timestamp: result.timestamp,
                 metadata: result.metadata || undefined,
                 parentId: result.parentId || undefined,
-                attachments: result.attachments as any,
+                attachments: result.attachments,
             });
         } catch (error) {
             throw new DatabaseError('Failed to retrieve message from database', error);

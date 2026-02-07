@@ -123,6 +123,7 @@ export class DiscordBot {
                         allAttachments.push({
                             id: attachment.id,
                             url: attachment.url,
+                            name: attachment.name,
                             mimeType: attachment.contentType || 'application/octet-stream',
                         });
                         indices.push(attachmentCounter++);
