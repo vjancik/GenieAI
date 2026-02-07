@@ -11,6 +11,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdir, readdir, unlink, open, type FileHandle } from 'fs/promises';
 import { GoogleGenAIFileUploader, type GenAIFile } from './google-genai-file-uploader';
+import type { IAttachmentManager } from '../../core/application/interfaces/attachment-manager';
 
 export class GoogleGenAIAdapter implements IGenerativeAIModel {
     private client: GoogleGenAI;
@@ -30,7 +31,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
     private readonly TEMP_DIR = join(tmpdir(), 'genie-ai-bot');
 
     constructor(
-        private readonly chatRepo: IChatRepository,
+        private readonly attachmentManager: IAttachmentManager,
         logger: ILogger
     ) {
         this.logger = logger.child({ className: 'GoogleGenAIAdapter' });
@@ -133,7 +134,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
 
             // If not, and we have a URL, upload it
             if (attachment.url) {
-                const fileMetadata = await this.uploadFile(attachment);
+                const fileMetadata = await this.uploadFile(attachment, messageId);
                 if (fileMetadata) {
                     // Update our internal/in-memory reference
                     attachment.genaiUri = fileMetadata.uri;
@@ -141,15 +142,15 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
                         attachment.genaiExpirationTime = new Date(fileMetadata.expirationTime);
                     }
 
-                    // Persist Update via Repository
+                    // Persist Update via AttachmentManager
                     if (attachment.id) {
                         try {
-                            await this.chatRepo.updateAttachment(messageId, attachment.id, {
+                            await this.attachmentManager.updateAttachmentMetadata(messageId, attachment.id, {
                                 genaiUri: attachment.genaiUri,
                                 genaiExpirationTime: attachment.genaiExpirationTime
                             });
                         } catch (err) {
-                            this.logger.error("Failed to update attachment metadata in repo", err);
+                            this.logger.error("Failed to update attachment metadata", err);
                         }
                     }
 
@@ -168,7 +169,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
         return null;
     }
 
-    private async uploadFile(attachment: MessageAttachment) {
+    private async uploadFile(attachment: MessageAttachment, messageId: string) {
         if (!attachment.url) return null;
 
         // Acquire concurrency slot
@@ -183,26 +184,21 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
         let uploadedFile: File | GenAIFile | undefined;
 
         try {
-            this.logger.info(`Streaming file from ${attachment.url} to Google GenAI...`);
-            const response = await fetch(attachment.url);
-            if (!response.ok) {
-                throw new AIProviderError(`Failed to fetch attachment from ${attachment.url}`);
-            }
+            this.logger.info(`Streaming file from attachment ${attachment.id || 'unknown'} to Google GenAI...`);
 
-            const size = parseInt(response.headers.get('content-length') || '0', 10);
-            const stream = response.body;
+            const { stream, mimeType, contentLength } = await this.attachmentManager.getAttachmentStream(attachment, messageId);
 
             if (!stream) {
-                throw new AIProviderError(`Failed to get readable stream for attachment ${attachment.url}`);
+                throw new AIProviderError(`Failed to get readable stream for attachment ${attachment.id}`);
             }
 
-            if (!size) {
+            if (!contentLength) {
                 // Acquire exclusive access for memory-intensive fallback upload
                 const currentQueue = GoogleGenAIAdapter.fallbackQueue;
                 let resolve: (() => void) | undefined;
                 GoogleGenAIAdapter.fallbackQueue = new Promise(r => resolve = r);
 
-                this.logger.warn(`Attachment ${attachment.url} has no content-length. Waiting for exclusive fallback lock...`);
+                this.logger.warn(`Attachment ${attachment.id} has no content-length. Waiting for exclusive fallback lock...`);
                 await currentQueue;
                 releaseFallbackLock = resolve;
 
@@ -231,15 +227,15 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
                 uploadedFile = uploadResponse;
             } else {
                 uploadedFile = await this.fileUploader.uploadStream(stream, {
-                    mimeType: attachment.mimeType,
-                    size: size,
+                    mimeType: mimeType,
+                    size: contentLength,
                     displayName: attachment.name || undefined
                 });
             }
 
             this.logger.info(`File streamed and uploaded: ${uploadedFile.uri}`);
         } catch (error) {
-            throw new AIProviderError(`Failed to stream upload file to Google GenAI: ${attachment.url}`, error);
+            throw new AIProviderError(`Failed to stream upload file to Google GenAI: ${attachment.id}`, error);
         } finally {
             if (releaseFallbackLock) {
                 this.logger.debug("Releasing fallback upload lock.");

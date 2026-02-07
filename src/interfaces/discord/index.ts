@@ -10,11 +10,11 @@ import { Message, type MessageAttachment } from '../../core/domain/entities/mess
 import { ApplicationError, DiscordError } from '../../core/domain/errors/application-error';
 
 export class DiscordBot {
-    private client: Client;
     private logger: ILogger;
     private processingInteractions: Set<string> = new Set(); // In-memory lock for interactions
 
     constructor(
+        public readonly client: Client,
         private readonly sendMessageUseCase: SendMessageUseCase,
         private readonly getNextMessagePageUseCase: GetNextMessagePageUseCase,
         private readonly chatRepo: IChatRepository,
@@ -23,13 +23,6 @@ export class DiscordBot {
         logger: ILogger
     ) {
         this.logger = logger.child({ className: 'DiscordBot' });
-        this.client = new Client({
-            intents: [
-                GatewayIntentBits.Guilds,
-                GatewayIntentBits.GuildMessages,
-                GatewayIntentBits.MessageContent,
-            ],
-        });
 
         this.setupListeners();
     }
@@ -122,6 +115,8 @@ export class DiscordBot {
                     for (const [_, attachment] of msg.attachments) {
                         allAttachments.push({
                             id: attachment.id,
+                            discordMessageId: msg.id,
+                            channelId: msg.channelId,
                             url: attachment.url,
                             name: attachment.name,
                             mimeType: attachment.contentType || 'application/octet-stream',

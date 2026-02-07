@@ -1,7 +1,9 @@
 import { Role } from '../value-objects/role';
 
 export interface MessageAttachment {
-    id?: string; // External ID (e.g. Discord snowflake)
+    id?: string; // External Attachment ID (e.g. Discord snowflake)
+    discordMessageId?: string; // The ID of the Discord Message this attachment belongs to
+    channelId?: string; // The ID of the Discord Channel this attachment belongs to
     mimeType: string;
     data?: string; // Base64 encoded string (optional if using URI)
     url?: string; // Source URL

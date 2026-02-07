@@ -1,4 +1,6 @@
 import { config } from './config/env';
+import { Client, GatewayIntentBits, Events } from 'discord.js';
+import { DiscordAttachmentManager } from './infrastructure/discord/discord-attachment-manager';
 import { SendMessageUseCase } from './core/application/use-cases/send-message.use-case';
 import { GoogleGenAIAdapter } from './infrastructure/ai/google-genai-adapter';
 import { PostgresChatRepository } from './infrastructure/database/postgres-chat-repo';
@@ -21,18 +23,35 @@ async function main() {
     });
     const db = drizzle(pool);
 
-    // 1. Initialize Infrastructure
+    // 1. Initialize Infrastructure - DB Repos
     const chatRepo = new PostgresChatRepository(db);
     const discordMessageMappingRepo = new PostgresDiscordMessageMappingRepository(db);
     const discordMessagePageRepo = new PostgresDiscordMessagePageRepository(db);
-    const aiAdapter = new GoogleGenAIAdapter(chatRepo, logger);
 
-    // 2. Initialize Application Layer (Use Cases)
+    const client = new Client({
+        intents: [
+            GatewayIntentBits.Guilds,
+            GatewayIntentBits.GuildMessages,
+            GatewayIntentBits.MessageContent,
+        ],
+    });
+
+    const attachmentManager = new DiscordAttachmentManager(client, chatRepo, logger);
+    const aiAdapter = new GoogleGenAIAdapter(attachmentManager, logger);
+
     const sendMessageUseCase = new SendMessageUseCase(chatRepo, aiAdapter, logger);
     const getNextMessagePageUseCase = new GetNextMessagePageUseCase(discordMessagePageRepo, chatRepo);
 
     // 3. Initialize Interface Layer
-    const discordBot = new DiscordBot(sendMessageUseCase, getNextMessagePageUseCase, chatRepo, discordMessageMappingRepo, discordMessagePageRepo, logger);
+    const discordBot = new DiscordBot(
+        client,
+        sendMessageUseCase,
+        getNextMessagePageUseCase,
+        chatRepo,
+        discordMessageMappingRepo,
+        discordMessagePageRepo,
+        logger
+    );
 
     // 4. Start Application
     try {
