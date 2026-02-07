@@ -1,4 +1,4 @@
-import { GoogleGenAI, type Content } from '@google/genai';
+import { GoogleGenAI, type Content, FileState, type File } from '@google/genai';
 import type { IGenerativeAIModel } from '../../core/application/interfaces/illm-provider';
 import { Message, type MessageAttachment } from '../../core/domain/entities/message';
 import { Role } from '../../core/domain/value-objects/role';
@@ -10,7 +10,7 @@ import { AIProviderError } from '../../core/domain/errors/application-error';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdir, readdir, unlink, open, type FileHandle } from 'fs/promises';
-import { GoogleGenAIFileUploader } from './google-genai-file-uploader';
+import { GoogleGenAIFileUploader, type GenAIFile } from './google-genai-file-uploader';
 
 export class GoogleGenAIAdapter implements IGenerativeAIModel {
     private client: GoogleGenAI;
@@ -176,7 +176,10 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
         }
         GoogleGenAIAdapter.activeUploads++;
 
+
+
         let releaseFallbackLock: (() => void) | undefined;
+        let uploadedFile: File | GenAIFile | undefined;
 
         try {
             this.logger.info(`Streaming file from ${attachment.url} to Google GenAI...`);
@@ -224,17 +227,16 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
                     }
                 }
 
-                return uploadResponse;
+                uploadedFile = uploadResponse;
+            } else {
+                uploadedFile = await this.fileUploader.uploadStream(stream, {
+                    mimeType: attachment.mimeType,
+                    size: size,
+                    displayName: attachment.name || undefined
+                });
             }
 
-            const uploadResponse = await this.fileUploader.uploadStream(stream, {
-                mimeType: attachment.mimeType,
-                size: size,
-                displayName: attachment.name || undefined
-            });
-
-            this.logger.info(`File streamed and uploaded: ${uploadResponse.uri}`);
-            return uploadResponse;
+            this.logger.info(`File streamed and uploaded: ${uploadedFile.uri}`);
         } catch (error) {
             throw new AIProviderError(`Failed to stream upload file to Google GenAI: ${attachment.url}`, error);
         } finally {
@@ -250,6 +252,69 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
                 next();
             }
         }
+
+        // Wait for file to become active (outside the lock)
+        if (uploadedFile) {
+            return this.waitForFileProcessing(uploadedFile);
+        }
+
+        return null; // Should not happen if upload succeeded
+    }
+
+    private async waitForFileProcessing(file: File | GenAIFile): Promise<File | GenAIFile> {
+        let fileState = file.state;
+        const fileName = file.name;
+
+        if (!fileName) {
+            return file;
+        }
+
+        // If no state or already active/unspecified, return immediately (though processing is safer)
+        if (fileState === FileState.ACTIVE || fileState === FileState.STATE_UNSPECIFIED) {
+            return file;
+        }
+
+        if (fileState === FileState.FAILED) {
+            throw new AIProviderError(`File upload failed processing immediately: ${fileName}`);
+        }
+
+        this.logger.info(`File ${fileName} is in state ${fileState}. Waiting for processing...`);
+
+        // Poll for active state
+        const maxRetries = 60; // 5 minutes (5s * 60)
+        let retries = 0;
+
+        while (fileState === FileState.PROCESSING && retries < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            retries++;
+
+            try {
+                const updatedFile = await this.client.files.get({ name: fileName });
+
+                // Inspect response to find the file object
+                // The SDK returns a response wrapper, we need the file data
+                // Assuming it returns the file object directly or in a property based on recent usage
+                // Based on previous tool usage, let's assume standard response structure
+
+                fileState = updatedFile.state;
+                this.logger.debug(`File ${fileName} state: ${fileState} (attempt ${retries}/${maxRetries})`);
+
+                if (fileState === FileState.ACTIVE || fileState === FileState.STATE_UNSPECIFIED) {
+                    this.logger.info(`File ${fileName} is now active.`);
+                    return updatedFile;
+                }
+
+                if (fileState === FileState.FAILED) {
+                    throw new AIProviderError(`File processing failed for ${fileName}`);
+                }
+            } catch (error) {
+                this.logger.warn(`Error polling file state for ${fileName}:`, error);
+                // Continue polling on transient errors, or breakdown? 
+                // Let's count it as a retry
+            }
+        }
+
+        throw new AIProviderError(`File ${fileName} timed out processing after ${maxRetries * 5} seconds.`);
     }
 
     private async readStreamWithTwoTierLimits(
