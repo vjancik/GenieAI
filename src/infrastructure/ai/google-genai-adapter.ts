@@ -21,6 +21,9 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
     private fileUploader: GoogleGenAIFileUploader;
 
     private static fallbackQueue: Promise<void> = Promise.resolve();
+    private static activeUploads = 0;
+    private static readonly uploadQueue: (() => void)[] = [];
+    private static readonly MAX_CONCURRENT_UPLOADS = 10;
     private readonly MAX_FALLBACK_SIZE = 100 * 1024 * 1024; // 100MB limit for memory fallback
     private readonly MAX_DISK_SIZE = 2000 * 1024 * 1024; // 2GB limit for disk fallback
     private readonly TEMP_DIR = join(tmpdir(), 'genie-ai-bot');
@@ -74,8 +77,10 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
 
             const currentParts: Content['parts'] = [{ text: prompt }];
             if (currentMessage?.attachments?.length) {
-                for (const attachment of currentMessage.attachments) {
-                    const part = await this.resolveAttachmentPart(attachment, currentMessage.id);
+                const attachmentParts = await Promise.all(
+                    currentMessage.attachments.map(att => this.resolveAttachmentPart(att, currentMessage.id))
+                );
+                for (const part of attachmentParts) {
                     if (part) {
                         currentParts.push(part);
                     }
@@ -102,8 +107,10 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
         const parts: Content['parts'] = [{ text: msg.content }];
 
         if (msg.attachments?.length) {
-            for (const attachment of msg.attachments) {
-                const part = await this.resolveAttachmentPart(attachment, msg.id);
+            const attachmentParts = await Promise.all(
+                msg.attachments.map(att => this.resolveAttachmentPart(att, msg.id))
+            );
+            for (const part of attachmentParts) {
                 if (part) {
                     parts.push(part);
                 }
@@ -162,7 +169,14 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
 
     private async uploadFile(attachment: MessageAttachment) {
         if (!attachment.url) return null;
-        let releaseLock: (() => void) | undefined;
+
+        // Acquire concurrency slot
+        if (GoogleGenAIAdapter.activeUploads >= GoogleGenAIAdapter.MAX_CONCURRENT_UPLOADS) {
+            await new Promise<void>(resolve => GoogleGenAIAdapter.uploadQueue.push(resolve));
+        }
+        GoogleGenAIAdapter.activeUploads++;
+
+        let releaseFallbackLock: (() => void) | undefined;
 
         try {
             this.logger.info(`Streaming file from ${attachment.url} to Google GenAI...`);
@@ -186,7 +200,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
 
                 this.logger.warn(`Attachment ${attachment.url} has no content-length. Waiting for exclusive fallback lock...`);
                 await currentQueue;
-                releaseLock = resolve;
+                releaseFallbackLock = resolve;
 
                 this.logger.info(`Locked fallback upload. Starting two-tier download (Memory up to ${this.MAX_FALLBACK_SIZE / 1024 / 1024}MB, Disk up to ${this.MAX_DISK_SIZE / 1024 / 1024}MB)...`);
 
@@ -224,9 +238,16 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
         } catch (error) {
             throw new AIProviderError(`Failed to stream upload file to Google GenAI: ${attachment.url}`, error);
         } finally {
-            if (releaseLock) {
+            if (releaseFallbackLock) {
                 this.logger.debug("Releasing fallback upload lock.");
-                releaseLock();
+                releaseFallbackLock();
+            }
+
+            // Release concurrency slot
+            GoogleGenAIAdapter.activeUploads--;
+            const next = GoogleGenAIAdapter.uploadQueue.shift();
+            if (next) {
+                next();
             }
         }
     }
