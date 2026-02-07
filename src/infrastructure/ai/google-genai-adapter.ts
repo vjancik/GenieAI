@@ -7,6 +7,9 @@ import { config } from '../../config/env';
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
 import type { ILogger } from '../../core/application/interfaces/logger.interface';
 import { AIProviderError } from '../../core/domain/errors/application-error';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { mkdir, readdir, unlink, open, type FileHandle } from 'fs/promises';
 import { GoogleGenAIFileUploader } from './google-genai-file-uploader';
 
 export class GoogleGenAIAdapter implements IGenerativeAIModel {
@@ -18,7 +21,9 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
     private fileUploader: GoogleGenAIFileUploader;
 
     private static fallbackQueue: Promise<void> = Promise.resolve();
-    private readonly MAX_FALLBACK_SIZE = 20 * 1024 * 1024; // 20MB limit for memory fallback
+    private readonly MAX_FALLBACK_SIZE = 100 * 1024 * 1024; // 100MB limit for memory fallback
+    private readonly MAX_DISK_SIZE = 2000 * 1024 * 1024; // 2GB limit for disk fallback
+    private readonly TEMP_DIR = join(tmpdir(), 'genie-ai-bot');
 
     constructor(
         private readonly chatRepo: IChatRepository,
@@ -29,6 +34,21 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
         this.model = config.ai.model;
         this.systemPrompt = config.ai.systemPrompt;
         this.fileUploader = new GoogleGenAIFileUploader(this.client, this.logger);
+        this.initTempDir().catch(err => this.logger.error("Failed to initialize temp directory", err));
+    }
+
+    private async initTempDir() {
+        try {
+            await mkdir(this.TEMP_DIR, { recursive: true });
+            // Cleanup orphaned files from previous runs
+            const files = await readdir(this.TEMP_DIR);
+            for (const file of files) {
+                await unlink(join(this.TEMP_DIR, file)).catch(() => { });
+            }
+            this.logger.debug(`Initialized temp directory and cleaned up orphans: ${this.TEMP_DIR}`);
+        } catch (error) {
+            this.logger.error("Failed to initialize temp directory", error);
+        }
     }
 
     async generateContent(history: Message[], prompt: string): Promise<string> {
@@ -168,17 +188,28 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
                 await currentQueue;
                 releaseLock = resolve;
 
-                this.logger.info(`Locked fallback upload. Downloading with ${this.MAX_FALLBACK_SIZE / 1024 / 1024}MB limit...`);
+                this.logger.info(`Locked fallback upload. Starting two-tier download (Memory up to ${this.MAX_FALLBACK_SIZE / 1024 / 1024}MB, Disk up to ${this.MAX_DISK_SIZE / 1024 / 1024}MB)...`);
 
-                const buffer = await this.readStreamWithLimit(stream, this.MAX_FALLBACK_SIZE);
-                const blob = new Blob([buffer], { type: attachment.mimeType });
+                const result = await this.readStreamWithTwoTierLimits(stream, this.MAX_FALLBACK_SIZE, this.MAX_DISK_SIZE);
+                let uploadResponse;
 
-                const uploadResponse = await this.client.files.upload({
-                    file: blob, // Blob is compatible with the SDK's expected input
-                    config: {
-                        mimeType: attachment.mimeType,
+                try {
+                    const uploadInput = result.filePath || new Blob([result.buffer!], { type: attachment.mimeType });
+
+                    uploadResponse = await this.client.files.upload({
+                        file: uploadInput,
+                        config: {
+                            mimeType: attachment.mimeType,
+                        }
+                    });
+                } finally {
+                    if (result.filePath) {
+                        await unlink(result.filePath).catch((err) => {
+                            this.logger.error(`Failed to delete temp file ${result.filePath}`, err);
+                        });
                     }
-                });
+                }
+
                 return uploadResponse;
             }
 
@@ -200,10 +231,16 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
         }
     }
 
-    private async readStreamWithLimit(stream: ReadableStream<Uint8Array>, limit: number): Promise<Buffer> {
+    private async readStreamWithTwoTierLimits(
+        stream: ReadableStream<Uint8Array>,
+        memoryLimit: number,
+        diskLimit: number
+    ): Promise<{ buffer?: Buffer; filePath?: string }> {
         const chunks: Uint8Array[] = [];
         let totalSize = 0;
         const reader = stream.getReader();
+        let tempFilePath: string | undefined;
+        let fileHandle: FileHandle | undefined;
 
         try {
             while (true) {
@@ -211,17 +248,51 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
                 if (done) break;
 
                 totalSize += value.length;
-                if (totalSize > limit) {
-                    await reader.cancel();
-                    throw new AIProviderError(`File too large: exceeds ${limit / 1024 / 1024}MB limit for attachments without content-length metadata.`);
+
+                if (!tempFilePath && totalSize > memoryLimit) {
+                    this.logger.info(`Memory limit exceeded (${totalSize} bytes), spilling to disk...`);
+                    await mkdir(this.TEMP_DIR, { recursive: true });
+                    tempFilePath = join(this.TEMP_DIR, `upload-${Date.now()}-${Math.random().toString(36).substring(7)}`);
+                    fileHandle = await open(tempFilePath, 'w');
+
+                    // Write already read chunks
+                    for (const chunk of chunks) {
+                        await fileHandle.write(chunk);
+                    }
+                    chunks.length = 0; // Clear memory
                 }
-                chunks.push(value);
+
+                if (tempFilePath && fileHandle) {
+                    if (totalSize > diskLimit) {
+                        await reader.cancel();
+                        throw new AIProviderError(`File too large: exceeds disk limit of ${diskLimit / 1024 / 1024}MB.`);
+                    }
+                    await fileHandle.write(value);
+                } else {
+                    chunks.push(value);
+                }
             }
-            return Buffer.concat(chunks);
+
+            if (tempFilePath && fileHandle) {
+                await fileHandle.close();
+                fileHandle = undefined;
+                return { filePath: tempFilePath };
+            } else {
+                return { buffer: Buffer.concat(chunks) };
+            }
+        } catch (error) {
+            if (fileHandle) {
+                await fileHandle.close();
+            }
+            if (tempFilePath) {
+                await unlink(tempFilePath).catch(() => { });
+            }
+            throw error;
         } finally {
             reader.releaseLock();
         }
     }
+
 
     private mapRole(role: Role): string {
         switch (role) {
