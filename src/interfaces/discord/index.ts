@@ -1,8 +1,8 @@
 import {
-	Client,
+	type Client,
 	GatewayIntentBits,
 	Events,
-	Message as DiscordMessage,
+	type Message as DiscordMessage,
 	TextChannel,
 	ButtonBuilder,
 	ButtonStyle,
@@ -11,13 +11,13 @@ import {
 	type Interaction,
 } from 'discord.js';
 import { v4 as uuidv4 } from 'uuid';
-import { SendMessageUseCase } from '../../core/application/use-cases/send-message.use-case';
+import type { SendMessageUseCase } from '../../core/application/use-cases/send-message.use-case';
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
 import type { IDiscordMessageMappingRepository } from '../../core/domain/repositories/discord-message-mapping-repository';
 import type { IDiscordMessagePageRepository } from '../../core/domain/repositories/discord-message-page-repository';
-import { GetNextMessagePageUseCase } from '../../core/application/use-cases/get-next-message-page.use-case';
+import type { GetNextMessagePageUseCase } from '../../core/application/use-cases/get-next-message-page.use-case';
 import type { ILogger } from '../../core/application/interfaces/logger.interface';
-import { Message, type MessageAttachment } from '../../core/domain/entities/message';
+import type { Message, MessageAttachment } from '../../core/domain/entities/message';
 import { ApplicationError, DiscordError } from '../../core/domain/errors/application-error';
 
 export class DiscordBot {
@@ -146,7 +146,7 @@ export class DiscordBot {
 			const formattedContent = formatMessageBlock(message, content);
 			let history: Message[] = [];
 			let finalPrompt = formattedContent;
-			let parentUuid: string | undefined = undefined;
+			let parentUuid: string | undefined ;
 
 			if (message.reference?.messageId) {
 				parentUuid = (await this.discordMessageMappingRepo.getMessageId(message.reference.messageId)) || undefined;
@@ -265,7 +265,7 @@ export class DiscordBot {
 			}
 
 			// Send next chunk
-			let nextMsgPayload: any = { content: result.content };
+			const nextMsgPayload: any = { content: result.content };
 
 			if (result.nextPageId) {
 				const row = this.createPaginationButton(result.nextPageId);

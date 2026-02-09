@@ -1,4 +1,4 @@
-import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { eq } from 'drizzle-orm';
 import { discordMessages } from './schema';
 import type { IDiscordMessageMappingRepository } from '../../core/domain/repositories/discord-message-mapping-repository';

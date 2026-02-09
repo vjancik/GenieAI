@@ -1,4 +1,4 @@
-import { Client, TextChannel } from 'discord.js';
+import type { Client, TextChannel } from 'discord.js';
 import type { IAttachmentManager } from '../../core/application/interfaces/attachment-manager';
 import type { MessageAttachment } from '../../core/domain/entities/message';
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
@@ -19,7 +19,7 @@ export class DiscordAttachmentManager implements IAttachmentManager {
 		mimeType: string;
 		contentLength?: number;
 	}> {
-		let url = attachment.url;
+		const url = attachment.url;
 
 		if (!url) {
 			throw new Error(`Attachment ${attachment.id} has no URL`);

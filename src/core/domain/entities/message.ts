@@ -1,4 +1,4 @@
-import { Role } from '../value-objects/role';
+import type { Role } from '../value-objects/role';
 
 export interface MessageAttachment {
 	id?: string; // External Attachment ID (e.g. Discord snowflake)

@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
+import type { GoogleGenAI } from '@google/genai';
 import type { ILogger } from '../../core/application/interfaces/logger.interface';
 import { AIProviderError } from '../../core/domain/errors/application-error';
 
@@ -61,7 +61,7 @@ export class GoogleGenAIFileUploader {
 				method: 'POST',
 				headers: fetchHeaders,
 				body: stream,
-				// @ts-ignore - duplex is required for streaming bodies in Node.js fetch
+				// @ts-expect-error - duplex is required for streaming bodies in Node.js fetch
 				duplex: 'half',
 			});
 

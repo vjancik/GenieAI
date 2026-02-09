@@ -1,4 +1,4 @@
-import { type MessageAttachment } from '../../domain/entities/message';
+import type { MessageAttachment } from '../../domain/entities/message';
 
 export interface IAttachmentManager {
 	/**

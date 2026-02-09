@@ -1,6 +1,6 @@
 import { GoogleGenAI, type Content, FileState, type File } from '@google/genai';
 import type { IGenerativeAIModel } from '../../core/application/interfaces/illm-provider';
-import { Message, type MessageAttachment } from '../../core/domain/entities/message';
+import type { Message, MessageAttachment } from '../../core/domain/entities/message';
 import { Role } from '../../core/domain/value-objects/role';
 import { config } from '../../config/env';
 

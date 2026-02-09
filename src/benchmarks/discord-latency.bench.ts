@@ -16,7 +16,7 @@
  * handling, using a mature library like discord.js is the recommended approach for most use cases.
  */
 
-import { Client, GatewayIntentBits, TextChannel, Message as DiscordMessage } from 'discord.js';
+import { Client, GatewayIntentBits, type TextChannel, type Message as DiscordMessage } from 'discord.js';
 import { randomUUID } from 'crypto';
 import { PinoLogger } from '../infrastructure/logging/pino-logger';
 
@@ -73,7 +73,7 @@ class RawDiscordClient {
 				if (s) this.sequence = s;
 
 				switch (op) {
-					case 10: // Hello
+					case 10: { // Hello
 						clearTimeout(timeout);
 						const heartbeatInterval = d.heartbeat_interval;
 						logger.info(`[RawWS] Received Hello. Heartbeat interval: ${heartbeatInterval}ms`);
@@ -92,6 +92,7 @@ class RawDiscordClient {
 							}),
 						);
 						break;
+					}
 
 					case 0: // Event
 						if (t === 'READY') {

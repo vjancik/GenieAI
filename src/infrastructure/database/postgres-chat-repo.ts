@@ -1,9 +1,9 @@
-import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { eq, desc, sql } from 'drizzle-orm';
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
 import { Message, type MessageAttachment } from '../../core/domain/entities/message';
 import { messages, discordMessages } from './schema';
-import { Role } from '../../core/domain/value-objects/role';
+import type { Role } from '../../core/domain/value-objects/role';
 import { DatabaseError } from '../../core/domain/errors/application-error';
 
 interface MessageRow {
