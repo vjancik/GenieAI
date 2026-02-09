@@ -7,87 +7,96 @@ import { Role } from '../../core/domain/value-objects/role';
 import { DatabaseError } from '../../core/domain/errors/application-error';
 
 interface MessageRow {
-    id: string;
-    role: string;
-    content: string;
-    timestamp: string | number | Date;
-    metadata: Record<string, any> | null;
-    parent_id: string | null;
-    attachments: MessageAttachment[];
+	id: string;
+	role: string;
+	content: string;
+	timestamp: string | number | Date;
+	metadata: Record<string, any> | null;
+	parent_id: string | null;
+	attachments: MessageAttachment[];
 }
 
 export class PostgresChatRepository implements IChatRepository {
-    constructor(private readonly db: NodePgDatabase<any>) { }
+	constructor(private readonly db: NodePgDatabase<any>) {}
 
-    async saveMessage(message: Message, externalId?: string): Promise<void> {
-        try {
-            await this.db.transaction(async (tx) => {
-                await tx.insert(messages).values({
-                    id: message.id,
-                    role: message.role,
-                    content: message.content,
-                    timestamp: message.timestamp,
-                    metadata: message.metadata,
-                    parentId: message.parentId,
-                    attachments: message.attachments,
-                }).onConflictDoUpdate({
-                    target: [messages.id],
-                    set: {
-                        role: message.role as Role.USER | Role.ASSISTANT | Role.SYSTEM | Role.FUNCTION,
-                        content: message.content,
-                        timestamp: message.timestamp,
-                        metadata: message.metadata,
-                        parentId: message.parentId,
-                        attachments: message.attachments,
-                    }
-                });
+	async saveMessage(message: Message, externalId?: string): Promise<void> {
+		try {
+			await this.db.transaction(async (tx) => {
+				await tx
+					.insert(messages)
+					.values({
+						id: message.id,
+						role: message.role,
+						content: message.content,
+						timestamp: message.timestamp,
+						metadata: message.metadata,
+						parentId: message.parentId,
+						attachments: message.attachments,
+					})
+					.onConflictDoUpdate({
+						target: [messages.id],
+						set: {
+							role: message.role as Role.USER | Role.ASSISTANT | Role.SYSTEM | Role.FUNCTION,
+							content: message.content,
+							timestamp: message.timestamp,
+							metadata: message.metadata,
+							parentId: message.parentId,
+							attachments: message.attachments,
+						},
+					});
 
-                if (externalId) {
-                    await tx.insert(discordMessages).values({
-                        id: externalId,
-                        messageId: message.id,
-                    }).onConflictDoNothing();
-                }
-            });
-        } catch (error) {
-            throw new DatabaseError('Failed to save message to database', error);
-        }
-    }
+				if (externalId) {
+					await tx
+						.insert(discordMessages)
+						.values({
+							id: externalId,
+							messageId: message.id,
+						})
+						.onConflictDoNothing();
+				}
+			});
+		} catch (error) {
+			throw new DatabaseError('Failed to save message to database', error);
+		}
+	}
 
-    async updateMessage(message: Message): Promise<void> {
-        try {
-            await this.db.update(messages)
-                .set({
-                    content: message.content,
-                    metadata: message.metadata,
-                    attachments: message.attachments,
-                })
-                .where(eq(messages.id, message.id));
-        } catch (error) {
-            throw new DatabaseError('Failed to update message in database', error);
-        }
-    }
+	async updateMessage(message: Message): Promise<void> {
+		try {
+			await this.db
+				.update(messages)
+				.set({
+					content: message.content,
+					metadata: message.metadata,
+					attachments: message.attachments,
+				})
+				.where(eq(messages.id, message.id));
+		} catch (error) {
+			throw new DatabaseError('Failed to update message in database', error);
+		}
+	}
 
-    async updateAttachment(messageId: string, attachmentId: string, attachment: Partial<MessageAttachment>): Promise<void> {
-        try {
-            const msg = await this.findById(messageId);
-            if (!msg) return;
+	async updateAttachment(
+		messageId: string,
+		attachmentId: string,
+		attachment: Partial<MessageAttachment>,
+	): Promise<void> {
+		try {
+			const msg = await this.findById(messageId);
+			if (!msg) return;
 
-            const updatedAttachments = msg.attachments.map(attr =>
-                attr.id === attachmentId ? { ...attr, ...attachment } : attr
-            );
+			const updatedAttachments = msg.attachments.map((attr) =>
+				attr.id === attachmentId ? { ...attr, ...attachment } : attr,
+			);
 
-            await this.db.update(messages)
-                .set({ attachments: updatedAttachments })
-                .where(eq(messages.id, messageId));
-        } catch (error) {
-            throw new DatabaseError('Failed to update attachment in database', error);
-        }
-    }
+			await this.db.update(messages).set({ attachments: updatedAttachments }).where(eq(messages.id, messageId));
+		} catch (error) {
+			throw new DatabaseError('Failed to update attachment in database', error);
+		}
+	}
 
-    async getHistory(messageId: string, limit: number = 50): Promise<Message[]> {
-        try {
-            const results = await this.db.execute(sql`
+	async getHistory(messageId: string, limit: number = 50): Promise<Message[]> {
+		try {
+			const results = await this.db.execute(sql`
                 WITH RECURSIVE history AS (
                     SELECT 
                         id, role, content, timestamp, metadata, parent_id, attachments, 1 as level
@@ -103,40 +112,41 @@ export class PostgresChatRepository implements IChatRepository {
                 SELECT * FROM history ORDER BY timestamp DESC
             `);
 
-            return (results.rows as unknown as MessageRow[]).reverse().map(r => new Message({
-                id: r.id,
-                role: r.role as Role,
-                content: r.content,
-                timestamp: new Date(r.timestamp),
-                metadata: r.metadata || undefined,
-                parentId: r.parent_id || undefined,
-                attachments: r.attachments,
-            }));
-        } catch (error) {
-            if (error instanceof DatabaseError) throw error;
-            throw new DatabaseError('Failed to fetch conversation history', error);
-        }
-    }
+			return (results.rows as unknown as MessageRow[]).reverse().map(
+				(r) =>
+					new Message({
+						id: r.id,
+						role: r.role as Role,
+						content: r.content,
+						timestamp: new Date(r.timestamp),
+						metadata: r.metadata || undefined,
+						parentId: r.parent_id || undefined,
+						attachments: r.attachments,
+					}),
+			);
+		} catch (error) {
+			if (error instanceof DatabaseError) throw error;
+			throw new DatabaseError('Failed to fetch conversation history', error);
+		}
+	}
 
-    async findById(id: string): Promise<Message | null> {
-        try {
-            const [result] = await this.db.select()
-                .from(messages)
-                .where(eq(messages.id, id));
+	async findById(id: string): Promise<Message | null> {
+		try {
+			const [result] = await this.db.select().from(messages).where(eq(messages.id, id));
 
-            if (!result) return null;
+			if (!result) return null;
 
-            return new Message({
-                id: result.id,
-                role: result.role as Role,
-                content: result.content,
-                timestamp: result.timestamp,
-                metadata: result.metadata || undefined,
-                parentId: result.parentId || undefined,
-                attachments: result.attachments,
-            });
-        } catch (error) {
-            throw new DatabaseError('Failed to retrieve message from database', error);
-        }
-    }
+			return new Message({
+				id: result.id,
+				role: result.role as Role,
+				content: result.content,
+				timestamp: result.timestamp,
+				metadata: result.metadata || undefined,
+				parentId: result.parentId || undefined,
+				attachments: result.attachments,
+			});
+		} catch (error) {
+			throw new DatabaseError('Failed to retrieve message from database', error);
+		}
+	}
 }

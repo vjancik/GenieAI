@@ -5,28 +5,32 @@ import type { IDiscordMessageMappingRepository } from '../../core/domain/reposit
 import { DatabaseError } from '../../core/domain/errors/application-error';
 
 export class PostgresDiscordMessageMappingRepository implements IDiscordMessageMappingRepository {
-    constructor(private readonly db: NodePgDatabase<any>) { }
+	constructor(private readonly db: NodePgDatabase<any>) {}
 
-    async saveMapping(discordId: string, messageId: string): Promise<void> {
-        try {
-            await this.db.insert(discordMessages).values({
-                id: discordId,
-                messageId: messageId,
-            }).onConflictDoNothing();
-        } catch (error) {
-            throw new DatabaseError('Failed to save Discord-to-Internal message mapping', error);
-        }
-    }
+	async saveMapping(discordId: string, messageId: string): Promise<void> {
+		try {
+			await this.db
+				.insert(discordMessages)
+				.values({
+					id: discordId,
+					messageId: messageId,
+				})
+				.onConflictDoNothing();
+		} catch (error) {
+			throw new DatabaseError('Failed to save Discord-to-Internal message mapping', error);
+		}
+	}
 
-    async getMessageId(discordId: string): Promise<string | null> {
-        try {
-            const [result] = await this.db.select({ messageId: discordMessages.messageId })
-                .from(discordMessages)
-                .where(eq(discordMessages.id, discordId));
+	async getMessageId(discordId: string): Promise<string | null> {
+		try {
+			const [result] = await this.db
+				.select({ messageId: discordMessages.messageId })
+				.from(discordMessages)
+				.where(eq(discordMessages.id, discordId));
 
-            return result?.messageId || null;
-        } catch (error) {
-            throw new DatabaseError('Failed to retrieve internal ID for Discord message', error);
-        }
-    }
+			return result?.messageId || null;
+		} catch (error) {
+			throw new DatabaseError('Failed to retrieve internal ID for Discord message', error);
+		}
+	}
 }
