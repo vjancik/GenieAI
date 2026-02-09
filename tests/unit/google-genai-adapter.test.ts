@@ -44,18 +44,14 @@ mock.module("@google/genai", () => ({
     }
 }));
 
-// Define logger mock, including child() method
-const loggerMockBase = {
+const mockLogger: ILogger = {
     info: mock(),
     error: mock(),
     debug: mock(),
     warn: mock(),
-};
-
-const mockLogger = {
-    ...loggerMockBase,
+    fatal: mock(),
     child: mock(() => mockLogger),
-} as unknown as ILogger;
+};
 
 describe("GoogleGenAIAdapter", () => {
     let adapter: GoogleGenAIAdapter;
@@ -69,12 +65,12 @@ describe("GoogleGenAIAdapter", () => {
         mockFilesGet.mockClear();
 
         mockAttachmentManager = {
-            getAttachmentStream: mock(async () => ({
+            getAttachmentStream: mock(async (_attachment: any, _messageId: string) => ({
                 stream: new ReadableStream(),
                 mimeType: "text/plain"
             })),
-            updateAttachmentMetadata: mock(async () => { }),
-        } as IAttachmentManager;
+            updateAttachmentMetadata: mock(async (_messageId: string, _attachmentId: string, _metadata: any) => { }),
+        };
 
         // Instantiate adapter
         adapter = new GoogleGenAIAdapter(mockAttachmentManager, mockLogger);
@@ -103,11 +99,11 @@ describe("GoogleGenAIAdapter", () => {
 
         const callArgs = mockSendMessage.mock.calls[0];
         if (!callArgs) throw new Error("mockSendMessage should have been called");
-        const payload = callArgs[0] as any;
+        const payload = callArgs[0] as { message: { text: string }[] };
 
         // payload is { message: [ { text: 'Test Prompt' } ] }
         expect(payload.message).toBeDefined();
         const parts = payload.message;
-        expect(parts[0].text).toBe("Test Prompt");
+        expect(parts[0]!.text).toBe("Test Prompt");
     });
 });

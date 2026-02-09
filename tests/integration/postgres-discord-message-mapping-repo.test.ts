@@ -7,11 +7,7 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { messages, discordMessages } from "../../src/infrastructure/database/schema";
 import { Message } from "../../src/core/domain/entities/message";
 import { Role } from "../../src/core/domain/value-objects/role";
-import { config } from "dotenv";
 import { join } from "path";
-
-// Load test env
-config({ path: '.env.test' });
 
 // Use 127.0.0.1 to avoid Windows localhost issues
 const connectionString = process.env.DATABASE_URL || 'postgresql://test_user:test_password@127.0.0.1:5434/genie_ai_test';

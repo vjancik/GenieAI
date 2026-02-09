@@ -5,13 +5,16 @@ import { Role } from "../../src/core/domain/value-objects/role";
 import type { IChatRepository } from "../../src/core/domain/repositories/chat-repository";
 import type { IGenerativeAIModel } from "../../src/core/application/interfaces/illm-provider";
 import type { ILogger } from "../../src/core/application/interfaces/logger.interface";
+import type { Mock } from "bun:test";
 
-const mockLogger = {
+const mockLogger: ILogger = {
     info: mock(),
     error: mock(),
     warn: mock(),
     debug: mock(),
-} as unknown as ILogger;
+    fatal: mock(),
+    child: mock(() => mockLogger),
+};
 
 describe("SendMessageUseCase", () => {
     let useCase: SendMessageUseCase;
@@ -21,17 +24,17 @@ describe("SendMessageUseCase", () => {
     beforeEach(() => {
         // Initialize fresh mocks for each test to ensure no state leakage
         mockChatRepo = {
-            saveMessage: mock(async () => { }),
-            getHistory: mock(async () => []),
-            updateMessage: mock(async () => { }),
-            updateAttachment: mock(async () => { }),
-            findById: mock(async () => null),
-        } as unknown as IChatRepository;
+            saveMessage: mock(async (_message: Message, _externalId?: string) => { }),
+            getHistory: mock(async (_messageId: string, _limit?: number) => []),
+            updateMessage: mock(async (_message: Message) => { }),
+            updateAttachment: mock(async (_messageId: string, _attachmentId: string, _attachment: any) => { }),
+            findById: mock(async (_id: string) => null),
+        };
 
         mockAIModel = {
             // Default implementation returns a simple string
-            generateContent: mock(async () => "AI Response"),
-        } as unknown as IGenerativeAIModel;
+            generateContent: mock(async (_history: Message[], _prompt: string) => "AI Response"),
+        };
 
         useCase = new SendMessageUseCase(mockChatRepo, mockAIModel, mockLogger);
     });
@@ -49,7 +52,7 @@ describe("SendMessageUseCase", () => {
         expect(mockChatRepo.saveMessage).toHaveBeenCalledTimes(2);
 
         // Check 1st call (User Message)
-        const saveCalls = (mockChatRepo.saveMessage as any).mock.calls;
+        const saveCalls = (mockChatRepo.saveMessage as Mock<IChatRepository['saveMessage']>).mock.calls;
         const userMessage = saveCalls[0]?.[0] as Message;
         expect(userMessage?.content).toBe("Hello AI");
         expect(userMessage?.role).toBe(Role.USER);
@@ -79,9 +82,9 @@ describe("SendMessageUseCase", () => {
 
         await useCase.execute(dto);
 
-        const aiCalls = (mockAIModel.generateContent as any).mock.calls;
+        const aiCalls = (mockAIModel.generateContent as Mock<IGenerativeAIModel['generateContent']>).mock.calls;
         // Verify history passed to generateContent
-        const historyPassed = aiCalls[0][0] as Message[];
+        const historyPassed = aiCalls[0]![0];
 
         // Expected: [Prev 1, Prev 2, Follow up]
         expect(historyPassed).toHaveLength(3);
@@ -107,8 +110,8 @@ describe("SendMessageUseCase", () => {
 
         expect(mockChatRepo.getHistory).toHaveBeenCalledWith("parent");
 
-        const aiCalls = (mockAIModel.generateContent as any).mock.calls;
-        const historyPassed = aiCalls[0][0] as Message[];
+        const aiCalls = (mockAIModel.generateContent as Mock<IGenerativeAIModel['generateContent']>).mock.calls;
+        const historyPassed = aiCalls[0]![0];
 
         // Expected: [Parent Msg, Reply to parent]
         expect(historyPassed).toHaveLength(2);
