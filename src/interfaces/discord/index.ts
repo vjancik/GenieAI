@@ -1,24 +1,21 @@
 import {
-	type Client,
-	GatewayIntentBits,
-	Events,
-	type Message as DiscordMessage,
-	TextChannel,
+	ActionRowBuilder,
 	ButtonBuilder,
 	ButtonStyle,
-	ActionRowBuilder,
-	ComponentType,
+	type Client,
+	type Message as DiscordMessage,
+	Events,
 	type Interaction,
 } from 'discord.js';
 import { v4 as uuidv4 } from 'uuid';
+import type { ILogger } from '../../core/application/interfaces/logger.interface';
+import type { GetNextMessagePageUseCase } from '../../core/application/use-cases/get-next-message-page.use-case';
 import type { SendMessageUseCase } from '../../core/application/use-cases/send-message.use-case';
+import type { Message, MessageAttachment } from '../../core/domain/entities/message';
+import { ApplicationError, DiscordError } from '../../core/domain/errors/application-error';
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
 import type { IDiscordMessageMappingRepository } from '../../core/domain/repositories/discord-message-mapping-repository';
 import type { IDiscordMessagePageRepository } from '../../core/domain/repositories/discord-message-page-repository';
-import type { GetNextMessagePageUseCase } from '../../core/application/use-cases/get-next-message-page.use-case';
-import type { ILogger } from '../../core/application/interfaces/logger.interface';
-import type { Message, MessageAttachment } from '../../core/domain/entities/message';
-import { ApplicationError, DiscordError } from '../../core/domain/errors/application-error';
 
 export class DiscordBot {
 	private logger: ILogger;
@@ -146,7 +143,7 @@ export class DiscordBot {
 			const formattedContent = formatMessageBlock(message, content);
 			let history: Message[] = [];
 			let finalPrompt = formattedContent;
-			let parentUuid: string | undefined ;
+			let parentUuid: string | undefined;
 
 			if (message.reference?.messageId) {
 				parentUuid = (await this.discordMessageMappingRepo.getMessageId(message.reference.messageId)) || undefined;
@@ -260,12 +257,14 @@ export class DiscordBot {
 				// Remove button if it's invalid
 				try {
 					await interaction.message.edit({ components: [] });
-				} catch (e) {}
+				} catch (_e) {}
 				return;
 			}
 
 			// Send next chunk
-			const nextMsgPayload: any = { content: result.content };
+			const nextMsgPayload: { content: string; components?: ActionRowBuilder<ButtonBuilder>[] } = {
+				content: result.content,
+			};
 
 			if (result.nextPageId) {
 				const row = this.createPaginationButton(result.nextPageId);

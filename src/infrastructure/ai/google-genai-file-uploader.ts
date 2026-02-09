@@ -34,7 +34,7 @@ export class GoogleGenAIFileUploader {
 	};
 
 	constructor(
-		private client: GoogleGenAI,
+		client: GoogleGenAI,
 		private logger: ILogger,
 	) {
 		// Accessing protected apiClient using a type-safe cast
@@ -61,7 +61,6 @@ export class GoogleGenAIFileUploader {
 				method: 'POST',
 				headers: fetchHeaders,
 				body: stream,
-				// @ts-expect-error - duplex is required for streaming bodies in Node.js fetch
 				duplex: 'half',
 			});
 

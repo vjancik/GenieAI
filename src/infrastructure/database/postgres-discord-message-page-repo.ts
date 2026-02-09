@@ -1,8 +1,8 @@
 import { eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type {
-	IDiscordMessagePageRepository,
 	DiscordMessagePage,
+	IDiscordMessagePageRepository,
 } from '../../core/domain/repositories/discord-message-page-repository';
 import { discordMessagePages } from './schema';
 

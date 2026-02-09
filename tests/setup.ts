@@ -1,4 +1,4 @@
-import { beforeAll, afterAll } from 'bun:test';
+import { afterAll, beforeAll } from 'bun:test';
 
 // Global setup for tests
 beforeAll(() => {

@@ -1,6 +1,6 @@
-import type { Message } from '../../core/domain/entities/message';
 import type { IGenerativeAIModel } from '../../core/application/interfaces/illm-provider';
 import type { ILogger } from '../../core/application/interfaces/logger.interface';
+import type { Message } from '../../core/domain/entities/message';
 
 export class MockGenAIAdapter implements IGenerativeAIModel {
 	private logger: ILogger;

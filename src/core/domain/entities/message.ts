@@ -17,7 +17,7 @@ export interface MessageProps {
 	role: Role;
 	content: string;
 	timestamp: Date;
-	metadata?: Record<string, any>;
+	metadata?: Record<string, unknown>;
 	parentId?: string;
 	attachments?: MessageAttachment[];
 }
@@ -27,7 +27,7 @@ export class Message {
 	public readonly role: Role;
 	public readonly content: string;
 	public readonly timestamp: Date;
-	public readonly metadata?: Record<string, any>;
+	public readonly metadata?: Record<string, unknown>;
 	public readonly parentId?: string;
 	public readonly attachments: MessageAttachment[];
 

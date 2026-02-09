@@ -1,10 +1,11 @@
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { eq } from 'drizzle-orm';
-import { discordMessages } from './schema';
-import type { IDiscordMessageMappingRepository } from '../../core/domain/repositories/discord-message-mapping-repository';
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DatabaseError } from '../../core/domain/errors/application-error';
+import type { IDiscordMessageMappingRepository } from '../../core/domain/repositories/discord-message-mapping-repository';
+import { discordMessages } from './schema';
 
 export class PostgresDiscordMessageMappingRepository implements IDiscordMessageMappingRepository {
+	// biome-ignore lint/suspicious/noExplicitAny: Drizzle database instance type is complex
 	constructor(private readonly db: NodePgDatabase<any>) {}
 
 	async saveMapping(discordId: string, messageId: string): Promise<void> {

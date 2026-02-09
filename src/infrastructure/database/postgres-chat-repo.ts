@@ -1,22 +1,23 @@
+import { eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { eq, desc, sql } from 'drizzle-orm';
-import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
 import { Message, type MessageAttachment } from '../../core/domain/entities/message';
-import { messages, discordMessages } from './schema';
-import type { Role } from '../../core/domain/value-objects/role';
 import { DatabaseError } from '../../core/domain/errors/application-error';
+import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
+import type { Role } from '../../core/domain/value-objects/role';
+import { discordMessages, messages } from './schema';
 
 interface MessageRow {
 	id: string;
 	role: string;
 	content: string;
 	timestamp: string | number | Date;
-	metadata: Record<string, any> | null;
+	metadata: Record<string, unknown> | null;
 	parent_id: string | null;
 	attachments: MessageAttachment[];
 }
 
 export class PostgresChatRepository implements IChatRepository {
+	// biome-ignore lint/suspicious/noExplicitAny: Drizzle database instance type is complex
 	constructor(private readonly db: NodePgDatabase<any>) {}
 
 	async saveMessage(message: Message, externalId?: string): Promise<void> {

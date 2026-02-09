@@ -1,8 +1,8 @@
 export interface ILogger {
-	debug(msg: string, ...args: any[]): void;
-	info(msg: string, ...args: any[]): void;
-	warn(msg: string, ...args: any[]): void;
-	error(msg: string, ...args: any[]): void;
-	fatal(msg: string, ...args: any[]): void;
-	child(metadata: Record<string, any>): ILogger;
+	debug(msg: string, ...args: unknown[]): void;
+	info(msg: string, ...args: unknown[]): void;
+	warn(msg: string, ...args: unknown[]): void;
+	error(msg: string, ...args: unknown[]): void;
+	fatal(msg: string, ...args: unknown[]): void;
+	child(metadata: Record<string, unknown>): ILogger;
 }

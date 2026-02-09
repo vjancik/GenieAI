@@ -1,6 +1,6 @@
+import { ApplicationError } from '../../domain/errors/application-error';
 import type { IChatRepository } from '../../domain/repositories/chat-repository';
 import type { IDiscordMessagePageRepository } from '../../domain/repositories/discord-message-page-repository';
-import { ApplicationError } from '../../domain/errors/application-error';
 
 interface GetNextMessagePageInput {
 	pageId: string;

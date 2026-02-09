@@ -16,8 +16,8 @@
  * handling, using a mature library like discord.js is the recommended approach for most use cases.
  */
 
-import { Client, GatewayIntentBits, type TextChannel, type Message as DiscordMessage } from 'discord.js';
-import { randomUUID } from 'crypto';
+import { randomUUID } from 'node:crypto';
+import { Client, type Message as DiscordMessage, GatewayIntentBits, type TextChannel } from 'discord.js';
 import { PinoLogger } from '../infrastructure/logging/pino-logger';
 
 const rootLogger = new PinoLogger('info', 'text');
@@ -44,9 +44,7 @@ const djsChannel = (await djsClient.channels.fetch(CHANNEL_ID)) as TextChannel;
 class RawDiscordClient {
 	private ws: WebSocket | null = null;
 	private sequence: number | null = null;
-	private sessionId: string | null = null;
-	private resumeUrl: string | null = null;
-	private resolveMessage: ((msg: any) => void) | null = null;
+	private resolveMessage: ((msg: unknown) => void) | null = null;
 	private pendingKey: string | null = null;
 
 	async connect() {
@@ -73,7 +71,8 @@ class RawDiscordClient {
 				if (s) this.sequence = s;
 
 				switch (op) {
-					case 10: { // Hello
+					case 10: {
+						// Hello
 						clearTimeout(timeout);
 						const heartbeatInterval = d.heartbeat_interval;
 						logger.info(`[RawWS] Received Hello. Heartbeat interval: ${heartbeatInterval}ms`);
@@ -96,17 +95,13 @@ class RawDiscordClient {
 
 					case 0: // Event
 						if (t === 'READY') {
-							this.sessionId = d.session_id;
-							this.resumeUrl = d.resume_gateway_url;
 							logger.info('[RawWS] Ready!');
 							resolve();
 						}
 						if (t === 'MESSAGE_CREATE') {
 							if (this.pendingKey && d.content.includes(this.pendingKey)) {
-								const resolve = this.resolveMessage;
-								this.resolveMessage = null;
 								this.pendingKey = null;
-								resolve?.(d);
+								this.resolveMessage?.(d);
 							}
 						}
 						break;
@@ -132,7 +127,7 @@ class RawDiscordClient {
 
 	async waitForMessage(key: string) {
 		this.pendingKey = key;
-		return new Promise<any>((resolve, reject) => {
+		return new Promise<unknown>((resolve, reject) => {
 			this.resolveMessage = resolve;
 			// Timeout if no message received in 15 seconds
 			setTimeout(() => {
@@ -145,7 +140,7 @@ class RawDiscordClient {
 		});
 	}
 
-	async sendMessage(content: string): Promise<any> {
+	async sendMessage(content: string): Promise<unknown> {
 		const url = `https://discord.com/api/v10/channels/${CHANNEL_ID}/messages`;
 		const options = {
 			method: 'POST',
@@ -188,12 +183,14 @@ function printStats(name: string, durations: number[]) {
 	const min = Math.min(...durations);
 	const max = Math.max(...durations);
 
-	logger.info(`\\n--- ${name} ---`);
+	logger.info(`\n--- ${name} ---`);
 	logger.info(`Iterations: ${durations.length}`);
 	logger.info(`Average:    ${avg.toFixed(2)}ms`);
 	logger.info(`Min:        ${min.toFixed(2)}ms`);
 	logger.info(`Max:        ${max.toFixed(2)}ms`);
-	durations.forEach((d, i) => logger.info(`  Iter ${i + 1}: ${d.toFixed(2)}ms`));
+	for (const [i, d] of durations.entries()) {
+		logger.info(`  Iter ${i + 1}: ${d.toFixed(2)}ms`);
+	}
 }
 
 // --- Benchmark Runner ---
@@ -202,7 +199,7 @@ async function runBenchmarks() {
 	const djsDurations: number[] = [];
 	const rawDurations: number[] = [];
 
-	logger.info(`\\nRunning Raw API Benchmark (${ITERATIONS} iterations)...`);
+	logger.info(`\nRunning Raw API Benchmark (${ITERATIONS} iterations)...`);
 	for (let i = 0; i < ITERATIONS; i++) {
 		const key = `raw-bench-${randomUUID()}`;
 		const waitPromise = rawClient.waitForMessage(key);
@@ -216,7 +213,7 @@ async function runBenchmarks() {
 	}
 	process.stdout.write('\n');
 
-	logger.info('\\nWaiting for rate limits to settle (2s)...');
+	logger.info('\nWaiting for rate limits to settle (2s)...');
 	await new Promise((resolve) => setTimeout(resolve, 2000));
 
 	logger.info(`\\nRunning Discord.js Benchmark (${ITERATIONS} iterations)...`);

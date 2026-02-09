@@ -1,10 +1,9 @@
+import { metrics, SpanStatusCode, trace } from '@opentelemetry/api';
 import { v4 as uuidv4 } from 'uuid';
 import { Message, type MessageAttachment } from '../../domain/entities/message';
 import type { IChatRepository } from '../../domain/repositories/chat-repository';
 import { Role } from '../../domain/value-objects/role';
 import type { IGenerativeAIModel } from '../interfaces/illm-provider';
-
-import { trace, metrics, SpanStatusCode } from '@opentelemetry/api';
 
 const tracer = trace.getTracer('genie-ai-bot');
 const meter = metrics.getMeter('genie-ai-bot');
@@ -76,7 +75,7 @@ export class SendMessageUseCase {
 				// Track in span and log
 				span.setAttribute('ai.response_length', aiResponseText.length);
 				span.setAttribute('ai.duration_ms', duration);
-				span.setAttribute('ai.response_preview', aiResponseText.substring(0, 100) + '...');
+				span.setAttribute('ai.response_preview', `${aiResponseText.substring(0, 100)}...`);
 
 				this.logger.info('AI Response generated', {
 					conversationId: dto.conversationId,

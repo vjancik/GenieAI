@@ -1,17 +1,15 @@
-import { GoogleGenAI, type Content, FileState, type File } from '@google/genai';
-import type { IGenerativeAIModel } from '../../core/application/interfaces/illm-provider';
-import type { Message, MessageAttachment } from '../../core/domain/entities/message';
-import { Role } from '../../core/domain/value-objects/role';
+import { type FileHandle, mkdir, open, readdir, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { type Content, type File, FileState, GoogleGenAI } from '@google/genai';
 import { config } from '../../config/env';
-
-import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
-import type { ILogger } from '../../core/application/interfaces/logger.interface';
-import { AIProviderError } from '../../core/domain/errors/application-error';
-import { tmpdir } from 'os';
-import { join } from 'path';
-import { mkdir, readdir, unlink, open, type FileHandle } from 'fs/promises';
-import { GoogleGenAIFileUploader, type GenAIFile } from './google-genai-file-uploader';
 import type { IAttachmentManager } from '../../core/application/interfaces/attachment-manager';
+import type { IGenerativeAIModel } from '../../core/application/interfaces/illm-provider';
+import type { ILogger } from '../../core/application/interfaces/logger.interface';
+import type { Message, MessageAttachment } from '../../core/domain/entities/message';
+import { AIProviderError } from '../../core/domain/errors/application-error';
+import { Role } from '../../core/domain/value-objects/role';
+import { type GenAIFile, GoogleGenAIFileUploader } from './google-genai-file-uploader';
 
 export class GoogleGenAIAdapter implements IGenerativeAIModel {
 	private client: GoogleGenAI;
@@ -199,7 +197,9 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
 				// Acquire exclusive access for memory-intensive fallback upload
 				const currentQueue = GoogleGenAIAdapter.fallbackQueue;
 				let resolve: (() => void) | undefined;
-				GoogleGenAIAdapter.fallbackQueue = new Promise((r) => (resolve = r));
+				GoogleGenAIAdapter.fallbackQueue = new Promise((r) => {
+					resolve = r;
+				});
 
 				this.logger.warn(`Attachment ${attachment.id} has no content-length. Waiting for exclusive fallback lock...`);
 				await currentQueue;
@@ -210,12 +210,15 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
 				);
 
 				const result = await this.readStreamWithTwoTierLimits(stream, this.MAX_FALLBACK_SIZE, this.MAX_DISK_SIZE);
-				let uploadResponse;
-
 				try {
-					const uploadInput = result.filePath || new Blob([result.buffer!], { type: attachment.mimeType });
+					const uploadInput =
+						result.filePath || (result.buffer ? new Blob([result.buffer], { type: attachment.mimeType }) : undefined);
 
-					uploadResponse = await this.client.files.upload({
+					if (!uploadInput) {
+						throw new AIProviderError('Failed to read attachment data for upload');
+					}
+
+					uploadedFile = await this.client.files.upload({
 						file: uploadInput,
 						config: {
 							mimeType: attachment.mimeType,
@@ -228,8 +231,6 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
 						});
 					}
 				}
-
-				uploadedFile = uploadResponse;
 			} else {
 				uploadedFile = await this.fileUploader.uploadStream(stream, {
 					mimeType: mimeType,
@@ -322,7 +323,9 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
 	private async getFileWithRateLimit(fileName: string): Promise<File> {
 		const currentGate = GoogleGenAIAdapter.getFileGate;
 		let resolveNext: (() => void) | undefined;
-		GoogleGenAIAdapter.getFileGate = new Promise((r) => (resolveNext = r));
+		GoogleGenAIAdapter.getFileGate = new Promise((r) => {
+			resolveNext = r;
+		});
 
 		await currentGate;
 		try {

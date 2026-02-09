@@ -1,12 +1,12 @@
-import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
-import { PostgresChatRepository } from '../../src/infrastructure/database/postgres-chat-repo';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { join } from 'node:path';
 import { drizzle } from 'drizzle-orm/node-postgres';
-import { Pool } from 'pg';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
-import { messages, discordMessages } from '../../src/infrastructure/database/schema';
+import { Pool } from 'pg';
 import { Message } from '../../src/core/domain/entities/message';
 import { Role } from '../../src/core/domain/value-objects/role';
-import { join } from 'path';
+import { PostgresChatRepository } from '../../src/infrastructure/database/postgres-chat-repo';
+import { discordMessages, messages } from '../../src/infrastructure/database/schema';
 
 // Use 127.0.0.1 to avoid Windows localhost issues
 const connectionString =
@@ -58,7 +58,7 @@ describe('PostgresChatRepository Integration', () => {
 		repo = new PostgresChatRepository(db);
 
 		const msgId = crypto.randomUUID();
-		const convId = crypto.randomUUID();
+		const _convId = crypto.randomUUID();
 
 		const msg = new Message({
 			id: msgId,
@@ -79,7 +79,7 @@ describe('PostgresChatRepository Integration', () => {
 
 	test('should retrieve conversation history correctly', async () => {
 		repo = new PostgresChatRepository(db);
-		const convId = crypto.randomUUID();
+		const _convId = crypto.randomUUID();
 
 		// Create a thread: User -> AI -> User
 		const msg1Id = crypto.randomUUID();

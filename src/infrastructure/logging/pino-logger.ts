@@ -16,6 +16,7 @@ export class PinoLogger implements ILogger {
 			const otelEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
 			const serviceName = process.env.OTEL_SERVICE_NAME || 'genie-ai-bot';
 
+			// biome-ignore lint/suspicious/noExplicitAny: Internal Pino streams use complex types
 			const streams: { stream: any; level?: string }[] = [];
 
 			// 1. Console Stream
@@ -59,7 +60,7 @@ export class PinoLogger implements ILogger {
 								}
 
 								process.stdout.write(`${output}\n`);
-							} catch (e) {
+							} catch (_e) {
 								process.stdout.write(msg);
 							}
 						},
@@ -88,7 +89,11 @@ export class PinoLogger implements ILogger {
 			if (streams.length > 1) {
 				this.logger = pino({ level }, pino.multistream(streams));
 			} else if (streams.length === 1) {
-				const single = streams[0]!;
+				const single = streams[0];
+				if (!single) {
+					this.logger = pino({ level });
+					return;
+				}
 				if (format === 'text') {
 					this.logger = pino({ level }, single.stream);
 				} else {
@@ -100,7 +105,7 @@ export class PinoLogger implements ILogger {
 		}
 	}
 
-	child(metadata: Record<string, any>): ILogger {
+	child(metadata: Record<string, unknown>): ILogger {
 		return new PinoLogger(this.logger.child(metadata), this.format, this.useColor);
 	}
 
@@ -145,27 +150,27 @@ export class PinoLogger implements ILogger {
 		}
 	}
 
-	debug(msg: string, ...args: any[]): void {
+	debug(msg: string, ...args: unknown[]): void {
 		this.logger.debug(this.mergeArgs(msg, args));
 	}
 
-	info(msg: string, ...args: any[]): void {
+	info(msg: string, ...args: unknown[]): void {
 		this.logger.info(this.mergeArgs(msg, args));
 	}
 
-	warn(msg: string, ...args: any[]): void {
+	warn(msg: string, ...args: unknown[]): void {
 		this.logger.warn(this.mergeArgs(msg, args));
 	}
 
-	error(msg: string, ...args: any[]): void {
+	error(msg: string, ...args: unknown[]): void {
 		this.logger.error(this.mergeArgs(msg, args));
 	}
 
-	fatal(msg: string, ...args: any[]): void {
+	fatal(msg: string, ...args: unknown[]): void {
 		this.logger.fatal(this.mergeArgs(msg, args));
 	}
 
-	private mergeArgs(msg: string, args: any[]): any {
+	private mergeArgs(msg: string, args: unknown[]): unknown {
 		if (args.length === 0) return msg;
 		const meta = args.length === 1 && typeof args[0] === 'object' ? args[0] : { args };
 
@@ -177,11 +182,12 @@ export class PinoLogger implements ILogger {
 		return { ...meta, msg };
 	}
 
+	// biome-ignore lint/suspicious/noExplicitAny: Generic object trimmer
 	private trimStrings(obj: any, depth: number = 0): any {
 		if (depth >= 10) return '[Max Depth Reached]';
 
 		if (typeof obj === 'string') {
-			return obj.length > 100 ? obj.substring(0, 100) + '...' : obj;
+			return obj.length > 100 ? `${obj.substring(0, 100)}...` : obj;
 		}
 		if (typeof obj !== 'object' || obj === null) {
 			return obj;
@@ -189,7 +195,8 @@ export class PinoLogger implements ILogger {
 		if (Array.isArray(obj)) {
 			return obj.map((item) => this.trimStrings(item, depth + 1));
 		}
-		const trimmed: any = {};
+		// biome-ignore lint/suspicious/noExplicitAny: Internal structure of trimmed object
+		const trimmed: Record<string, any> = {};
 		for (const key in obj) {
 			trimmed[key] = this.trimStrings(obj[key], depth + 1);
 		}

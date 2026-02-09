@@ -1,11 +1,11 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
-import { SendMessageUseCase, type SendMessageDTO } from '../../src/core/application/use-cases/send-message.use-case';
-import { Message } from '../../src/core/domain/entities/message';
-import { Role } from '../../src/core/domain/value-objects/role';
-import type { IChatRepository } from '../../src/core/domain/repositories/chat-repository';
+import type { Mock } from 'bun:test';
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { IGenerativeAIModel } from '../../src/core/application/interfaces/illm-provider';
 import type { ILogger } from '../../src/core/application/interfaces/logger.interface';
-import type { Mock } from 'bun:test';
+import { type SendMessageDTO, SendMessageUseCase } from '../../src/core/application/use-cases/send-message.use-case';
+import { Message, type MessageAttachment } from '../../src/core/domain/entities/message';
+import type { IChatRepository } from '../../src/core/domain/repositories/chat-repository';
+import { Role } from '../../src/core/domain/value-objects/role';
 
 const mockLogger: ILogger = {
 	info: mock(),
@@ -27,7 +27,9 @@ describe('SendMessageUseCase', () => {
 			saveMessage: mock(async (_message: Message, _externalId?: string) => {}),
 			getHistory: mock(async (_messageId: string, _limit?: number) => []),
 			updateMessage: mock(async (_message: Message) => {}),
-			updateAttachment: mock(async (_messageId: string, _attachmentId: string, _attachment: any) => {}),
+			updateAttachment: mock(
+				async (_messageId: string, _attachmentId: string, _attachment: Partial<MessageAttachment>) => {},
+			),
 			findById: mock(async (_id: string) => null),
 		};
 
@@ -84,12 +86,14 @@ describe('SendMessageUseCase', () => {
 
 		const aiCalls = (mockAIModel.generateContent as Mock<IGenerativeAIModel['generateContent']>).mock.calls;
 		// Verify history passed to generateContent
-		const historyPassed = aiCalls[0]![0];
+		const historyPassed = aiCalls[0]?.[0];
 
 		// Expected: [Prev 1, Prev 2, Follow up]
 		expect(historyPassed).toHaveLength(3);
-		expect(historyPassed[0]?.content).toBe('Prev 1');
-		expect(historyPassed[2]?.content).toBe('Follow up');
+		// biome-ignore lint/style/noNonNullAssertion: Checked by toHaveLength above
+		expect(historyPassed![0]?.content).toBe('Prev 1');
+		// biome-ignore lint/style/noNonNullAssertion: Checked by toHaveLength above
+		expect(historyPassed![2]?.content).toBe('Follow up');
 	});
 
 	test('should fetch history from repo if parentId is provided but no history array', async () => {
@@ -111,10 +115,11 @@ describe('SendMessageUseCase', () => {
 		expect(mockChatRepo.getHistory).toHaveBeenCalledWith('parent');
 
 		const aiCalls = (mockAIModel.generateContent as Mock<IGenerativeAIModel['generateContent']>).mock.calls;
-		const historyPassed = aiCalls[0]![0];
+		const historyPassed = aiCalls[0]?.[0];
 
 		// Expected: [Parent Msg, Reply to parent]
 		expect(historyPassed).toHaveLength(2);
-		expect(historyPassed[0]?.content).toBe('Parent Msg');
+		// biome-ignore lint/style/noNonNullAssertion: Checked by toHaveLength above
+		expect(historyPassed![0]?.content).toBe('Parent Msg');
 	});
 });

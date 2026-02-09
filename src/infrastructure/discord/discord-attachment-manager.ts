@@ -1,8 +1,8 @@
 import type { Client, TextChannel } from 'discord.js';
 import type { IAttachmentManager } from '../../core/application/interfaces/attachment-manager';
+import type { ILogger } from '../../core/application/interfaces/logger.interface';
 import type { MessageAttachment } from '../../core/domain/entities/message';
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
-import type { ILogger } from '../../core/application/interfaces/logger.interface';
 
 export class DiscordAttachmentManager implements IAttachmentManager {
 	constructor(

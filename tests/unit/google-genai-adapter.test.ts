@@ -1,12 +1,12 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
-import { GoogleGenAIAdapter } from '../../src/infrastructure/ai/google-genai-adapter';
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { IAttachmentManager } from '../../src/core/application/interfaces/attachment-manager';
 import type { ILogger } from '../../src/core/application/interfaces/logger.interface';
-import { Message } from '../../src/core/domain/entities/message';
+import { Message, type MessageAttachment } from '../../src/core/domain/entities/message';
 import { Role } from '../../src/core/domain/value-objects/role';
+import { GoogleGenAIAdapter } from '../../src/infrastructure/ai/google-genai-adapter';
 
 // Mock the @google/genai module (New SDK)
-const mockSendMessage = mock(async (req: any) => ({
+const mockSendMessage = mock(async (_req: unknown) => ({
 	text: 'Mocked AI Response',
 }));
 
@@ -65,11 +65,13 @@ describe('GoogleGenAIAdapter', () => {
 		mockFilesGet.mockClear();
 
 		mockAttachmentManager = {
-			getAttachmentStream: mock(async (_attachment: any, _messageId: string) => ({
+			getAttachmentStream: mock(async (_attachment: MessageAttachment, _messageId: string) => ({
 				stream: new ReadableStream(),
 				mimeType: 'text/plain',
 			})),
-			updateAttachmentMetadata: mock(async (_messageId: string, _attachmentId: string, _metadata: any) => {}),
+			updateAttachmentMetadata: mock(
+				async (_messageId: string, _attachmentId: string, _metadata: Partial<MessageAttachment>) => {},
+			),
 		};
 
 		// Instantiate adapter
@@ -102,6 +104,6 @@ describe('GoogleGenAIAdapter', () => {
 		// payload is { message: [ { text: 'Test Prompt' } ] }
 		expect(payload.message).toBeDefined();
 		const parts = payload.message;
-		expect(parts[0]!.text).toBe('Test Prompt');
+		expect(parts[0]?.text).toBe('Test Prompt');
 	});
 });

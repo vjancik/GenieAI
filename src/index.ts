@@ -1,16 +1,16 @@
+import { Client, GatewayIntentBits } from 'discord.js';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import pg from 'pg';
 import { config } from './config/env';
-import { Client, GatewayIntentBits, Events } from 'discord.js';
-import { DiscordAttachmentManager } from './infrastructure/discord/discord-attachment-manager';
+import { GetNextMessagePageUseCase } from './core/application/use-cases/get-next-message-page.use-case';
 import { SendMessageUseCase } from './core/application/use-cases/send-message.use-case';
 import { GoogleGenAIAdapter } from './infrastructure/ai/google-genai-adapter';
 import { PostgresChatRepository } from './infrastructure/database/postgres-chat-repo';
 import { PostgresDiscordMessageMappingRepository } from './infrastructure/database/postgres-discord-message-mapping-repo';
 import { PostgresDiscordMessagePageRepository } from './infrastructure/database/postgres-discord-message-page-repo';
-import { GetNextMessagePageUseCase } from './core/application/use-cases/get-next-message-page.use-case';
-import { DiscordBot } from './interfaces/discord';
+import { DiscordAttachmentManager } from './infrastructure/discord/discord-attachment-manager';
 import { PinoLogger } from './infrastructure/logging/pino-logger';
-import pg from 'pg';
-import { drizzle } from 'drizzle-orm/node-postgres';
+import { DiscordBot } from './interfaces/discord';
 
 async function main() {
 	const logger = new PinoLogger(config.logging.level, config.logging.format, config.logging.useColor);
