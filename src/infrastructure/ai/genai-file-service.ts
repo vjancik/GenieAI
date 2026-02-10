@@ -1,4 +1,4 @@
-import { type File, FileState, type GoogleGenAI } from '@google/genai';
+import { type File, FileState, type GoogleGenAI } from '@google/genai/node';
 import type { ILogger } from '../../core/application/interfaces/logger.interface';
 import { AIProviderError } from '../../core/domain/errors/application-error';
 import { type GenAIFile, GoogleGenAIFileUploader } from './google-genai-file-uploader';

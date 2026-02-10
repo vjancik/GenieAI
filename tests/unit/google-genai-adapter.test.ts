@@ -24,7 +24,7 @@ const mockFilesGet = mock(async () => ({
 	name: 'mock-file-name',
 }));
 
-mock.module('@google/genai', () => ({
+mock.module('@google/genai/node', () => ({
 	GoogleGenAI: mock(() => ({
 		chats: {
 			create: mockChatsCreate,
