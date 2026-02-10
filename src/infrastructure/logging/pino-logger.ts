@@ -14,7 +14,7 @@ export class PinoLogger implements ILogger {
 		} else {
 			const level = levelOrInstance;
 			const otelEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
-			const serviceName = process.env.OTEL_SERVICE_NAME || 'genie-ai-bot';
+			const serviceName = process.env.OTEL_SERVICE_NAME ?? 'genie-ai-bot';
 
 			// biome-ignore lint/suspicious/noExplicitAny: Internal Pino streams use complex types
 			const streams: { stream: any; level?: string }[] = [];
@@ -45,7 +45,7 @@ export class PinoLogger implements ILogger {
 									: new Date(time).toLocaleTimeString();
 								const levelStr = this.formatLevel(level);
 
-								const context = className || serviceName || logContext;
+								const context = className ?? serviceName ?? logContext;
 								let contextStr = '';
 								if (context) {
 									contextStr = this.useColor ? ` \x1b[36m[${context}]\x1b[0m` : ` [${context}]`;

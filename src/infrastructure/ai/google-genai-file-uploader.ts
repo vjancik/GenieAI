@@ -34,7 +34,7 @@ export class GoogleGenAIFileUploader {
 	}
 
 	async uploadStream(stream: ReadableStream, options: UploadOptions): Promise<GenAIFile> {
-		this.logger.info(`Starting streaming upload for ${options.displayName || 'unnamed file'} (${options.size} bytes)`);
+		this.logger.info(`Starting streaming upload for ${options.displayName ?? 'unnamed file'} (${options.size} bytes)`);
 
 		try {
 			// 1. Get the upload URL

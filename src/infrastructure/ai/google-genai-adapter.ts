@@ -74,7 +74,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 		for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
 			try {
 				const result = await chat.sendMessage({
-					message: lastContent.parts || [],
+					message: lastContent.parts ?? [],
 				});
 
 				const responseText = result.text;
@@ -112,7 +112,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 		// We format each message to include author name and dynamic labels,
 		// but keep them as separate turns for the LLM.
 		const { text } = msg.formatForAI({
-			authorName: (msg.metadata.authorName as string) || undefined,
+			authorName: (msg.metadata.authorName as string) ?? undefined,
 		});
 
 		const parts: Content['parts'] = [{ text }];
@@ -161,7 +161,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 				if (fileMetadata) {
 					const update: AttachmentUpdate = {
 						messageId,
-						attachmentId: attachment.id || '',
+						attachmentId: attachment.id ?? '',
 						persistenceMetadata: {
 							...persistence,
 							genaiUri: fileMetadata.uri,

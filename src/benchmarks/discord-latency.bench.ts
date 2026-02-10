@@ -155,7 +155,7 @@ class RawDiscordClient {
 
 		if (res.status === 429) {
 			const data = (await res.json()) as { retry_after?: number };
-			const retryAfter = (data.retry_after || 5) * 1000;
+			const retryAfter = (data.retry_after ?? 5) * 1000;
 			logger.warn(`\n[RawAPI] Rate limited! (429). Retrying in ${retryAfter}ms...`);
 			await new Promise((resolve) => setTimeout(resolve, retryAfter));
 			return this.sendMessage(content);

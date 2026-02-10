@@ -131,7 +131,7 @@ export class DiscordBot {
 						id: attachment.id,
 						url: attachment.url,
 						name: attachment.name,
-						mimeType: attachment.contentType || 'application/octet-stream',
+						mimeType: attachment.contentType ?? 'application/octet-stream',
 						sourceMetadata: {
 							discordMessageId: message.id,
 							channelId: message.channelId,
@@ -151,7 +151,7 @@ export class DiscordBot {
 			let parentUuid: string | undefined;
 
 			if (message.reference?.messageId) {
-				parentUuid = (await this.discordMessageMappingRepo.getMessageId(message.reference.messageId)) || undefined;
+				parentUuid = (await this.discordMessageMappingRepo.getMessageId(message.reference.messageId)) ?? undefined;
 
 				if (parentUuid) {
 					history = await this.chatRepo.getHistory(parentUuid);
@@ -162,7 +162,7 @@ export class DiscordBot {
 						const refAuthorName = refMessage.member?.displayName ?? refMessage.author.username;
 
 						// Add a quote-style header for the folded message
-						const foldedContent = refMessage.content || (refMessage.attachments.size > 0 ? '(attachments only)' : '');
+						const foldedContent = refMessage.content ?? (refMessage.attachments.size > 0 ? '(attachments only)' : '');
 						content = `${content}\n\nReferring to message from user named ${refAuthorName}\nReferred message content:\n${foldedContent}`;
 
 						// Add attachments from the referenced message
@@ -172,7 +172,7 @@ export class DiscordBot {
 									id: att.id,
 									url: att.url,
 									name: att.name,
-									mimeType: att.contentType || 'application/octet-stream',
+									mimeType: att.contentType ?? 'application/octet-stream',
 									sourceMetadata: { discordMessageId: refMessage.id, channelId: refMessage.channelId },
 								}),
 							);

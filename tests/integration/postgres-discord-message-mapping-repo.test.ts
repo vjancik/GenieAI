@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
-import { BaseMessage, Message } from '../../src/core/domain/entities/message';
+import { BaseMessage } from '../../src/core/domain/entities/message';
 import { Role } from '../../src/core/domain/value-objects/role';
 import { PostgresChatRepository } from '../../src/infrastructure/database/postgres-chat-repo'; // Helper to create message
 import { PostgresDiscordMessageMappingRepository } from '../../src/infrastructure/database/postgres-discord-message-mapping-repo';
@@ -12,7 +12,7 @@ import { discordMessages, messages } from '../../src/infrastructure/database/sch
 
 // Use 127.0.0.1 to avoid Windows localhost issues
 const connectionString =
-	process.env.DATABASE_URL || 'postgresql://test_user:test_password@127.0.0.1:5434/genie_ai_test';
+	process.env.DATABASE_URL ?? 'postgresql://test_user:test_password@127.0.0.1:5434/genie_ai_test';
 
 describe('PostgresDiscordMessageMappingRepository Integration', () => {
 	let mappingRepo: PostgresDiscordMessageMappingRepository;

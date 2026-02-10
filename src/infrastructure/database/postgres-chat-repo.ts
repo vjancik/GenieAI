@@ -126,9 +126,9 @@ export class PostgresChatRepository implements IChatRepository {
 						role: r.role as Role,
 						content: r.content,
 						timestamp: new Date(r.timestamp),
-						metadata: r.metadata || undefined,
-						parentId: r.parent_id || undefined,
-						attachments: (r.attachments || []).map((a) => new BaseAttachment(a)),
+						metadata: r.metadata ?? undefined,
+						parentId: r.parent_id ?? undefined,
+						attachments: (r.attachments ?? []).map((a) => new BaseAttachment(a)),
 					}),
 			);
 		} catch (error) {

@@ -29,7 +29,7 @@ export class PostgresDiscordMessageMappingRepository implements IDiscordMessageM
 				.from(discordMessages)
 				.where(eq(discordMessages.id, discordId));
 
-			return result?.messageId || null;
+			return result?.messageId ?? null;
 		} catch (error) {
 			throw new DatabaseError('Failed to retrieve internal ID for Discord message', error);
 		}

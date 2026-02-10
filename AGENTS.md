@@ -5,7 +5,7 @@
 - use custom application errors instead of throwing generic errors when possible
 - do not remove previous source code comments, unless you are changing the implementation or providing clarification or the user is asking you to
 - use type imports for type only imports
-- use ?? instead of || for optional chaining
+- use ?? instead of || for nullish coalescing
 - after implementing your task, run `bun run typecheck && bun run codecheck:fix && bun run test` and fix any errors until it passes all checks
 
 # Architecture Rules

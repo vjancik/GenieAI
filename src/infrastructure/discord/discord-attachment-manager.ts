@@ -86,7 +86,7 @@ export class DiscordAttachmentManager<TPersistence extends Metadata = Metadata>
 			throw new Error(`Attachment file fetch failed: ${response.status} ${response.statusText}`);
 		}
 
-		const mimeType = response.headers.get('content-type') || attachment.mimeType;
+		const mimeType = response.headers.get('content-type') ?? attachment.mimeType;
 		const lengthStr = response.headers.get('content-length');
 		const contentLength = lengthStr ? parseInt(lengthStr, 10) : undefined;
 

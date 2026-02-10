@@ -118,9 +118,9 @@ export abstract class Message<TMetadata extends Metadata = Metadata> {
 		this.role = props.role;
 		this.content = props.content;
 		this.timestamp = props.timestamp;
-		this.metadata = props.metadata || ({} as TMetadata);
+		this.metadata = props.metadata ?? ({} as TMetadata);
 		this.parentId = props.parentId;
-		this.attachments = props.attachments || [];
+		this.attachments = props.attachments ?? [];
 	}
 
 	formatForAI(options: { authorName?: string; label?: string } = {}): {

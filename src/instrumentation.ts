@@ -7,7 +7,7 @@ import { NodeSDK } from '@opentelemetry/sdk-node';
 import { ConsoleSpanExporter } from '@opentelemetry/sdk-trace-node';
 
 // Check if auto-instrumentation is enabled
-const isAutoEnabled = !['false', '0'].includes((process.env.NODE_AUTO_INSTRUMENTATION || 'true').toLowerCase());
+const isAutoEnabled = !['false', '0'].includes((process.env.NODE_AUTO_INSTRUMENTATION ?? 'true').toLowerCase());
 
 // biome-ignore lint/suspicious/noExplicitAny: OTel instrumentations are complex types that are hard to type here
 const instrumentations: any[] = [];
@@ -19,7 +19,7 @@ if (isAutoEnabled) {
 instrumentations.push(
 	new PinoInstrumentation({
 		logHook: (_span, record) => {
-			record['resource.service.name'] = process.env.OTEL_SERVICE_NAME || 'genie-ai-bot';
+			record['resource.service.name'] = process.env.OTEL_SERVICE_NAME ?? 'genie-ai-bot';
 		},
 	}),
 );

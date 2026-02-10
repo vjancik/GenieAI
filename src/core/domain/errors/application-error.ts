@@ -7,18 +7,18 @@ export class ApplicationError extends Error {
 
 export class DatabaseError extends ApplicationError {
 	constructor(message: string, cause?: unknown) {
-		super(message || 'A database error occurred', { cause });
+		super(message ?? 'A database error occurred', { cause });
 	}
 }
 
 export class AIProviderError extends ApplicationError {
 	constructor(message: string, cause?: unknown) {
-		super(message || 'The AI service encountered an error', { cause });
+		super(message ?? 'The AI service encountered an error', { cause });
 	}
 }
 
 export class DiscordError extends ApplicationError {
 	constructor(message: string, cause?: unknown) {
-		super(message || 'A Discord-related error occurred', { cause });
+		super(message ?? 'A Discord-related error occurred', { cause });
 	}
 }

@@ -45,7 +45,7 @@ export class SendMessageUseCase {
 
 				// 1. Create and Save User Message
 				const userMessage = new BaseMessage({
-					id: dto.id || this.idGenerator.generate(),
+					id: dto.id ?? this.idGenerator.generate(),
 					role: Role.USER,
 					content: dto.content,
 					timestamp: new Date(),
