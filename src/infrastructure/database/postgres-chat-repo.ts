@@ -1,9 +1,16 @@
 import { eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { Message, type MessageAttachment } from '../../core/domain/entities/message';
+import {
+	BaseAttachment,
+	BaseMessage,
+	type Message,
+	type MessageAttachment,
+	type MessageAttachmentData,
+} from '../../core/domain/entities/message';
 import { DatabaseError } from '../../core/domain/errors/application-error';
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
 import type { Role } from '../../core/domain/value-objects/role';
+import type * as schema from './schema';
 import { discordMessages, messages } from './schema';
 
 interface MessageRow {
@@ -13,12 +20,11 @@ interface MessageRow {
 	timestamp: string | number | Date;
 	metadata: Record<string, unknown> | null;
 	parent_id: string | null;
-	attachments: MessageAttachment[];
+	attachments: MessageAttachmentData[];
 }
 
 export class PostgresChatRepository implements IChatRepository {
-	// biome-ignore lint/suspicious/noExplicitAny: Drizzle database instance type is complex
-	constructor(private readonly db: NodePgDatabase<any>) {}
+	constructor(private readonly db: NodePgDatabase<typeof schema>) {}
 
 	async saveMessage(message: Message, externalId?: string): Promise<void> {
 		try {
@@ -115,14 +121,14 @@ export class PostgresChatRepository implements IChatRepository {
 
 			return (results.rows as unknown as MessageRow[]).reverse().map(
 				(r) =>
-					new Message({
+					new BaseMessage({
 						id: r.id,
 						role: r.role as Role,
 						content: r.content,
 						timestamp: new Date(r.timestamp),
 						metadata: r.metadata || undefined,
 						parentId: r.parent_id || undefined,
-						attachments: r.attachments,
+						attachments: (r.attachments || []).map((a) => new BaseAttachment(a)),
 					}),
 			);
 		} catch (error) {
@@ -137,14 +143,14 @@ export class PostgresChatRepository implements IChatRepository {
 
 			if (!result) return null;
 
-			return new Message({
+			return new BaseMessage({
 				id: result.id,
 				role: result.role as Role,
 				content: result.content,
 				timestamp: result.timestamp,
-				metadata: result.metadata || undefined,
-				parentId: result.parentId || undefined,
-				attachments: result.attachments,
+				metadata: result.metadata ?? undefined,
+				parentId: result.parentId ?? undefined,
+				attachments: ((result.attachments) ?? []).map((a) => new BaseAttachment(a)),
 			});
 		} catch (error) {
 			throw new DatabaseError('Failed to retrieve message from database', error);

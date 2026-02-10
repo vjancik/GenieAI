@@ -23,22 +23,14 @@ export interface GenAIFile {
 }
 
 export class GoogleGenAIFileUploader {
-	private apiClient: {
-		getAuthHeaders(): Promise<Headers>;
-		request(options: {
-			path: string;
-			httpMethod: string;
-			body: string | Blob;
-			httpOptions: { apiVersion: string; headers: Record<string, string> };
-		}): Promise<{ headers: Record<string, string> }>;
-	};
+	private apiClient: GoogleGenAI['apiClient'];
 
 	constructor(
 		client: GoogleGenAI,
 		private logger: ILogger,
 	) {
 		// Accessing protected apiClient using a type-safe cast
-		this.apiClient = (client as unknown as { apiClient: GoogleGenAIFileUploader['apiClient'] }).apiClient;
+		this.apiClient = (client as unknown as { apiClient: GoogleGenAI['apiClient'] }).apiClient;
 	}
 
 	async uploadStream(stream: ReadableStream, options: UploadOptions): Promise<GenAIFile> {
@@ -109,7 +101,7 @@ export class GoogleGenAIFileUploader {
 		});
 
 		// The response is an HttpResponse object which has a headers property (map)
-		const uploadUrl = response.headers['x-goog-upload-url'];
+		const uploadUrl = response.headers?.['x-goog-upload-url'];
 		if (!uploadUrl) {
 			throw new AIProviderError('Server did not return x-goog-upload-url header');
 		}

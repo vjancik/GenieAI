@@ -1,12 +1,15 @@
-import type { MessageAttachment } from '../../domain/entities/message';
+import type { MessageAttachment, Metadata } from '../../domain/entities/message';
 
-export interface IAttachmentManager {
+export interface IAttachmentManager<
+	TSource extends Metadata = Metadata,
+	TPersistence extends Metadata = Metadata,
+> {
 	/**
 	 * Retrieves the file stream for an attachment.
 	 * Implementing classes should handle refreshing stale URLs if necessary.
 	 */
 	getAttachmentStream(
-		attachment: MessageAttachment,
+		attachment: MessageAttachment<TSource, TPersistence>,
 		messageId: string,
 	): Promise<{
 		stream: ReadableStream;
@@ -20,6 +23,6 @@ export interface IAttachmentManager {
 	updateAttachmentMetadata(
 		messageId: string,
 		attachmentId: string,
-		metadata: Partial<MessageAttachment>,
+		metadata: Partial<MessageAttachment<TSource, TPersistence>>,
 	): Promise<void>;
 }

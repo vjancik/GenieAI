@@ -3,19 +3,25 @@ import {
 	ButtonBuilder,
 	ButtonStyle,
 	type Client,
-	type Message as DiscordMessage,
+	type Message as DjsMessage,
 	Events,
 	type Interaction,
 } from 'discord.js';
-import { v4 as uuidv4 } from 'uuid';
+import type { IIdentityGenerator } from '../../core/application/interfaces/identity-generator.interface';
 import type { ILogger } from '../../core/application/interfaces/logger.interface';
 import type { GetNextMessagePageUseCase } from '../../core/application/use-cases/get-next-message-page.use-case';
 import type { SendMessageUseCase } from '../../core/application/use-cases/send-message.use-case';
-import type { Message, MessageAttachment } from '../../core/domain/entities/message';
+import {
+	DiscordAttachment,
+	DiscordMessage,
+	type Message,
+	type MessageAttachment,
+} from '../../core/domain/entities/message';
 import { ApplicationError, DiscordError } from '../../core/domain/errors/application-error';
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
 import type { IDiscordMessageMappingRepository } from '../../core/domain/repositories/discord-message-mapping-repository';
 import type { IDiscordMessagePageRepository } from '../../core/domain/repositories/discord-message-page-repository';
+import { Role } from '../../core/domain/value-objects/role';
 
 export class DiscordBot {
 	private logger: ILogger;
@@ -28,6 +34,7 @@ export class DiscordBot {
 		private readonly chatRepo: IChatRepository,
 		private readonly discordMessageMappingRepo: IDiscordMessageMappingRepository,
 		private readonly discordMessagePageRepo: IDiscordMessagePageRepository,
+		private readonly idGenerator: IIdentityGenerator,
 		logger: ILogger,
 	) {
 		this.logger = logger.child({ className: 'DiscordBot' });
@@ -40,7 +47,7 @@ export class DiscordBot {
 			this.logger.info(`Ready! Logged in as ${c.user.tag}`);
 		});
 
-		this.client.on(Events.MessageCreate, async (message: DiscordMessage) => {
+		this.client.on(Events.MessageCreate, async (message: DjsMessage) => {
 			await this.handleMessage(message);
 		});
 
@@ -84,22 +91,28 @@ export class DiscordBot {
 		return new ActionRowBuilder<ButtonBuilder>().addComponents(nextButton);
 	}
 
-	private async handleMessage(message: DiscordMessage) {
+	private async handleMessage(message: DjsMessage) {
 		// Ignore bots to prevent loops
 		if (message.author.bot) return;
 
 		// Check Triggers: "!ai" prefix OR mention
-		let content = message.content.trim();
-		const lowerContent = content.toLowerCase();
+		let content = message.content;
+		const aiPrefixRegex = /^\s*!ai(?:\s+|$)/i;
+		const match = content.match(aiPrefixRegex);
 
 		let isCommand = false;
-		if (/^!ai(\s|$)/.test(lowerContent)) {
+		if (match) {
 			isCommand = true;
-			// Strip "!ai" and leading whitespace
-			content = content.slice(3).trim();
+			// Strip prefix and trim remaining content
+			content = content.slice(match[0].length).trim();
+		} else {
+			content = content.trim();
 		}
 
-		const isMention = this.client.user && message.mentions.users.has(this.client.user.id);
+		const botRole = message.guild?.members.me?.roles.botRole;
+		const isUserMention = this.client.user && message.mentions.users.has(this.client.user.id);
+		const isRoleMention = botRole && message.mentions.roles.has(botRole.id);
+		const isMention = isUserMention || isRoleMention;
 
 		if (!isCommand && !isMention) {
 			return;
@@ -110,55 +123,66 @@ export class DiscordBot {
 
 		try {
 			const allAttachments: MessageAttachment[] = [];
-			let attachmentCounter = 1;
 
-			// Helper to Format Message Block
-			const formatMessageBlock = (
-				msg: DiscordMessage,
-				customContent?: string,
-				label: string = 'Message from user named',
-			) => {
-				const authorName = msg.member?.displayName ?? msg.author.username;
-				let text = `${label} ${authorName}\nMessage content:\n${customContent || msg.content}`;
+			// 1. Prepare User Message Attachments
+			for (const [_, attachment] of message.attachments) {
+				allAttachments.push(
+					new DiscordAttachment({
+						id: attachment.id,
+						url: attachment.url,
+						name: attachment.name,
+						mimeType: attachment.contentType || 'application/octet-stream',
+						sourceMetadata: {
+							discordMessageId: message.id,
+							channelId: message.channelId,
+						},
+					}),
+				);
+			}
 
-				// Process Attachments for this message
-				if (msg.attachments.size > 0) {
-					const indices: number[] = [];
-					for (const [_, attachment] of msg.attachments) {
-						allAttachments.push({
-							id: attachment.id,
-							discordMessageId: msg.id,
-							channelId: msg.channelId,
-							url: attachment.url,
-							name: attachment.name,
-							mimeType: attachment.contentType || 'application/octet-stream',
-						});
-						indices.push(attachmentCounter++);
-					}
-					text += `\nIncludes attachments: ${indices.map((i) => `#${i}`).join(', ')}`;
-				}
-				return text;
-			};
+			const authorName = message.member?.displayName ?? message.author.username;
+			const userUuid = this.idGenerator.generate();
 
-			const formattedContent = formatMessageBlock(message, content);
+			// Note: formatting for AI will now happen inside the Conversation aggregate or Use Case
+			// but for now we still pass the formatted content to the Use Case to maintain compatibility
+			// until we refactor SendMessageUseCase.
+
 			let history: Message[] = [];
-			let finalPrompt = formattedContent;
 			let parentUuid: string | undefined;
 
 			if (message.reference?.messageId) {
 				parentUuid = (await this.discordMessageMappingRepo.getMessageId(message.reference.messageId)) || undefined;
 
 				if (parentUuid) {
-					// We have history in our DB
 					history = await this.chatRepo.getHistory(parentUuid);
 				} else {
-					// No history in DB, fetch from Discord to see if we should "fold"
 					try {
 						const refMessage = await message.fetchReference();
 						if (refMessage.author.id !== this.client.user?.id) {
-							// Fold referencing message for context
-							const refBlock = formatMessageBlock(refMessage, undefined, 'Referring to message from user named');
-							finalPrompt = `${formattedContent}\n\n${refBlock}`;
+							// For "folded" context, we create a transient message
+							const refAuthorName = refMessage.member?.displayName ?? refMessage.author.username;
+							const refAttachments: MessageAttachment[] = [];
+							for (const [_, att] of refMessage.attachments) {
+								refAttachments.push(
+									new DiscordAttachment({
+										id: att.id,
+										url: att.url,
+										name: att.name,
+										mimeType: att.contentType || 'application/octet-stream',
+										sourceMetadata: { discordMessageId: refMessage.id, channelId: refMessage.channelId },
+									}),
+								);
+							}
+
+							const refMessageEntity = new DiscordMessage({
+								id: this.idGenerator.generate(), // dummy id
+								role: Role.USER,
+								content: refMessage.content,
+								timestamp: new Date(refMessage.createdTimestamp),
+								attachments: refAttachments,
+								metadata: { userId: refMessage.author.id, authorName: refAuthorName, isTransient: true },
+							});
+							history = [refMessageEntity];
 						}
 					} catch (e) {
 						throw new DiscordError('Failed to fetch referenced message from Discord for context folding', e);
@@ -166,22 +190,29 @@ export class DiscordBot {
 				}
 			}
 
-			// Generate internal UUID for the user message
-			const userUuid = uuidv4();
+			const userMessage = new DiscordMessage({
+				id: userUuid,
+				role: Role.USER,
+				content: content,
+				timestamp: new Date(),
+				attachments: allAttachments,
+				metadata: { userId: message.author.id, authorName },
+				parentId: parentUuid,
+			});
 
-			// Execute Use Case
-			// Note: conversationId should be the root of the thread. history[0] is oldest.
 			const conversationId = history.length > 0 && history[0] ? history[0].id : userUuid;
 
+			// We'll update the Use Case next to accept a Conversation or just the latest message.
+			// For now, let's keep the DTO as is but update how we call it.
 			const aiMessage = await this.sendMessageUseCase.execute({
 				conversationId,
 				id: userUuid,
-				content: finalPrompt,
+				content: userMessage.content, // Pass original content, use case will format
 				userId: message.author.id,
 				history: history,
 				parentId: parentUuid,
 				attachments: allAttachments,
-				externalId: message.id, // Atomic mapping for user message
+				externalId: message.id,
 			});
 
 			// Split and Send Response (First Page Only)
@@ -191,7 +222,7 @@ export class DiscordBot {
 			await thinkingMsg.delete().catch(() => {});
 
 			try {
-				let sentMsg: DiscordMessage;
+				let sentMsg: DjsMessage;
 
 				if (nextOffset && nextOffset < aiMessage.content.length) {
 					// Create page record

@@ -1,8 +1,11 @@
 import { metrics, SpanStatusCode, trace } from '@opentelemetry/api';
-import { v4 as uuidv4 } from 'uuid';
-import { Message, type MessageAttachment } from '../../domain/entities/message';
+import { Conversation } from '../../domain/entities/conversation';
+import { BaseMessage, type Message, type MessageAttachment } from '../../domain/entities/message';
 import type { IChatRepository } from '../../domain/repositories/chat-repository';
+import type { ChatContextService } from '../../domain/services/chat-context-service';
+import type { HistoryService } from '../../domain/services/history-service';
 import { Role } from '../../domain/value-objects/role';
+import type { IIdentityGenerator } from '../interfaces/identity-generator.interface';
 import type { IGenerativeAIModel } from '../interfaces/illm-provider';
 
 const tracer = trace.getTracer('genie-ai-bot');
@@ -30,6 +33,9 @@ export class SendMessageUseCase {
 	constructor(
 		private readonly chatRepo: IChatRepository,
 		private readonly aiModel: IGenerativeAIModel,
+		private readonly historyService: HistoryService,
+		private readonly chatContextService: ChatContextService,
+		private readonly idGenerator: IIdentityGenerator,
 		private readonly logger: ILogger,
 	) {}
 
@@ -40,8 +46,8 @@ export class SendMessageUseCase {
 				if (dto.userId) span.setAttribute('user_id', dto.userId);
 
 				// 1. Create and Save User Message
-				const userMessage = new Message({
-					id: dto.id || uuidv4(),
+				const userMessage = new BaseMessage({
+					id: dto.id || this.idGenerator.generate(),
 					role: Role.USER,
 					content: dto.content,
 					timestamp: new Date(),
@@ -52,20 +58,47 @@ export class SendMessageUseCase {
 
 				await this.chatRepo.saveMessage(userMessage, dto.externalId);
 
-				// 2. Load History
-				let history: Message[];
-				if (dto.history) {
-					history = [...dto.history, userMessage];
+				// 2. Load and Manage History via Domain Services
+				let conversation: Conversation;
+
+				if (dto.history && dto.history.length > 0) {
+					// Use provided history
+					conversation = new Conversation({
+						id: dto.conversationId,
+						messages: [...dto.history],
+					});
+					conversation.addMessage(userMessage);
+				} else if (dto.parentId) {
+					// Fetch history from parent
+					conversation = await this.historyService.getConversation(dto.parentId);
+					conversation.addMessage(userMessage);
 				} else {
-					history = dto.parentId ? [...(await this.chatRepo.getHistory(dto.parentId)), userMessage] : [userMessage];
+					// New conversation
+					conversation = await this.historyService.createConversation(userMessage);
 				}
 
-				// 3. Generate AI Response
+				// 3. Generate AI Response using Domain context
 				span.addEvent('Generating AI response');
 				const startTime = performance.now();
-				const aiResponseText = await this.aiModel.generateContent(history, dto.content);
+
+				// Format context for AI
+				const aiPrompt = this.chatContextService.formatForAI(conversation);
+
+				// We still pass history as messages to the model, but the prompt is now formatted correctly.
+				const result = await this.aiModel.generateContent(conversation.getTranscript(), aiPrompt);
+				const aiResponseText = result.content;
+
 				const duration = performance.now() - startTime;
 				span.addEvent('AI response generated');
+
+				// 3b. Handle Attachment Updates
+				if (result.attachmentUpdates) {
+					for (const update of result.attachmentUpdates) {
+						await this.chatRepo.updateAttachment(update.messageId, update.attachmentId, {
+							persistenceMetadata: update.persistenceMetadata,
+						});
+					}
+				}
 
 				// Record Metric
 				generationTimeHistogram.record(duration, {
@@ -84,8 +117,8 @@ export class SendMessageUseCase {
 				});
 
 				// 4. Create and Save AI Message
-				const aiMessage = new Message({
-					id: uuidv4(),
+				const aiMessage = new BaseMessage({
+					id: this.idGenerator.generate(),
 					role: Role.ASSISTANT,
 					content: aiResponseText,
 					timestamp: new Date(),

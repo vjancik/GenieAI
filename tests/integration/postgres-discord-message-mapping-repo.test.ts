@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
-import { drizzle } from 'drizzle-orm/node-postgres';
+import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
-import { Message } from '../../src/core/domain/entities/message';
+import { BaseMessage, Message } from '../../src/core/domain/entities/message';
 import { Role } from '../../src/core/domain/value-objects/role';
 import { PostgresChatRepository } from '../../src/infrastructure/database/postgres-chat-repo'; // Helper to create message
 import { PostgresDiscordMessageMappingRepository } from '../../src/infrastructure/database/postgres-discord-message-mapping-repo';
+import * as schema from '../../src/infrastructure/database/schema';
 import { discordMessages, messages } from '../../src/infrastructure/database/schema';
 
 // Use 127.0.0.1 to avoid Windows localhost issues
@@ -17,11 +18,11 @@ describe('PostgresDiscordMessageMappingRepository Integration', () => {
 	let mappingRepo: PostgresDiscordMessageMappingRepository;
 	let chatRepo: PostgresChatRepository;
 	let pool: Pool;
-	let db: ReturnType<typeof drizzle>;
+	let db: NodePgDatabase<typeof schema>;
 
 	beforeAll(async () => {
 		pool = new Pool({ connectionString });
-		db = drizzle(pool);
+		db = drizzle(pool, { schema });
 
 		// Wait for DB
 		await waitForDb(pool);
@@ -60,7 +61,7 @@ describe('PostgresDiscordMessageMappingRepository Integration', () => {
 
 		// 1. Create a message first (FK constraint)
 		const msgId = crypto.randomUUID();
-		const msg = new Message({
+		const msg = new BaseMessage({
 			id: msgId,
 			role: Role.ASSISTANT,
 			content: 'Test Content',

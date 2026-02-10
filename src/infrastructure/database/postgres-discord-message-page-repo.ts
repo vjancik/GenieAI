@@ -4,10 +4,11 @@ import type {
 	DiscordMessagePage,
 	IDiscordMessagePageRepository,
 } from '../../core/domain/repositories/discord-message-page-repository';
+import type * as schema from './schema';
 import { discordMessagePages } from './schema';
 
 export class PostgresDiscordMessagePageRepository implements IDiscordMessagePageRepository {
-	constructor(private readonly db: NodePgDatabase) {}
+	constructor(private readonly db: NodePgDatabase<typeof schema>) {}
 
 	async create(page: Omit<DiscordMessagePage, 'id'>): Promise<string> {
 		const [inserted] = await this.db

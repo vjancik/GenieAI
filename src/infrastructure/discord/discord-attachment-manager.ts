@@ -1,10 +1,16 @@
-import type { Client, TextChannel } from 'discord.js';
+import type { Client } from 'discord.js';
 import type { IAttachmentManager } from '../../core/application/interfaces/attachment-manager';
 import type { ILogger } from '../../core/application/interfaces/logger.interface';
-import type { MessageAttachment } from '../../core/domain/entities/message';
+import type {
+	DiscordAttachment,
+	DiscordAttachmentSourceMetadata,
+	Metadata,
+} from '../../core/domain/entities/message';
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
+import { assertTextBasedChannel } from './discord-utils';
 
-export class DiscordAttachmentManager implements IAttachmentManager {
+export class DiscordAttachmentManager<TPersistence extends Metadata = Metadata>
+	implements IAttachmentManager<DiscordAttachmentSourceMetadata, TPersistence> {
 	constructor(
 		private readonly client: Client,
 		private readonly chatRepo: IChatRepository,
@@ -12,7 +18,7 @@ export class DiscordAttachmentManager implements IAttachmentManager {
 	) {}
 
 	async getAttachmentStream(
-		attachment: MessageAttachment,
+		attachment: DiscordAttachment<TPersistence>,
 		messageId: string,
 	): Promise<{
 		stream: ReadableStream;
@@ -28,29 +34,25 @@ export class DiscordAttachmentManager implements IAttachmentManager {
 		// 1. Try fetching the URL directly
 		let response = await fetch(url);
 
+		const channelId = attachment.sourceMetadata.channelId;
+		const discordMessageId = attachment.sourceMetadata.discordMessageId;
+
 		// 2. If it fails (likely 403/404 due to expiration), try to refresh it via Discord
-		if (!response.ok && attachment.id && attachment.channelId && attachment.discordMessageId) {
+		if (!response.ok && attachment.id && channelId && discordMessageId) {
 			this.logger.warn(
 				`Failed to fetch attachment ${attachment.id} from ${url}. status=${response.status}. Attempting to refresh via Discord API...`,
 			);
 
 			try {
 				// 1. Fetch Channel
-				const channel = await this.client.channels.fetch(attachment.channelId);
-
-				if (!channel || !channel.isTextBased()) {
-					throw new Error(`Channel ${attachment.channelId} not found or not text-based`);
-				}
+				const channel = await this.client.channels.fetch(channelId);
+				const textChannel = assertTextBasedChannel(channel, channelId);
 
 				// 2. Fetch Message
-				// Type assertion as 'any' because strict typing on channels.fetch union return is difficult without guards,
-				// but isTextBased() generally implies messages.fetch exists.
-				// Better: cast to TextChannel if possible, or use (channel as any).messages
-				const textChannel = channel as TextChannel;
-				const message = await textChannel.messages.fetch(attachment.discordMessageId);
+				const message = await textChannel.messages.fetch(discordMessageId);
 
 				if (!message) {
-					throw new Error(`Message ${attachment.discordMessageId} not found`);
+					throw new Error(`Message ${discordMessageId} not found`);
 				}
 
 				// 3. Find Attachment
@@ -105,7 +107,7 @@ export class DiscordAttachmentManager implements IAttachmentManager {
 	async updateAttachmentMetadata(
 		messageId: string,
 		attachmentId: string,
-		metadata: Partial<MessageAttachment>,
+		metadata: Partial<DiscordAttachment<TPersistence>>,
 	): Promise<void> {
 		await this.chatRepo.updateAttachment(messageId, attachmentId, metadata);
 	}

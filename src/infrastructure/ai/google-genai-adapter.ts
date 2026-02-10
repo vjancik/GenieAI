@@ -1,84 +1,78 @@
-import { type FileHandle, mkdir, open, readdir, unlink } from 'node:fs/promises';
+import { unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type Content, type File, FileState, GoogleGenAI } from '@google/genai';
-import { config } from '../../config/env';
+import { type Content, GoogleGenAI, type Part } from '@google/genai';
 import type { IAttachmentManager } from '../../core/application/interfaces/attachment-manager';
-import type { IGenerativeAIModel } from '../../core/application/interfaces/illm-provider';
+import type {
+	AttachmentUpdate,
+	GenerationResult,
+	IGenerativeAIModel,
+} from '../../core/application/interfaces/illm-provider';
 import type { ILogger } from '../../core/application/interfaces/logger.interface';
-import type { Message, MessageAttachment } from '../../core/domain/entities/message';
+import type {
+	GenAIAttachmentPersistenceMetadata,
+	Message,
+	MessageAttachment,
+} from '../../core/domain/entities/message';
 import { AIProviderError } from '../../core/domain/errors/application-error';
 import { Role } from '../../core/domain/value-objects/role';
-import { type GenAIFile, GoogleGenAIFileUploader } from './google-genai-file-uploader';
+import { GenAIFileService } from './genai-file-service';
+import { StreamingBufferService } from './streaming-buffer-service';
 
-export class GoogleGenAIAdapter implements IGenerativeAIModel {
-	private client: GoogleGenAI;
-	private model: string;
-	private systemPrompt: string;
+export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPersistenceMetadata> {
+	private readonly client: GoogleGenAI;
+	private readonly model: string;
+	private readonly systemPrompt: string;
+	private readonly fileService: GenAIFileService;
+	private readonly bufferService: StreamingBufferService;
 
-	private logger: ILogger;
-	private fileUploader: GoogleGenAIFileUploader;
-
-	private static fallbackQueue: Promise<void> = Promise.resolve();
+	private static readonly UPLOAD_CONCURRENCY_LIMIT = 10;
 	private static activeUploads = 0;
-	private static readonly uploadQueue: (() => void)[] = [];
-	private static readonly MAX_CONCURRENT_UPLOADS = 10;
-	private static getFileGate: Promise<void> = Promise.resolve();
-	private readonly MAX_FALLBACK_SIZE = 100 * 1024 * 1024; // 100MB limit for memory fallback
-	private readonly MAX_DISK_SIZE = 2000 * 1024 * 1024; // 2GB limit for disk fallback
-	private readonly TEMP_DIR = join(tmpdir(), 'genie-ai-bot');
+	private static uploadWaiters: (() => void)[] = [];
 
 	constructor(
 		private readonly attachmentManager: IAttachmentManager,
-		logger: ILogger,
+		private readonly logger: ILogger,
+		config: { apiKey: string; model: string; systemPrompt: string },
 	) {
-		this.logger = logger.child({ className: 'GoogleGenAIAdapter' });
-		this.client = new GoogleGenAI({ apiKey: config.ai.apiKey });
-		this.model = config.ai.model;
-		this.systemPrompt = config.ai.systemPrompt;
-		this.fileUploader = new GoogleGenAIFileUploader(this.client, this.logger);
-		this.initTempDir().catch((err) => this.logger.error('Failed to initialize temp directory', err));
+		this.client = new GoogleGenAI({ apiKey: config.apiKey, apiVersion: 'v1beta' });
+		this.model = config.model;
+		this.systemPrompt = config.systemPrompt;
+		this.fileService = new GenAIFileService(this.client, logger);
+		this.bufferService = new StreamingBufferService(join(tmpdir(), 'genie-ai-bot'), logger);
 	}
 
-	private async initTempDir() {
+	async generateContent(
+		history: Message[],
+		prompt: string,
+	): Promise<GenerationResult<GenAIAttachmentPersistenceMetadata>> {
 		try {
-			await mkdir(this.TEMP_DIR, { recursive: true });
-			// Cleanup orphaned files from previous runs
-			const files = await readdir(this.TEMP_DIR);
-			for (const file of files) {
-				await unlink(join(this.TEMP_DIR, file)).catch(() => {});
-			}
-			this.logger.debug(`Initialized temp directory and cleaned up orphans: ${this.TEMP_DIR}`);
-		} catch (error) {
-			this.logger.error('Failed to initialize temp directory', error);
-		}
-	}
-
-	async generateContent(history: Message[], prompt: string): Promise<string> {
-		try {
-			// The 'history' array includes the latest user message at the end.
-			// We need to separate it because 'sendMessage' takes the new message,
-			// and 'history' in 'chats.create' is strictly past history.
-
-			// Exclude the last message (which is the current prompt)
+			const attachmentUpdates: AttachmentUpdate<GenAIAttachmentPersistenceMetadata>[] = [];
 			const pastHistoryMessages = history.slice(0, -1);
 			const currentMessage = history[history.length - 1];
 
-			// Process past history concurrently
-			const googleHistory = await Promise.all(pastHistoryMessages.map((msg) => this.mapMessageToContent(msg)));
+			const googleHistory = await Promise.all(
+				pastHistoryMessages.map(async (msg) => {
+					const { content, updates } = await this.mapMessageToContent(msg);
+					attachmentUpdates.push(...updates);
+					return content;
+				}),
+			);
 
 			const chat = this.client.chats.create({
 				model: this.model,
-				config: {
-					systemInstruction: this.systemPrompt,
-				},
+				config: { systemInstruction: this.systemPrompt },
 				history: googleHistory,
 			});
 
 			const currentParts: Content['parts'] = [{ text: prompt }];
 			if (currentMessage?.attachments?.length) {
 				const attachmentParts = await Promise.all(
-					currentMessage.attachments.map((att) => this.resolveAttachmentPart(att, currentMessage.id)),
+					currentMessage.attachments.map(async (att) => {
+						const result = await this.resolveAttachmentPart(att, currentMessage.id);
+						if (result.update) attachmentUpdates.push(result.update);
+						return result.part;
+					}),
 				);
 				for (const part of attachmentParts) {
 					if (part) {
@@ -90,24 +84,33 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
 			const result = await chat.sendMessage({
 				message: currentParts,
 			});
-
 			const responseText = result.text;
 			if (!responseText) {
 				throw new AIProviderError('Empty response from AI model');
 			}
 
-			return responseText;
+			return {
+				content: responseText,
+				attachmentUpdates: attachmentUpdates.length > 0 ? attachmentUpdates : undefined,
+			};
 		} catch (error) {
 			if (error instanceof AIProviderError) throw error;
 			throw new AIProviderError('Failed to generate content with Google GenAI', error);
 		}
 	}
 
-	private async mapMessageToContent(msg: Message): Promise<Content> {
+	private async mapMessageToContent(msg: Message): Promise<{ content: Content; updates: AttachmentUpdate[] }> {
 		const parts: Content['parts'] = [{ text: msg.content }];
+		const updates: AttachmentUpdate[] = [];
 
 		if (msg.attachments?.length) {
-			const attachmentParts = await Promise.all(msg.attachments.map((att) => this.resolveAttachmentPart(att, msg.id)));
+			const attachmentParts = await Promise.all(
+				msg.attachments.map(async (att) => {
+					const result = await this.resolveAttachmentPart(att, msg.id);
+					if (result.update) updates.push(result.update);
+					return result.part;
+				}),
+			);
 			for (const part of attachmentParts) {
 				if (part) {
 					parts.push(part);
@@ -116,285 +119,107 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
 		}
 
 		return {
-			role: this.mapRole(msg.role),
-			parts: parts,
+			content: {
+				role: this.mapRole(msg.role),
+				parts: parts,
+			},
+			updates,
 		};
 	}
 
-	private async resolveAttachmentPart(attachment: MessageAttachment, messageId: string) {
+	private async resolveAttachmentPart(
+		attachment: MessageAttachment,
+		messageId: string,
+	): Promise<{ part: Part | null; update?: AttachmentUpdate<GenAIAttachmentPersistenceMetadata> }> {
 		try {
-			// Check if we have a valid GenAI URI
-			if (
-				attachment.genaiUri &&
-				attachment.genaiExpirationTime &&
-				new Date(attachment.genaiExpirationTime) > new Date()
-			) {
-				return { fileData: { fileUri: attachment.genaiUri, mimeType: attachment.mimeType } };
+			const persistence = attachment.persistenceMetadata as unknown as GenAIAttachmentPersistenceMetadata;
+			const genaiExpirationTime = persistence.genaiExpirationTime
+				? new Date(persistence.genaiExpirationTime)
+				: undefined;
+
+			if (persistence.genaiUri && genaiExpirationTime && genaiExpirationTime > new Date()) {
+				return { part: { fileData: { fileUri: persistence.genaiUri, mimeType: attachment.mimeType } } };
 			}
 
-			// If not, and we have a URL, upload it
 			if (attachment.url) {
 				const fileMetadata = await this.uploadFile(attachment, messageId);
 				if (fileMetadata) {
-					// Update our internal/in-memory reference
-					attachment.genaiUri = fileMetadata.uri;
-					if (fileMetadata.expirationTime) {
-						attachment.genaiExpirationTime = new Date(fileMetadata.expirationTime);
-					}
+					const update: AttachmentUpdate = {
+						messageId,
+						attachmentId: attachment.id || '',
+						persistenceMetadata: {
+							...persistence,
+							genaiUri: fileMetadata.uri,
+							genaiExpirationTime: fileMetadata.expirationTime ? new Date(fileMetadata.expirationTime) : undefined,
+						},
+					};
 
-					// Persist Update via AttachmentManager
-					if (attachment.id) {
-						try {
-							await this.attachmentManager.updateAttachmentMetadata(messageId, attachment.id, {
-								genaiUri: attachment.genaiUri,
-								genaiExpirationTime: attachment.genaiExpirationTime,
-							});
-						} catch (err) {
-							this.logger.error('Failed to update attachment metadata', err);
-						}
-					}
-
-					return { fileData: { fileUri: attachment.genaiUri, mimeType: attachment.mimeType } };
+					return {
+						part: { fileData: { fileUri: fileMetadata.uri, mimeType: attachment.mimeType } },
+						update,
+					};
 				}
 			}
 
-			// Fallback to inline data if available
 			if (attachment.data) {
-				return { inlineData: { mimeType: attachment.mimeType, data: attachment.data } };
+				return { part: { inlineData: { mimeType: attachment.mimeType, data: attachment.data } } };
 			}
 		} catch (error) {
 			this.logger.error('Error resolving attachment:', error);
 		}
 
-		return null;
+		return { part: null };
 	}
 
 	private async uploadFile(attachment: MessageAttachment, messageId: string) {
-		if (!attachment.url) return null;
-
-		// Acquire concurrency slot
-		if (GoogleGenAIAdapter.activeUploads >= GoogleGenAIAdapter.MAX_CONCURRENT_UPLOADS) {
-			await new Promise<void>((resolve) => GoogleGenAIAdapter.uploadQueue.push(resolve));
-		}
-		GoogleGenAIAdapter.activeUploads++;
-
-		let releaseFallbackLock: (() => void) | undefined;
-		let uploadedFile: File | GenAIFile | undefined;
-
+		await this.acquireUploadLock();
 		try {
-			this.logger.info(`Streaming file from attachment ${attachment.id || 'unknown'} to Google GenAI...`);
+			const { stream } = await this.attachmentManager.getAttachmentStream(attachment, messageId);
 
-			const { stream, mimeType, contentLength } = await this.attachmentManager.getAttachmentStream(
-				attachment,
-				messageId,
+			const { buffer, filePath } = await this.bufferService.readStreamWithTwoTierLimits(
+				stream as ReadableStream<Uint8Array>,
+				20 * 1024 * 1024,
+				100 * 1024 * 1024,
 			);
 
-			if (!stream) {
-				throw new AIProviderError(`Failed to get readable stream for attachment ${attachment.id}`);
-			}
-
-			if (!contentLength) {
-				// Acquire exclusive access for memory-intensive fallback upload
-				const currentQueue = GoogleGenAIAdapter.fallbackQueue;
-				let resolve: (() => void) | undefined;
-				GoogleGenAIAdapter.fallbackQueue = new Promise((r) => {
-					resolve = r;
-				});
-
-				this.logger.warn(`Attachment ${attachment.id} has no content-length. Waiting for exclusive fallback lock...`);
-				await currentQueue;
-				releaseFallbackLock = resolve;
-
-				this.logger.info(
-					`Locked fallback upload. Starting two-tier download (Memory up to ${this.MAX_FALLBACK_SIZE / 1024 / 1024}MB, Disk up to ${this.MAX_DISK_SIZE / 1024 / 1024}MB)...`,
-				);
-
-				const result = await this.readStreamWithTwoTierLimits(stream, this.MAX_FALLBACK_SIZE, this.MAX_DISK_SIZE);
-				try {
-					const uploadInput =
-						result.filePath || (result.buffer ? new Blob([result.buffer], { type: attachment.mimeType }) : undefined);
-
-					if (!uploadInput) {
-						throw new AIProviderError('Failed to read attachment data for upload');
-					}
-
-					uploadedFile = await this.client.files.upload({
-						file: uploadInput,
-						config: {
-							mimeType: attachment.mimeType,
-						},
-					});
-				} finally {
-					if (result.filePath) {
-						await unlink(result.filePath).catch((err) => {
-							this.logger.error(`Failed to delete temp file ${result.filePath}`, err);
-						});
-					}
-				}
-			} else {
-				uploadedFile = await this.fileUploader.uploadStream(stream, {
-					mimeType: mimeType,
-					size: contentLength,
-					displayName: attachment.name || undefined,
-				});
-			}
-
-			this.logger.info(`File streamed and uploaded: ${uploadedFile.uri}`);
-		} catch (error) {
-			throw new AIProviderError(`Failed to stream upload file to Google GenAI: ${attachment.id}`, error);
-		} finally {
-			if (releaseFallbackLock) {
-				this.logger.debug('Releasing fallback upload lock.');
-				releaseFallbackLock();
-			}
-
-			// Release concurrency slot
-			GoogleGenAIAdapter.activeUploads--;
-			const next = GoogleGenAIAdapter.uploadQueue.shift();
-			if (next) {
-				next();
-			}
-		}
-
-		// Wait for file to become active (outside the lock)
-		if (uploadedFile) {
-			return this.waitForFileProcessing(uploadedFile);
-		}
-
-		return null; // Should not happen if upload succeeded
-	}
-
-	private async waitForFileProcessing(file: File | GenAIFile): Promise<File | GenAIFile> {
-		let fileState = file.state;
-		const fileName = file.name;
-
-		if (!fileName) {
-			return file;
-		}
-
-		// If no state or already active/unspecified, return immediately (though processing is safer)
-		if (fileState === FileState.ACTIVE || fileState === FileState.STATE_UNSPECIFIED) {
-			return file;
-		}
-
-		if (fileState === FileState.FAILED) {
-			throw new AIProviderError(`File upload failed processing immediately: ${fileName}`);
-		}
-
-		this.logger.info(`File ${fileName} is in state ${fileState}. Waiting for processing...`);
-
-		// Poll for active state with exponential backoff
-		let retries = 0;
-		let currentDelay = 1000;
-		const expGrowthRate = 1.5;
-		const maxDelay = 5000;
-		const startTime = Date.now();
-		const timeout = 5 * 60 * 1000; // 5 minute total timeout
-
-		while (fileState === FileState.PROCESSING && Date.now() - startTime < timeout) {
-			await new Promise((resolve) => setTimeout(resolve, currentDelay));
-			currentDelay = Math.min(currentDelay * expGrowthRate, maxDelay);
-			retries++;
-
 			try {
-				const updatedFile = await this.getFileWithRateLimit(fileName);
+				const uploadInput = buffer ? new Blob([buffer]) : (filePath as string);
 
-				fileState = updatedFile.state;
-				this.logger.debug(`File ${fileName} state: ${fileState} (attempt ${retries}, delay ${currentDelay}ms)`);
+				const uploadResult = await this.fileService.uploadDirect(uploadInput, {
+					mimeType: attachment.mimeType,
+					displayName: attachment.name,
+				});
 
-				if (fileState === FileState.ACTIVE || fileState === FileState.STATE_UNSPECIFIED) {
-					this.logger.info(`File ${fileName} is now active.`);
-					return updatedFile;
+				this.releaseUploadLock();
+
+				return await this.fileService.waitForFileProcessing(uploadResult);
+			} finally {
+				if (filePath) {
+					await unlink(filePath).catch(() => {});
 				}
-
-				if (fileState === FileState.FAILED) {
-					throw new AIProviderError(`File processing failed for ${fileName}`);
-				}
-			} catch (error) {
-				this.logger.warn(`Error polling file state for ${fileName}:`, error);
-			}
-		}
-
-		throw new AIProviderError(
-			`File ${fileName} timed out processing after ${Math.round((Date.now() - startTime) / 1000)}s.`,
-		);
-	}
-
-	private async getFileWithRateLimit(fileName: string): Promise<File> {
-		const currentGate = GoogleGenAIAdapter.getFileGate;
-		let resolveNext: (() => void) | undefined;
-		GoogleGenAIAdapter.getFileGate = new Promise((r) => {
-			resolveNext = r;
-		});
-
-		await currentGate;
-		try {
-			return await this.client.files.get({ name: fileName });
-		} finally {
-			// Ensure 1s gap before the next call in the gate
-			setTimeout(() => resolveNext?.(), 1000);
-		}
-	}
-
-	private async readStreamWithTwoTierLimits(
-		stream: ReadableStream<Uint8Array>,
-		memoryLimit: number,
-		diskLimit: number,
-	): Promise<{ buffer?: Buffer; filePath?: string }> {
-		const chunks: Uint8Array[] = [];
-		let totalSize = 0;
-		const reader = stream.getReader();
-		let tempFilePath: string | undefined;
-		let fileHandle: FileHandle | undefined;
-
-		try {
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-
-				totalSize += value.length;
-
-				if (!tempFilePath && totalSize > memoryLimit) {
-					this.logger.info(`Memory limit exceeded (${totalSize} bytes), spilling to disk...`);
-					await mkdir(this.TEMP_DIR, { recursive: true });
-					tempFilePath = join(this.TEMP_DIR, `upload-${Date.now()}-${Math.random().toString(36).substring(7)}`);
-					fileHandle = await open(tempFilePath, 'w');
-
-					// Write already read chunks
-					for (const chunk of chunks) {
-						await fileHandle.write(chunk);
-					}
-					chunks.length = 0; // Clear memory
-				}
-
-				if (tempFilePath && fileHandle) {
-					if (totalSize > diskLimit) {
-						await reader.cancel();
-						throw new AIProviderError(`File too large: exceeds disk limit of ${diskLimit / 1024 / 1024}MB.`);
-					}
-					await fileHandle.write(value);
-				} else {
-					chunks.push(value);
-				}
-			}
-
-			if (tempFilePath && fileHandle) {
-				await fileHandle.close();
-				fileHandle = undefined;
-				return { filePath: tempFilePath };
-			} else {
-				return { buffer: Buffer.concat(chunks) };
 			}
 		} catch (error) {
-			if (fileHandle) {
-				await fileHandle.close();
-			}
-			if (tempFilePath) {
-				await unlink(tempFilePath).catch(() => {});
-			}
+			this.releaseUploadLock();
 			throw error;
-		} finally {
-			reader.releaseLock();
+		}
+	}
+
+	private async acquireUploadLock() {
+		if (GoogleGenAIAdapter.activeUploads < GoogleGenAIAdapter.UPLOAD_CONCURRENCY_LIMIT) {
+			GoogleGenAIAdapter.activeUploads++;
+			return;
+		}
+		return new Promise<void>((resolve) => {
+			GoogleGenAIAdapter.uploadWaiters.push(resolve);
+		});
+	}
+
+	private releaseUploadLock() {
+		const waiter = GoogleGenAIAdapter.uploadWaiters.shift();
+		if (waiter) {
+			waiter();
+		} else {
+			GoogleGenAIAdapter.activeUploads--;
 		}
 	}
 
@@ -404,8 +229,6 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel {
 				return 'user';
 			case Role.ASSISTANT:
 				return 'model';
-			case Role.SYSTEM:
-				return 'user'; // System prompts are usually handled via config
 			default:
 				return 'user';
 		}

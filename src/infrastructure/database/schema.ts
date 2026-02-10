@@ -1,5 +1,5 @@
 import { integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-import type { MessageAttachment } from '../../core/domain/entities/message';
+import type { Message, MessageAttachmentData } from '../../core/domain/entities/message';
 import { Role } from '../../core/domain/value-objects/role';
 
 export const roleEnum = pgEnum('role', [Role.USER, Role.ASSISTANT, Role.SYSTEM, Role.FUNCTION]);
@@ -9,9 +9,9 @@ export const messages = pgTable('messages', {
 	role: roleEnum('role').notNull(),
 	content: text('content').notNull(),
 	timestamp: timestamp('timestamp', { withTimezone: true }).defaultNow().notNull(),
-	metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+	metadata: jsonb('metadata').$type<Message['metadata']>(),
 	parentId: uuid('parent_id'),
-	attachments: jsonb('attachments').$type<MessageAttachment[]>().default([]).notNull(),
+	attachments: jsonb('attachments').$type<MessageAttachmentData[]>().default([]).notNull(),
 });
 
 export const discordMessages = pgTable('discord_messages', {

@@ -3,9 +3,17 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { IGenerativeAIModel } from '../../src/core/application/interfaces/illm-provider';
 import type { ILogger } from '../../src/core/application/interfaces/logger.interface';
 import { type SendMessageDTO, SendMessageUseCase } from '../../src/core/application/use-cases/send-message.use-case';
-import { Message, type MessageAttachment } from '../../src/core/domain/entities/message';
+import {
+	BaseAttachment,
+	BaseMessage,
+	type Message,
+	type MessageAttachment,
+} from '../../src/core/domain/entities/message';
 import type { IChatRepository } from '../../src/core/domain/repositories/chat-repository';
+import { ChatContextService } from '../../src/core/domain/services/chat-context-service';
+import { HistoryService } from '../../src/core/domain/services/history-service';
 import { Role } from '../../src/core/domain/value-objects/role';
+import { UuidGenerator } from '../../src/infrastructure/identity/uuid-generator';
 
 const mockLogger: ILogger = {
 	info: mock(),
@@ -28,17 +36,32 @@ describe('SendMessageUseCase', () => {
 			getHistory: mock(async (_messageId: string, _limit?: number) => []),
 			updateMessage: mock(async (_message: Message) => {}),
 			updateAttachment: mock(
-				async (_messageId: string, _attachmentId: string, _attachment: Partial<MessageAttachment>) => {},
+				async (
+					_messageId: string,
+					_attachmentId: string,
+					_attachment: Partial<MessageAttachment<Record<string, unknown>, Record<string, unknown>>>,
+				) => {},
 			),
 			findById: mock(async (_id: string) => null),
 		};
 
 		mockAIModel = {
 			// Default implementation returns a simple string
-			generateContent: mock(async (_history: Message[], _prompt: string) => 'AI Response'),
+			generateContent: mock(async (_history: Message[], _prompt: string) => ({ content: 'AI Response' })),
 		};
 
-		useCase = new SendMessageUseCase(mockChatRepo, mockAIModel, mockLogger);
+		const historyService = new HistoryService(mockChatRepo);
+		const chatContextService = new ChatContextService();
+		const idGenerator = new UuidGenerator();
+
+		useCase = new SendMessageUseCase(
+			mockChatRepo,
+			mockAIModel,
+			historyService,
+			chatContextService,
+			idGenerator,
+			mockLogger,
+		);
 	});
 
 	test('should save user message, generate response, and save AI message', async () => {
@@ -72,8 +95,8 @@ describe('SendMessageUseCase', () => {
 
 	test('should include history in prompt if provided', async () => {
 		const historyMock: Message[] = [
-			new Message({ id: '1', role: Role.USER, content: 'Prev 1', timestamp: new Date() }),
-			new Message({ id: '2', role: Role.ASSISTANT, content: 'Prev 2', timestamp: new Date() }),
+			new BaseMessage({ id: '1', role: Role.USER, content: 'Prev 1', timestamp: new Date() }),
+			new BaseMessage({ id: '2', role: Role.ASSISTANT, content: 'Prev 2', timestamp: new Date() }),
 		];
 
 		const dto: SendMessageDTO = {
@@ -98,7 +121,7 @@ describe('SendMessageUseCase', () => {
 
 	test('should fetch history from repo if parentId is provided but no history array', async () => {
 		const historyMock: Message[] = [
-			new Message({ id: 'parent', role: Role.ASSISTANT, content: 'Parent Msg', timestamp: new Date() }),
+			new BaseMessage({ id: 'parent', role: Role.ASSISTANT, content: 'Parent Msg', timestamp: new Date() }),
 		];
 
 		// Override getHistory for this specific instance
@@ -112,7 +135,7 @@ describe('SendMessageUseCase', () => {
 
 		await useCase.execute(dto);
 
-		expect(mockChatRepo.getHistory).toHaveBeenCalledWith('parent');
+		expect(mockChatRepo.getHistory).toHaveBeenCalledWith('parent', undefined);
 
 		const aiCalls = (mockAIModel.generateContent as Mock<IGenerativeAIModel['generateContent']>).mock.calls;
 		const historyPassed = aiCalls[0]?.[0];

@@ -1,11 +1,10 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { IAttachmentManager } from '../../src/core/application/interfaces/attachment-manager';
 import type { ILogger } from '../../src/core/application/interfaces/logger.interface';
-import { Message, type MessageAttachment } from '../../src/core/domain/entities/message';
+import { BaseMessage, type Message, type MessageAttachment } from '../../src/core/domain/entities/message';
 import { Role } from '../../src/core/domain/value-objects/role';
-import { GoogleGenAIAdapter } from '../../src/infrastructure/ai/google-genai-adapter';
 
-// Mock the @google/genai module (New SDK)
+// 1. Mock the @google/genai module BEFORE importing the component that uses it
 const mockSendMessage = mock(async (_req: unknown) => ({
 	text: 'Mocked AI Response',
 }));
@@ -25,7 +24,6 @@ const mockFilesGet = mock(async () => ({
 	name: 'mock-file-name',
 }));
 
-// We need to mock the constructor of GoogleGenAI and its methods
 mock.module('@google/genai', () => ({
 	GoogleGenAI: mock(() => ({
 		chats: {
@@ -43,6 +41,9 @@ mock.module('@google/genai', () => ({
 		STATE_UNSPECIFIED: 'STATE_UNSPECIFIED',
 	},
 }));
+
+// 2. Import the component under test
+import { GoogleGenAIAdapter } from '../../src/infrastructure/ai/google-genai-adapter';
 
 const mockLogger: ILogger = {
 	info: mock(),
@@ -75,23 +76,27 @@ describe('GoogleGenAIAdapter', () => {
 		};
 
 		// Instantiate adapter
-		adapter = new GoogleGenAIAdapter(mockAttachmentManager, mockLogger);
+		adapter = new GoogleGenAIAdapter(mockAttachmentManager, mockLogger, {
+			apiKey: 'mock-key',
+			model: 'mock-model',
+			systemPrompt: 'mock-system-prompt',
+		});
 	});
 
 	test('should generate content successfully', async () => {
-		const history: Message[] = [new Message({ id: '1', role: Role.USER, content: 'Hello', timestamp: new Date() })];
+		const history: Message[] = [new BaseMessage({ id: '1', role: Role.USER, content: 'Hello', timestamp: new Date() })];
 
 		// Pass 'Hello' as prompt
 		const response = await adapter.generateContent(history, 'Hello');
 
-		expect(response).toBe('Mocked AI Response');
+		expect(response.content).toBe('Mocked AI Response');
 		expect(mockChatsCreate).toHaveBeenCalled();
 		expect(mockSendMessage).toHaveBeenCalled();
 	});
 
 	test('should handle text conversion correctly', async () => {
 		const history: Message[] = [
-			new Message({ id: '1', role: Role.USER, content: 'Test Prompt', timestamp: new Date() }),
+			new BaseMessage({ id: '1', role: Role.USER, content: 'Test Prompt', timestamp: new Date() }),
 		];
 
 		// Pass 'Test Prompt' as prompt

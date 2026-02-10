@@ -15,6 +15,7 @@
 		"codecheck:staged": "biome check --staged",
 		"codecheck:fix": "biome check --fix",
 		"codecheck:ci": "biome ci .",
+		"monitor:discord": "bun run src/devScripts/discord-monitor.ts",
 		"benchmark:discord": "bun run src/benchmarks/discord-latency.bench.ts",
 		"benchmark:all": "bun src/benchmarks/discord-latency.bench.ts",
 		"db:up": "docker-compose up -d",

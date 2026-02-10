@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
-import { drizzle } from 'drizzle-orm/node-postgres';
+import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
-import { Message } from '../../src/core/domain/entities/message';
+import { BaseMessage, Message } from '../../src/core/domain/entities/message';
 import { Role } from '../../src/core/domain/value-objects/role';
 import { PostgresChatRepository } from '../../src/infrastructure/database/postgres-chat-repo';
+import * as schema from '../../src/infrastructure/database/schema';
 import { discordMessages, messages } from '../../src/infrastructure/database/schema';
 
 // Use 127.0.0.1 to avoid Windows localhost issues
@@ -15,12 +16,12 @@ const connectionString =
 describe('PostgresChatRepository Integration', () => {
 	let repo: PostgresChatRepository;
 	let pool: Pool;
-	let db: ReturnType<typeof drizzle>;
+	let db: NodePgDatabase<typeof schema>;
 
 	beforeAll(async () => {
 		// Connect to DB using pg Pool
 		pool = new Pool({ connectionString });
-		db = drizzle(pool);
+		db = drizzle(pool, { schema });
 
 		// Wait for DB to be ready
 		await waitForDb(pool);
@@ -60,7 +61,7 @@ describe('PostgresChatRepository Integration', () => {
 		const msgId = crypto.randomUUID();
 		const _convId = crypto.randomUUID();
 
-		const msg = new Message({
+		const msg = new BaseMessage({
 			id: msgId,
 			role: Role.USER,
 			content: 'Hello Integration',
@@ -83,7 +84,7 @@ describe('PostgresChatRepository Integration', () => {
 
 		// Create a thread: User -> AI -> User
 		const msg1Id = crypto.randomUUID();
-		const msg1 = new Message({
+		const msg1 = new BaseMessage({
 			id: msg1Id, // Root
 			role: Role.USER,
 			content: 'Start',
@@ -91,7 +92,7 @@ describe('PostgresChatRepository Integration', () => {
 		});
 
 		const msg2Id = crypto.randomUUID();
-		const msg2 = new Message({
+		const msg2 = new BaseMessage({
 			id: msg2Id, // Child of msg-1
 			role: Role.ASSISTANT,
 			content: 'Reply 1',
@@ -100,7 +101,7 @@ describe('PostgresChatRepository Integration', () => {
 		});
 
 		const msg3Id = crypto.randomUUID();
-		const msg3 = new Message({
+		const msg3 = new BaseMessage({
 			id: msg3Id, // Child of msg-2
 			role: Role.USER,
 			content: 'Reply 2',

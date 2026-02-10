@@ -1,41 +1,49 @@
 import { Client, GatewayIntentBits } from 'discord.js';
-import { drizzle } from 'drizzle-orm/node-postgres';
-import pg from 'pg';
 import { config } from './config/env';
 import { GetNextMessagePageUseCase } from './core/application/use-cases/get-next-message-page.use-case';
 import { SendMessageUseCase } from './core/application/use-cases/send-message.use-case';
+import { ChatContextService } from './core/domain/services/chat-context-service';
+import { HistoryService } from './core/domain/services/history-service';
 import { GoogleGenAIAdapter } from './infrastructure/ai/google-genai-adapter';
+import { db } from './infrastructure/database/drizzle-client';
 import { PostgresChatRepository } from './infrastructure/database/postgres-chat-repo';
 import { PostgresDiscordMessageMappingRepository } from './infrastructure/database/postgres-discord-message-mapping-repo';
 import { PostgresDiscordMessagePageRepository } from './infrastructure/database/postgres-discord-message-page-repo';
 import { DiscordAttachmentManager } from './infrastructure/discord/discord-attachment-manager';
+import { UuidGenerator } from './infrastructure/identity/uuid-generator';
 import { PinoLogger } from './infrastructure/logging/pino-logger';
 import { DiscordBot } from './interfaces/discord';
 
 async function main() {
 	const logger = new PinoLogger(config.logging.level, config.logging.format, config.logging.useColor);
 
-	logger.info('Starting AI Agent Backend...');
-
-	// 0. Initialize Database
-	const pool = new pg.Pool({
-		connectionString: config.database.url,
-	});
-	const db = drizzle(pool);
-
-	// 1. Initialize Infrastructure - DB Repos
+	// 1. Initialize Infrastructure Layer
 	const chatRepo = new PostgresChatRepository(db);
 	const discordMessageMappingRepo = new PostgresDiscordMessageMappingRepository(db);
 	const discordMessagePageRepo = new PostgresDiscordMessagePageRepository(db);
+	const idGenerator = new UuidGenerator();
+	const historyService = new HistoryService(chatRepo);
+	const chatContextService = new ChatContextService();
 
 	const client = new Client({
 		intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 	});
 
+	// 2. Initialize Application Layer (Use Cases + Domain Services)
 	const attachmentManager = new DiscordAttachmentManager(client, chatRepo, logger);
-	const aiAdapter = new GoogleGenAIAdapter(attachmentManager, logger);
-
-	const sendMessageUseCase = new SendMessageUseCase(chatRepo, aiAdapter, logger);
+	const aiAdapter = new GoogleGenAIAdapter(attachmentManager, logger, {
+		apiKey: config.ai.apiKey,
+		model: config.ai.model,
+		systemPrompt: config.ai.systemPrompt,
+	});
+	const sendMessageUseCase = new SendMessageUseCase(
+		chatRepo,
+		aiAdapter,
+		historyService,
+		chatContextService,
+		idGenerator,
+		logger,
+	);
 	const getNextMessagePageUseCase = new GetNextMessagePageUseCase(discordMessagePageRepo, chatRepo);
 
 	// 3. Initialize Interface Layer
@@ -46,22 +54,14 @@ async function main() {
 		chatRepo,
 		discordMessageMappingRepo,
 		discordMessagePageRepo,
+		idGenerator,
 		logger,
 	);
 
-	// 4. Start Application
-	try {
-		// Check if token is present, otherwise warn but don't crash if just testing
-		if (config.discord.token) {
-			await discordBot.start(config.discord.token);
-		} else {
-			logger.warn('WARNING: DISCORD_TOKEN is not set in .env. Bot will not connect to Discord.');
-			logger.info('Mock setup is complete. To test real discord connection, add DISCORD_TOKEN to .env');
-		}
-	} catch (error) {
-		logger.fatal('Failed to start application:', error);
-		process.exit(1);
-	}
+	await discordBot.start(config.discord.token);
 }
 
-main();
+main().catch((err) => {
+	console.error('Fatal error during startup:', err);
+	process.exit(1);
+});
