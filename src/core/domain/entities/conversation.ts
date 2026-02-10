@@ -23,22 +23,6 @@ export class Conversation {
 		this._messages.push(message);
 	}
 
-	formatForAI(): string {
-		let result = '';
-		let attachmentCounter = 1;
-
-		for (const message of this._messages) {
-			const { text, nextAttachmentIndex } = message.formatForAI({
-				authorName: (message.metadata.authorName as string) || undefined,
-				attachmentStartIndex: attachmentCounter,
-			});
-			result += `${text}\n\n`;
-			attachmentCounter = nextAttachmentIndex;
-		}
-
-		return result.trim();
-	}
-
 	/**
 	 * Returns the most recent message in the conversation.
 	 */

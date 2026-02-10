@@ -3,14 +3,8 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { IGenerativeAIModel } from '../../src/core/application/interfaces/illm-provider';
 import type { ILogger } from '../../src/core/application/interfaces/logger.interface';
 import { type SendMessageDTO, SendMessageUseCase } from '../../src/core/application/use-cases/send-message.use-case';
-import {
-	BaseAttachment,
-	BaseMessage,
-	type Message,
-	type MessageAttachment,
-} from '../../src/core/domain/entities/message';
+import { BaseMessage, type Message, type MessageAttachment } from '../../src/core/domain/entities/message';
 import type { IChatRepository } from '../../src/core/domain/repositories/chat-repository';
-import { ChatContextService } from '../../src/core/domain/services/chat-context-service';
 import { HistoryService } from '../../src/core/domain/services/history-service';
 import { Role } from '../../src/core/domain/value-objects/role';
 import { UuidGenerator } from '../../src/infrastructure/identity/uuid-generator';
@@ -47,21 +41,13 @@ describe('SendMessageUseCase', () => {
 
 		mockAIModel = {
 			// Default implementation returns a simple string
-			generateContent: mock(async (_history: Message[], _prompt: string) => ({ content: 'AI Response' })),
+			generateContent: mock(async (_history: Message[]) => ({ content: 'AI Response' })),
 		};
 
 		const historyService = new HistoryService(mockChatRepo);
-		const chatContextService = new ChatContextService();
 		const idGenerator = new UuidGenerator();
 
-		useCase = new SendMessageUseCase(
-			mockChatRepo,
-			mockAIModel,
-			historyService,
-			chatContextService,
-			idGenerator,
-			mockLogger,
-		);
+		useCase = new SendMessageUseCase(mockChatRepo, mockAIModel, historyService, idGenerator, mockLogger);
 	});
 
 	test('should save user message, generate response, and save AI message', async () => {

@@ -1,9 +1,6 @@
 import type { MessageAttachment, Metadata } from '../../domain/entities/message';
 
-export interface IAttachmentManager<
-	TSource extends Metadata = Metadata,
-	TPersistence extends Metadata = Metadata,
-> {
+export interface IAttachmentManager<TSource extends Metadata = Metadata, TPersistence extends Metadata = Metadata> {
 	/**
 	 * Retrieves the file stream for an attachment.
 	 * Implementing classes should handle refreshing stale URLs if necessary.

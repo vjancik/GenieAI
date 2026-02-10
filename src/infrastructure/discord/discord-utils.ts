@@ -1,4 +1,4 @@
-import { type AnyThreadChannel, type Channel, type TextBasedChannel } from 'discord.js';
+import type { AnyThreadChannel, Channel, TextBasedChannel } from 'discord.js';
 
 /**
  * Type guard for text-based channels that have message capabilities.
@@ -11,10 +11,7 @@ export function isTextBasedChannel(channel: Channel | null | undefined): channel
  * Asserts that a channel is text-based and returns it narrowed.
  * @throws Error if the channel is not text-based or null.
  */
-export function assertTextBasedChannel(
-	channel: Channel | null | undefined,
-	channelId?: string,
-): TextBasedChannel {
+export function assertTextBasedChannel(channel: Channel | null | undefined, channelId?: string): TextBasedChannel {
 	if (!channel) {
 		throw new Error(channelId ? `Channel ${channelId} not found` : 'Channel not found');
 	}

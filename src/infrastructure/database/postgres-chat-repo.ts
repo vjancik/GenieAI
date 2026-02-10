@@ -150,7 +150,7 @@ export class PostgresChatRepository implements IChatRepository {
 				timestamp: result.timestamp,
 				metadata: result.metadata ?? undefined,
 				parentId: result.parentId ?? undefined,
-				attachments: ((result.attachments) ?? []).map((a) => new BaseAttachment(a)),
+				attachments: (result.attachments ?? []).map((a) => new BaseAttachment(a)),
 			});
 		} catch (error) {
 			throw new DatabaseError('Failed to retrieve message from database', error);

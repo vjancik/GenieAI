@@ -2,7 +2,6 @@ import { Client, GatewayIntentBits } from 'discord.js';
 import { config } from './config/env';
 import { GetNextMessagePageUseCase } from './core/application/use-cases/get-next-message-page.use-case';
 import { SendMessageUseCase } from './core/application/use-cases/send-message.use-case';
-import { ChatContextService } from './core/domain/services/chat-context-service';
 import { HistoryService } from './core/domain/services/history-service';
 import { GoogleGenAIAdapter } from './infrastructure/ai/google-genai-adapter';
 import { db } from './infrastructure/database/drizzle-client';
@@ -23,7 +22,6 @@ async function main() {
 	const discordMessagePageRepo = new PostgresDiscordMessagePageRepository(db);
 	const idGenerator = new UuidGenerator();
 	const historyService = new HistoryService(chatRepo);
-	const chatContextService = new ChatContextService();
 
 	const client = new Client({
 		intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
@@ -36,14 +34,7 @@ async function main() {
 		model: config.ai.model,
 		systemPrompt: config.ai.systemPrompt,
 	});
-	const sendMessageUseCase = new SendMessageUseCase(
-		chatRepo,
-		aiAdapter,
-		historyService,
-		chatContextService,
-		idGenerator,
-		logger,
-	);
+	const sendMessageUseCase = new SendMessageUseCase(chatRepo, aiAdapter, historyService, idGenerator, logger);
 	const getNextMessagePageUseCase = new GetNextMessagePageUseCase(discordMessagePageRepo, chatRepo);
 
 	// 3. Initialize Interface Layer

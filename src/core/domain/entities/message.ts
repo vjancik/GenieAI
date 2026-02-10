@@ -25,10 +25,7 @@ export interface GenAIAttachmentPersistenceMetadata extends Metadata {
  * Pure data representation of a message attachment.
  * Used for DTOs and Persistence.
  */
-export interface MessageAttachmentData<
-	TSource extends Metadata = Metadata,
-	TPersistence extends Metadata = Metadata,
-> {
+export interface MessageAttachmentData<TSource extends Metadata = Metadata, TPersistence extends Metadata = Metadata> {
 	id?: string;
 	mimeType: string;
 	data?: string;
@@ -41,18 +38,15 @@ export interface MessageAttachmentData<
 /**
  * Properties required to create a MessageAttachment entity.
  */
-export interface MessageAttachmentProps<
-	TSource extends Metadata = Metadata,
-	TPersistence extends Metadata = Metadata,
-> extends Omit<MessageAttachmentData<TSource, TPersistence>, 'sourceMetadata' | 'persistenceMetadata'> {
+export interface MessageAttachmentProps<TSource extends Metadata = Metadata, TPersistence extends Metadata = Metadata>
+	extends Omit<MessageAttachmentData<TSource, TPersistence>, 'sourceMetadata' | 'persistenceMetadata'> {
 	sourceMetadata?: TSource;
 	persistenceMetadata?: TPersistence;
 }
 
-export abstract class MessageAttachment<
-	TSource extends Metadata = Metadata,
-	TPersistence extends Metadata = Metadata,
-> implements MessageAttachmentData<TSource, TPersistence> {
+export abstract class MessageAttachment<TSource extends Metadata = Metadata, TPersistence extends Metadata = Metadata>
+	implements MessageAttachmentData<TSource, TPersistence>
+{
 	public readonly id?: string;
 	public readonly mimeType: string;
 	public readonly data?: string;
@@ -93,20 +87,12 @@ export abstract class MessageAttachment<
 export class DiscordAttachment<TPersistence extends Metadata = Metadata> extends MessageAttachment<
 	DiscordAttachmentSourceMetadata,
 	TPersistence
-> {
-	constructor(props: MessageAttachmentProps<DiscordAttachmentSourceMetadata, TPersistence>) {
-		super(props);
-	}
-}
+> {}
 
 /**
  * Generic concrete implementation for attachments.
  */
-export class BaseAttachment extends MessageAttachment<Metadata, Metadata> {
-	constructor(props: MessageAttachmentProps<Metadata, Metadata>) {
-		super(props);
-	}
-}
+export class BaseAttachment extends MessageAttachment<Metadata, Metadata> {}
 
 export interface MessageProps<TMetadata extends Metadata = Metadata> {
 	id: string;
@@ -137,24 +123,14 @@ export abstract class Message<TMetadata extends Metadata = Metadata> {
 		this.attachments = props.attachments || [];
 	}
 
-	formatForAI(options: { authorName?: string; label?: string; attachmentStartIndex?: number } = {}): {
+	formatForAI(options: { authorName?: string; label?: string } = {}): {
 		text: string;
-		nextAttachmentIndex: number;
 	} {
-		const { authorName = 'Unknown User', label = 'Message from user named', attachmentStartIndex = 1 } = options;
+		const { authorName = 'Unknown User', label = 'Message from user named' } = options;
 
-		let text = `${label} ${authorName}\nMessage content:\n${this.content}`;
+		const text = `${label} ${authorName}\nMessage content:\n${this.content}`;
 
-		let currentIdx = attachmentStartIndex;
-		if (this.attachments.length > 0) {
-			const indices: number[] = [];
-			for (let i = 0; i < this.attachments.length; i++) {
-				indices.push(currentIdx++);
-			}
-			text += `\nIncludes attachments: ${indices.map((i) => `#${i}`).join(', ')}`;
-		}
-
-		return { text, nextAttachmentIndex: currentIdx };
+		return { text };
 	}
 }
 
@@ -164,23 +140,14 @@ export abstract class Message<TMetadata extends Metadata = Metadata> {
 export interface DiscordMessageMetadata extends Record<string, unknown> {
 	userId: string;
 	authorName: string;
-	isTransient?: boolean;
 }
 
 /**
  * Concrete implementation for Discord-specific messages.
  */
-export class DiscordMessage extends Message<DiscordMessageMetadata> {
-	constructor(props: MessageProps<DiscordMessageMetadata>) {
-		super(props);
-	}
-}
+export class DiscordMessage extends Message<DiscordMessageMetadata> {}
 
 /**
  * A generic concrete implementation of Message for testing or generic platforms.
  */
-export class BaseMessage extends Message<Metadata> {
-	constructor(props: MessageProps<Metadata>) {
-		super(props);
-	}
-}
+export class BaseMessage extends Message<Metadata> {}

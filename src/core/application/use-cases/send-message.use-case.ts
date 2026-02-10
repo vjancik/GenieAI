@@ -2,7 +2,6 @@ import { metrics, SpanStatusCode, trace } from '@opentelemetry/api';
 import { Conversation } from '../../domain/entities/conversation';
 import { BaseMessage, type Message, type MessageAttachment } from '../../domain/entities/message';
 import type { IChatRepository } from '../../domain/repositories/chat-repository';
-import type { ChatContextService } from '../../domain/services/chat-context-service';
 import type { HistoryService } from '../../domain/services/history-service';
 import { Role } from '../../domain/value-objects/role';
 import type { IIdentityGenerator } from '../interfaces/identity-generator.interface';
@@ -34,7 +33,6 @@ export class SendMessageUseCase {
 		private readonly chatRepo: IChatRepository,
 		private readonly aiModel: IGenerativeAIModel,
 		private readonly historyService: HistoryService,
-		private readonly chatContextService: ChatContextService,
 		private readonly idGenerator: IIdentityGenerator,
 		private readonly logger: ILogger,
 	) {}
@@ -81,11 +79,8 @@ export class SendMessageUseCase {
 				span.addEvent('Generating AI response');
 				const startTime = performance.now();
 
-				// Format context for AI
-				const aiPrompt = this.chatContextService.formatForAI(conversation);
-
-				// We still pass history as messages to the model, but the prompt is now formatted correctly.
-				const result = await this.aiModel.generateContent(conversation.getTranscript(), aiPrompt);
+				// We pass history as messages to the model, which allows it to leverage structured turns and caching.
+				const result = await this.aiModel.generateContent(conversation.getTranscript());
 				const aiResponseText = result.content;
 
 				const duration = performance.now() - startTime;

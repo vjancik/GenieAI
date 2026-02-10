@@ -42,14 +42,15 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 		this.bufferService = new StreamingBufferService(join(tmpdir(), 'genie-ai-bot'), logger);
 	}
 
-	async generateContent(
-		history: Message[],
-		prompt: string,
-	): Promise<GenerationResult<GenAIAttachmentPersistenceMetadata>> {
+	async generateContent(history: Message[]): Promise<GenerationResult<GenAIAttachmentPersistenceMetadata>> {
 		try {
 			const attachmentUpdates: AttachmentUpdate<GenAIAttachmentPersistenceMetadata>[] = [];
 			const pastHistoryMessages = history.slice(0, -1);
-			const currentMessage = history[history.length - 1];
+			const lastMessage = history[history.length - 1];
+
+			if (!lastMessage) {
+				throw new AIProviderError('Cannot generate content from empty history');
+			}
 
 			const googleHistory = await Promise.all(
 				pastHistoryMessages.map(async (msg) => {
@@ -65,25 +66,13 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 				history: googleHistory,
 			});
 
-			const currentParts: Content['parts'] = [{ text: prompt }];
-			if (currentMessage?.attachments?.length) {
-				const attachmentParts = await Promise.all(
-					currentMessage.attachments.map(async (att) => {
-						const result = await this.resolveAttachmentPart(att, currentMessage.id);
-						if (result.update) attachmentUpdates.push(result.update);
-						return result.part;
-					}),
-				);
-				for (const part of attachmentParts) {
-					if (part) {
-						currentParts.push(part);
-					}
-				}
-			}
+			const { content: lastContent, updates: lastUpdates } = await this.mapMessageToContent(lastMessage);
+			attachmentUpdates.push(...lastUpdates);
 
 			const result = await chat.sendMessage({
-				message: currentParts,
+				message: lastContent.parts || [],
 			});
+
 			const responseText = result.text;
 			if (!responseText) {
 				throw new AIProviderError('Empty response from AI model');
@@ -100,7 +89,13 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 	}
 
 	private async mapMessageToContent(msg: Message): Promise<{ content: Content; updates: AttachmentUpdate[] }> {
-		const parts: Content['parts'] = [{ text: msg.content }];
+		// We format each message to include author name and dynamic labels,
+		// but keep them as separate turns for the LLM.
+		const { text } = msg.formatForAI({
+			authorName: (msg.metadata.authorName as string) || undefined,
+		});
+
+		const parts: Content['parts'] = [{ text }];
 		const updates: AttachmentUpdate[] = [];
 
 		if (msg.attachments?.length) {

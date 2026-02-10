@@ -12,5 +12,5 @@ export interface GenerationResult<TPersistence extends Metadata = Metadata> {
 }
 
 export interface IGenerativeAIModel<TPersistence extends Metadata = Metadata> {
-	generateContent(history: Message[], prompt: string): Promise<GenerationResult<TPersistence>>;
+	generateContent(history: Message[]): Promise<GenerationResult<TPersistence>>;
 }

@@ -158,34 +158,27 @@ export class DiscordBot {
 				} else {
 					try {
 						const refMessage = await message.fetchReference();
-						if (refMessage.author.id !== this.client.user?.id) {
-							// For "folded" context, we create a transient message
-							const refAuthorName = refMessage.member?.displayName ?? refMessage.author.username;
-							const refAttachments: MessageAttachment[] = [];
-							for (const [_, att] of refMessage.attachments) {
-								refAttachments.push(
-									new DiscordAttachment({
-										id: att.id,
-										url: att.url,
-										name: att.name,
-										mimeType: att.contentType || 'application/octet-stream',
-										sourceMetadata: { discordMessageId: refMessage.id, channelId: refMessage.channelId },
-									}),
-								);
-							}
+						// For folding, we merge the referenced message into the current one
+						const refAuthorName = refMessage.member?.displayName ?? refMessage.author.username;
 
-							const refMessageEntity = new DiscordMessage({
-								id: this.idGenerator.generate(), // dummy id
-								role: Role.USER,
-								content: refMessage.content,
-								timestamp: new Date(refMessage.createdTimestamp),
-								attachments: refAttachments,
-								metadata: { userId: refMessage.author.id, authorName: refAuthorName, isTransient: true },
-							});
-							history = [refMessageEntity];
+						// Add a quote-style header for the folded message
+						const foldedContent = refMessage.content || (refMessage.attachments.size > 0 ? '(attachments only)' : '');
+						content = `${content}\n\nReferring to message from user named ${refAuthorName}\nReferred message content:\n${foldedContent}`;
+
+						// Add attachments from the referenced message
+						for (const [_, att] of refMessage.attachments) {
+							allAttachments.push(
+								new DiscordAttachment({
+									id: att.id,
+									url: att.url,
+									name: att.name,
+									mimeType: att.contentType || 'application/octet-stream',
+									sourceMetadata: { discordMessageId: refMessage.id, channelId: refMessage.channelId },
+								}),
+							);
 						}
 					} catch (e) {
-						throw new DiscordError('Failed to fetch referenced message from Discord for context folding', e);
+						this.logger.warn('Failed to fetch referenced message from Discord for context folding', e);
 					}
 				}
 			}

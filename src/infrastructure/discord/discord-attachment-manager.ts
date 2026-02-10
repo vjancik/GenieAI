@@ -1,16 +1,13 @@
 import type { Client } from 'discord.js';
 import type { IAttachmentManager } from '../../core/application/interfaces/attachment-manager';
 import type { ILogger } from '../../core/application/interfaces/logger.interface';
-import type {
-	DiscordAttachment,
-	DiscordAttachmentSourceMetadata,
-	Metadata,
-} from '../../core/domain/entities/message';
+import type { DiscordAttachment, DiscordAttachmentSourceMetadata, Metadata } from '../../core/domain/entities/message';
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
 import { assertTextBasedChannel } from './discord-utils';
 
 export class DiscordAttachmentManager<TPersistence extends Metadata = Metadata>
-	implements IAttachmentManager<DiscordAttachmentSourceMetadata, TPersistence> {
+	implements IAttachmentManager<DiscordAttachmentSourceMetadata, TPersistence>
+{
 	constructor(
 		private readonly client: Client,
 		private readonly chatRepo: IChatRepository,

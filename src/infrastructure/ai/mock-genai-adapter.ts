@@ -8,9 +8,12 @@ export class MockGenAIAdapter implements IGenerativeAIModel {
 		this.logger = logger.child({ className: 'MockGenAIAdapter' });
 	}
 
-	async generateContent(history: Message[], prompt: string): Promise<GenerationResult> {
-		this.logger.debug(`[MockGenAI] Generating response for prompt: "${prompt}"`);
-		this.logger.debug(`[MockGenAI] Context history length: ${history.length}`);
+	async generateContent(history: Message[]): Promise<GenerationResult> {
+		const lastMessage = history[history.length - 1];
+		if (!lastMessage) return { content: '' };
+
+		const prompt = lastMessage.content;
+		this.logger.debug(`[MockGenAI] Generating response for last message content: "${prompt}"`);
 
 		// Simulate network delay
 		await new Promise((resolve) => setTimeout(resolve, 800));

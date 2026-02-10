@@ -86,8 +86,8 @@ describe('GoogleGenAIAdapter', () => {
 	test('should generate content successfully', async () => {
 		const history: Message[] = [new BaseMessage({ id: '1', role: Role.USER, content: 'Hello', timestamp: new Date() })];
 
-		// Pass 'Hello' as prompt
-		const response = await adapter.generateContent(history, 'Hello');
+		// Pass history only
+		const response = await adapter.generateContent(history);
 
 		expect(response.content).toBe('Mocked AI Response');
 		expect(mockChatsCreate).toHaveBeenCalled();
@@ -99,16 +99,17 @@ describe('GoogleGenAIAdapter', () => {
 			new BaseMessage({ id: '1', role: Role.USER, content: 'Test Prompt', timestamp: new Date() }),
 		];
 
-		// Pass 'Test Prompt' as prompt
-		await adapter.generateContent(history, 'Test Prompt');
+		// Pass history only
+		await adapter.generateContent(history);
 
 		const callArgs = mockSendMessage.mock.calls[0];
 		if (!callArgs) throw new Error('mockSendMessage should have been called');
 		const payload = callArgs[0] as { message: { text: string }[] };
 
 		// payload is { message: [ { text: 'Test Prompt' } ] }
+		// The adapter should have formatted the message
 		expect(payload.message).toBeDefined();
 		const parts = payload.message;
-		expect(parts[0]?.text).toBe('Test Prompt');
+		expect(parts[0]?.text).toContain('Test Prompt');
 	});
 });
