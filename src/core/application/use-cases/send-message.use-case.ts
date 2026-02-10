@@ -1,6 +1,6 @@
 import { metrics, SpanStatusCode, trace } from '@opentelemetry/api';
 import { Conversation } from '../../domain/entities/conversation';
-import { BaseMessage, type Message, type MessageAttachment } from '../../domain/entities/message';
+import { Message, type MessageAttachment, MessageSource } from '../../domain/entities/message';
 import type { IChatRepository } from '../../domain/repositories/chat-repository';
 import type { HistoryService } from '../../domain/services/history-service';
 import { Role } from '../../domain/value-objects/role';
@@ -24,6 +24,7 @@ export interface SendMessageDTO {
 	parentId?: string;
 	attachments?: MessageAttachment[];
 	externalId?: string;
+	source: MessageSource;
 }
 
 import type { ILogger } from '../interfaces/logger.interface';
@@ -44,7 +45,7 @@ export class SendMessageUseCase {
 				if (dto.userId) span.setAttribute('user_id', dto.userId);
 
 				// 1. Create and Save User Message
-				const userMessage = new BaseMessage({
+				const userMessage = Message.create({
 					id: dto.id ?? this.idGenerator.generate(),
 					role: Role.USER,
 					content: dto.content,
@@ -52,6 +53,7 @@ export class SendMessageUseCase {
 					metadata: { userId: dto.userId },
 					parentId: dto.parentId,
 					attachments: dto.attachments,
+					source: dto.source,
 				});
 
 				await this.chatRepo.saveMessage(userMessage, dto.externalId);
@@ -112,12 +114,13 @@ export class SendMessageUseCase {
 				});
 
 				// 4. Create and Save AI Message
-				const aiMessage = new BaseMessage({
+				const aiMessage = Message.create({
 					id: this.idGenerator.generate(),
 					role: Role.ASSISTANT,
 					content: aiResponseText,
 					timestamp: new Date(),
 					parentId: userMessage.id,
+					source: userMessage.source,
 				});
 
 				await this.chatRepo.saveMessage(aiMessage);

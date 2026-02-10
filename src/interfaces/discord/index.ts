@@ -16,6 +16,7 @@ import {
 	DiscordMessage,
 	type Message,
 	type MessageAttachment,
+	MessageSource,
 } from '../../core/domain/entities/message';
 import { ApplicationError, DiscordError } from '../../core/domain/errors/application-error';
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
@@ -206,6 +207,7 @@ export class DiscordBot {
 				parentId: parentUuid,
 				attachments: allAttachments,
 				externalId: message.id,
+				source: MessageSource.DISCORD,
 			});
 
 			// Split and Send Response (First Page Only)

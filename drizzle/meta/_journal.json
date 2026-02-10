@@ -15,6 +15,13 @@
 			"when": 1770410136914,
 			"tag": "0001_dazzling_amazoness",
 			"breakpoints": true
+		},
+		{
+			"idx": 2,
+			"version": "7",
+			"when": 1770760373690,
+			"tag": "0002_white_echo",
+			"breakpoints": true
 		}
 	]
 }

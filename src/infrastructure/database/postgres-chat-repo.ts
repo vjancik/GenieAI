@@ -2,10 +2,10 @@ import { eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import {
 	BaseAttachment,
-	BaseMessage,
-	type Message,
+	Message,
 	type MessageAttachment,
 	type MessageAttachmentData,
+	type MessageSource,
 } from '../../core/domain/entities/message';
 import { DatabaseError } from '../../core/domain/errors/application-error';
 import type { IChatRepository } from '../../core/domain/repositories/chat-repository';
@@ -21,6 +21,7 @@ interface MessageRow {
 	metadata: Record<string, unknown> | null;
 	parent_id: string | null;
 	attachments: MessageAttachmentData[];
+	source: string;
 }
 
 export class PostgresChatRepository implements IChatRepository {
@@ -39,6 +40,7 @@ export class PostgresChatRepository implements IChatRepository {
 						metadata: message.metadata,
 						parentId: message.parentId,
 						attachments: message.attachments,
+						source: message.source,
 					})
 					.onConflictDoUpdate({
 						target: [messages.id],
@@ -49,6 +51,7 @@ export class PostgresChatRepository implements IChatRepository {
 							metadata: message.metadata,
 							parentId: message.parentId,
 							attachments: message.attachments,
+							source: message.source,
 						},
 					});
 
@@ -106,12 +109,12 @@ export class PostgresChatRepository implements IChatRepository {
 			const results = await this.db.execute(sql`
                 WITH RECURSIVE history AS (
                     SELECT 
-                        id, role, content, timestamp, metadata, parent_id, attachments, 1 as level
+                        id, role, content, timestamp, metadata, parent_id, attachments, source, 1 as level
                     FROM messages
                     WHERE id = ${messageId}
                     UNION ALL
                     SELECT 
-                        m.id, m.role, m.content, m.timestamp, m.metadata, m.parent_id, m.attachments, h.level + 1
+                        m.id, m.role, m.content, m.timestamp, m.metadata, m.parent_id, m.attachments, m.source, h.level + 1
                     FROM messages m
                     INNER JOIN history h ON m.id = h.parent_id
                     WHERE h.level < ${limit}
@@ -119,17 +122,17 @@ export class PostgresChatRepository implements IChatRepository {
                 SELECT * FROM history ORDER BY timestamp DESC
             `);
 
-			return (results.rows as unknown as MessageRow[]).reverse().map(
-				(r) =>
-					new BaseMessage({
-						id: r.id,
-						role: r.role as Role,
-						content: r.content,
-						timestamp: new Date(r.timestamp),
-						metadata: r.metadata ?? undefined,
-						parentId: r.parent_id ?? undefined,
-						attachments: (r.attachments ?? []).map((a) => new BaseAttachment(a)),
-					}),
+			return (results.rows as unknown as MessageRow[]).reverse().map((r) =>
+				Message.create({
+					id: r.id,
+					role: r.role as Role,
+					content: r.content,
+					timestamp: new Date(r.timestamp),
+					metadata: r.metadata ?? undefined,
+					parentId: r.parent_id ?? undefined,
+					attachments: (r.attachments ?? []).map((a) => new BaseAttachment(a)),
+					source: r.source as MessageSource,
+				}),
 			);
 		} catch (error) {
 			if (error instanceof DatabaseError) throw error;
@@ -143,7 +146,7 @@ export class PostgresChatRepository implements IChatRepository {
 
 			if (!result) return null;
 
-			return new BaseMessage({
+			return Message.create({
 				id: result.id,
 				role: result.role as Role,
 				content: result.content,
@@ -151,6 +154,7 @@ export class PostgresChatRepository implements IChatRepository {
 				metadata: result.metadata ?? undefined,
 				parentId: result.parentId ?? undefined,
 				attachments: (result.attachments ?? []).map((a) => new BaseAttachment(a)),
+				source: result.source as MessageSource,
 			});
 		} catch (error) {
 			throw new DatabaseError('Failed to retrieve message from database', error);

@@ -3,6 +3,7 @@ import type { Message, MessageAttachmentData } from '../../core/domain/entities/
 import { Role } from '../../core/domain/value-objects/role';
 
 export const roleEnum = pgEnum('role', [Role.USER, Role.ASSISTANT, Role.SYSTEM, Role.FUNCTION]);
+export const messageSourceEnum = pgEnum('message_source', ['discord', 'web']);
 
 export const messages = pgTable('messages', {
 	id: uuid('id').primaryKey(),
@@ -12,6 +13,7 @@ export const messages = pgTable('messages', {
 	metadata: jsonb('metadata').$type<Message['metadata']>(),
 	parentId: uuid('parent_id'),
 	attachments: jsonb('attachments').$type<MessageAttachmentData[]>().default([]).notNull(),
+	source: messageSourceEnum('source').default('discord').notNull(),
 });
 
 export const discordMessages = pgTable('discord_messages', {

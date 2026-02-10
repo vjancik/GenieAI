@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { IAttachmentManager } from '../../src/core/application/interfaces/attachment-manager';
 import type { ILogger } from '../../src/core/application/interfaces/logger.interface';
-import { BaseMessage, type Message, type MessageAttachment } from '../../src/core/domain/entities/message';
+import { Message, type MessageAttachment, MessageSource } from '../../src/core/domain/entities/message';
 import { Role } from '../../src/core/domain/value-objects/role';
 
 // 1. Mock the @google/genai module BEFORE importing the component that uses it
@@ -84,7 +84,16 @@ describe('GoogleGenAIAdapter', () => {
 	});
 
 	test('should generate content successfully', async () => {
-		const history: Message[] = [new BaseMessage({ id: '1', role: Role.USER, content: 'Hello', timestamp: new Date() })];
+		const history: Message[] = [
+			Message.create({
+				id: '1',
+				role: Role.USER,
+				content: 'Hello',
+				timestamp: new Date(),
+				source: MessageSource.DISCORD,
+				metadata: { authorName: 'Tester' },
+			}),
+		];
 
 		// Pass history only
 		const response = await adapter.generateContent(history);
@@ -96,7 +105,14 @@ describe('GoogleGenAIAdapter', () => {
 
 	test('should handle text conversion correctly', async () => {
 		const history: Message[] = [
-			new BaseMessage({ id: '1', role: Role.USER, content: 'Test Prompt', timestamp: new Date() }),
+			Message.create({
+				id: '1',
+				role: Role.USER,
+				content: 'Test Prompt',
+				timestamp: new Date(),
+				source: MessageSource.DISCORD,
+				metadata: { authorName: 'Tester' },
+			}),
 		];
 
 		// Pass history only

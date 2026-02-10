@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
-import { BaseMessage } from '../../src/core/domain/entities/message';
+import { Message, MessageSource } from '../../src/core/domain/entities/message';
 import { Role } from '../../src/core/domain/value-objects/role';
 import { PostgresChatRepository } from '../../src/infrastructure/database/postgres-chat-repo';
 import * as schema from '../../src/infrastructure/database/schema';
@@ -61,12 +61,13 @@ describe('PostgresChatRepository Integration', () => {
 		const msgId = crypto.randomUUID();
 		const _convId = crypto.randomUUID();
 
-		const msg = new BaseMessage({
+		const msg = Message.create({
 			id: msgId,
 			role: Role.USER,
 			content: 'Hello Integration',
 			timestamp: new Date(),
 			metadata: { userId: 'user-123' },
+			source: MessageSource.DISCORD,
 		});
 
 		await repo.saveMessage(msg);
@@ -84,29 +85,32 @@ describe('PostgresChatRepository Integration', () => {
 
 		// Create a thread: User -> AI -> User
 		const msg1Id = crypto.randomUUID();
-		const msg1 = new BaseMessage({
+		const msg1 = Message.create({
 			id: msg1Id, // Root
 			role: Role.USER,
 			content: 'Start',
 			timestamp: new Date(Date.now() - 10000),
+			source: MessageSource.DISCORD,
 		});
 
 		const msg2Id = crypto.randomUUID();
-		const msg2 = new BaseMessage({
+		const msg2 = Message.create({
 			id: msg2Id, // Child of msg-1
 			role: Role.ASSISTANT,
 			content: 'Reply 1',
 			parentId: msg1Id,
 			timestamp: new Date(Date.now() - 5000),
+			source: MessageSource.DISCORD,
 		});
 
 		const msg3Id = crypto.randomUUID();
-		const msg3 = new BaseMessage({
+		const msg3 = Message.create({
 			id: msg3Id, // Child of msg-2
 			role: Role.USER,
-			content: 'Reply 2',
+			content: 'Thread end',
 			parentId: msg2Id,
 			timestamp: new Date(),
+			source: MessageSource.DISCORD,
 		});
 
 		await repo.saveMessage(msg1);

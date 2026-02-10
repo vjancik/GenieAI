@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { IGenerativeAIModel } from '../../src/core/application/interfaces/illm-provider';
 import type { ILogger } from '../../src/core/application/interfaces/logger.interface';
 import { type SendMessageDTO, SendMessageUseCase } from '../../src/core/application/use-cases/send-message.use-case';
-import { BaseMessage, type Message, type MessageAttachment } from '../../src/core/domain/entities/message';
+import { Message, type MessageAttachment, MessageSource } from '../../src/core/domain/entities/message';
 import type { IChatRepository } from '../../src/core/domain/repositories/chat-repository';
 import { HistoryService } from '../../src/core/domain/services/history-service';
 import { Role } from '../../src/core/domain/value-objects/role';
@@ -55,6 +55,7 @@ describe('SendMessageUseCase', () => {
 			conversationId: 'conv-123',
 			content: 'Hello AI',
 			userId: 'user-456',
+			source: MessageSource.DISCORD,
 		};
 
 		const result = await useCase.execute(dto);
@@ -81,14 +82,27 @@ describe('SendMessageUseCase', () => {
 
 	test('should include history in prompt if provided', async () => {
 		const historyMock: Message[] = [
-			new BaseMessage({ id: '1', role: Role.USER, content: 'Prev 1', timestamp: new Date() }),
-			new BaseMessage({ id: '2', role: Role.ASSISTANT, content: 'Prev 2', timestamp: new Date() }),
+			Message.create({
+				id: '1',
+				role: Role.USER,
+				content: 'Prev 1',
+				timestamp: new Date(),
+				source: MessageSource.DISCORD,
+			}),
+			Message.create({
+				id: '2',
+				role: Role.ASSISTANT,
+				content: 'Prev 2',
+				timestamp: new Date(),
+				source: MessageSource.DISCORD,
+			}),
 		];
 
 		const dto: SendMessageDTO = {
 			conversationId: 'conv-123',
 			content: 'Follow up',
 			history: historyMock,
+			source: MessageSource.DISCORD,
 		};
 
 		await useCase.execute(dto);
@@ -107,7 +121,13 @@ describe('SendMessageUseCase', () => {
 
 	test('should fetch history from repo if parentId is provided but no history array', async () => {
 		const historyMock: Message[] = [
-			new BaseMessage({ id: 'parent', role: Role.ASSISTANT, content: 'Parent Msg', timestamp: new Date() }),
+			Message.create({
+				id: 'parent',
+				role: Role.ASSISTANT,
+				content: 'Parent Msg',
+				timestamp: new Date(),
+				source: MessageSource.DISCORD,
+			}),
 		];
 
 		// Override getHistory for this specific instance
@@ -117,6 +137,7 @@ describe('SendMessageUseCase', () => {
 			conversationId: 'conv-123',
 			content: 'Reply to parent',
 			parentId: 'parent',
+			source: MessageSource.DISCORD,
 		};
 
 		await useCase.execute(dto);

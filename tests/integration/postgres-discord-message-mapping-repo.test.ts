@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
-import { BaseMessage } from '../../src/core/domain/entities/message';
+import { Message, MessageSource } from '../../src/core/domain/entities/message';
 import { Role } from '../../src/core/domain/value-objects/role';
 import { PostgresChatRepository } from '../../src/infrastructure/database/postgres-chat-repo'; // Helper to create message
 import { PostgresDiscordMessageMappingRepository } from '../../src/infrastructure/database/postgres-discord-message-mapping-repo';
@@ -61,11 +61,12 @@ describe('PostgresDiscordMessageMappingRepository Integration', () => {
 
 		// 1. Create a message first (FK constraint)
 		const msgId = crypto.randomUUID();
-		const msg = new BaseMessage({
+		const msg = Message.create({
 			id: msgId,
 			role: Role.ASSISTANT,
 			content: 'Test Content',
 			timestamp: new Date(),
+			source: MessageSource.DISCORD,
 		});
 		await chatRepo.saveMessage(msg);
 

@@ -111,9 +111,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 	private async mapMessageToContent(msg: Message): Promise<{ content: Content; updates: AttachmentUpdate[] }> {
 		// We format each message to include author name and dynamic labels,
 		// but keep them as separate turns for the LLM.
-		const { text } = msg.formatForAI({
-			authorName: (msg.metadata.authorName as string) ?? undefined,
-		});
+		const { text } = msg.formatForAI();
 
 		const parts: Content['parts'] = [{ text }];
 		const updates: AttachmentUpdate[] = [];

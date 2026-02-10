@@ -94,6 +94,11 @@ export class DiscordAttachment<TPersistence extends Metadata = Metadata> extends
  */
 export class BaseAttachment extends MessageAttachment<Metadata, Metadata> {}
 
+export enum MessageSource {
+	DISCORD = 'discord',
+	WEB = 'web',
+}
+
 export interface MessageProps<TMetadata extends Metadata = Metadata> {
 	id: string;
 	role: Role;
@@ -112,6 +117,7 @@ export abstract class Message<TMetadata extends Metadata = Metadata> {
 	public readonly metadata: TMetadata;
 	public readonly parentId?: string;
 	public readonly attachments: MessageAttachment[];
+	public abstract readonly source: MessageSource;
 
 	constructor(props: MessageProps<TMetadata>) {
 		this.id = props.id;
@@ -123,15 +129,32 @@ export abstract class Message<TMetadata extends Metadata = Metadata> {
 		this.attachments = props.attachments ?? [];
 	}
 
-	formatForAI(options: { authorName?: string; label?: string } = {}): {
-		text: string;
-	} {
-		const { authorName = 'Unknown User', label = 'Message from user named' } = options;
+	/**
+	 * Factory method to create the appropriate Message subclass based on source.
+	 */
+	static create(props: MessageProps & { source: MessageSource }): Message {
+		const { source } = props;
 
-		const text = `${label} ${authorName}\nMessage content:\n${this.content}`;
-
-		return { text };
+		switch (source) {
+			case MessageSource.DISCORD:
+				return new DiscordMessage(props as MessageProps<DiscordMessageMetadata>);
+			case MessageSource.WEB:
+				return new WebMessage(props as MessageProps<WebMessageMetadata>);
+			default:
+				return assertNever(source);
+		}
 	}
+
+	abstract formatForAI(options?: { label?: string }): {
+		text: string;
+	};
+}
+
+/**
+ * Helper for exhaustive switch checks.
+ */
+function assertNever(value: never): never {
+	throw new Error(`Unexpected value: ${value}`);
 }
 
 /**
@@ -145,9 +168,43 @@ export interface DiscordMessageMetadata extends Record<string, unknown> {
 /**
  * Concrete implementation for Discord-specific messages.
  */
-export class DiscordMessage extends Message<DiscordMessageMetadata> {}
+export class DiscordMessage extends Message<DiscordMessageMetadata> {
+	public readonly source = MessageSource.DISCORD;
+
+	formatForAI(options: { label?: string } = {}): {
+		text: string;
+	} {
+		const { label = 'Message from user named' } = options;
+		const authorName = this.metadata.authorName ?? 'Unknown User';
+
+		const text = `${label} ${authorName}\nMessage content:\n${this.content}`;
+
+		return { text };
+	}
+}
 
 /**
- * A generic concrete implementation of Message for testing or generic platforms.
+ * Metadata for messages originating from the Web.
  */
-export class BaseMessage extends Message<Metadata> {}
+export interface WebMessageMetadata extends Record<string, unknown> {
+	userId?: string;
+	userName?: string;
+}
+
+/**
+ * Concrete implementation for Web-specific messages.
+ */
+export class WebMessage extends Message<WebMessageMetadata> {
+	public readonly source = MessageSource.WEB;
+
+	formatForAI(options: { label?: string } = {}): {
+		text: string;
+	} {
+		const { label = 'Message from web user' } = options;
+		const userName = this.metadata.userName ?? 'Anonymous';
+
+		const text = `${label} ${userName}\nMessage content:\n${this.content}`;
+
+		return { text };
+	}
+}
