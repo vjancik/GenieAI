@@ -80,6 +80,8 @@ describe('GoogleGenAIAdapter', () => {
 			apiKey: 'mock-key',
 			model: 'mock-model',
 			systemPrompt: 'mock-system-prompt',
+			attachmentMemoryLimit: 20 * 1024 * 1024,
+			attachmentDiskLimit: 100 * 1024 * 1024,
 		});
 	});
 

@@ -33,14 +33,25 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 
 	private readonly maxRetries = 3;
 
+	private readonly attachmentMemoryLimit: number;
+	private readonly attachmentDiskLimit: number;
+
 	constructor(
 		private readonly attachmentManager: IAttachmentManager,
 		private readonly logger: ILogger,
-		config: { apiKey: string; model: string; systemPrompt: string },
+		config: {
+			apiKey: string;
+			model: string;
+			systemPrompt: string;
+			attachmentMemoryLimit: number;
+			attachmentDiskLimit: number;
+		},
 	) {
 		this.client = new GoogleGenAI({ apiKey: config.apiKey, apiVersion: 'v1beta' });
 		this.model = config.model;
 		this.systemPrompt = config.systemPrompt;
+		this.attachmentMemoryLimit = config.attachmentMemoryLimit;
+		this.attachmentDiskLimit = config.attachmentDiskLimit;
 		this.fileService = new GenAIFileService(this.client, logger);
 		this.bufferService = new StreamingBufferService(join(tmpdir(), 'genie-ai-bot'), logger);
 	}
@@ -190,9 +201,9 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 			const { stream } = await this.attachmentManager.getAttachmentStream(attachment, messageId);
 
 			const { buffer, filePath } = await this.bufferService.readStreamWithTwoTierLimits(
-				stream as ReadableStream<Uint8Array>,
-				20 * 1024 * 1024,
-				100 * 1024 * 1024,
+				stream,
+				this.attachmentMemoryLimit,
+				this.attachmentDiskLimit,
 			);
 
 			try {

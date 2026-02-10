@@ -33,6 +33,8 @@ async function main() {
 		apiKey: config.ai.apiKey,
 		model: config.ai.model,
 		systemPrompt: config.ai.systemPrompt,
+		attachmentMemoryLimit: config.ai.attachmentMemoryLimit,
+		attachmentDiskLimit: config.ai.attachmentDiskLimit,
 	});
 	const sendMessageUseCase = new SendMessageUseCase(chatRepo, aiAdapter, historyService, idGenerator, logger);
 	const getNextMessagePageUseCase = new GetNextMessagePageUseCase(discordMessagePageRepo, chatRepo);

@@ -1,6 +1,6 @@
 import { metrics, SpanStatusCode, trace } from '@opentelemetry/api';
 import { Conversation } from '../../domain/entities/conversation';
-import { Message, type MessageAttachment, MessageSource } from '../../domain/entities/message';
+import { Message, type MessageAttachment, type MessageSource } from '../../domain/entities/message';
 import type { IChatRepository } from '../../domain/repositories/chat-repository';
 import type { HistoryService } from '../../domain/services/history-service';
 import { Role } from '../../domain/value-objects/role';
