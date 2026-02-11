@@ -1,7 +1,7 @@
 import { integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import type { Message, MessageAttachmentData } from '../../core/domain/entities/message';
-import { Role } from '../../core/domain/value-objects/role';
 import { MessageSource } from '../../core/domain/entities/message';
+import { Role } from '../../core/domain/value-objects/role';
 
 export const roleEnum = pgEnum('role', [Role.USER, Role.ASSISTANT, Role.SYSTEM, Role.FUNCTION]);
 export const messageSourceEnum = pgEnum('message_source', [MessageSource.DISCORD, MessageSource.WEB]);

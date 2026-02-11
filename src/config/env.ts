@@ -9,6 +9,7 @@ export const config = {
 		systemPrompt: process.env.SYSTEM_PROMPT ?? 'You are a helpful AI assistant.',
 		attachmentMemoryLimit: Number(process.env.ATTACHMENT_MEMORY_LIMIT) || 20 * 1024 * 1024,
 		attachmentDiskLimit: Number(process.env.ATTACHMENT_DISK_LIMIT) || 100 * 1024 * 1024,
+		maxRetries: Number(process.env.AI_MAX_RETRIES) || 3,
 	},
 	logging: {
 		level: process.env.LOG_LEVEL ?? 'info',

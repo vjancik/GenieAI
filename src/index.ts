@@ -35,6 +35,7 @@ async function main() {
 		systemPrompt: config.ai.systemPrompt,
 		attachmentMemoryLimit: config.ai.attachmentMemoryLimit,
 		attachmentDiskLimit: config.ai.attachmentDiskLimit,
+		maxRetries: config.ai.maxRetries,
 	});
 	const sendMessageUseCase = new SendMessageUseCase(chatRepo, aiAdapter, historyService, idGenerator, logger);
 	const getNextMessagePageUseCase = new GetNextMessagePageUseCase(discordMessagePageRepo, chatRepo);

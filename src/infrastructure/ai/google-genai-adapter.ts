@@ -31,7 +31,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 	private static activeUploads = 0;
 	private static uploadWaiters: (() => void)[] = [];
 
-	private readonly maxRetries = 3;
+	private readonly maxRetries: number;
 
 	private readonly attachmentMemoryLimit: number;
 	private readonly attachmentDiskLimit: number;
@@ -45,6 +45,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 			systemPrompt: string;
 			attachmentMemoryLimit: number;
 			attachmentDiskLimit: number;
+			maxRetries: number;
 		},
 	) {
 		this.client = new GoogleGenAI({ apiKey: config.apiKey, apiVersion: 'v1beta' });
@@ -52,6 +53,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 		this.systemPrompt = config.systemPrompt;
 		this.attachmentMemoryLimit = config.attachmentMemoryLimit;
 		this.attachmentDiskLimit = config.attachmentDiskLimit;
+		this.maxRetries = config.maxRetries;
 		this.fileService = new GenAIFileService(this.client, logger);
 		this.bufferService = new StreamingBufferService(join(tmpdir(), 'genie-ai-bot'), logger);
 	}
@@ -98,17 +100,41 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 					attachmentUpdates: attachmentUpdates.length > 0 ? attachmentUpdates : undefined,
 				};
 			} catch (error) {
-				const is503 = error instanceof ApiError && error.status === 503;
-				const isEmptyResponse = error instanceof AIProviderError && error.message === 'Empty response from AI model';
+				const isRetryable =
+					(error instanceof ApiError && (error.status === 503 || error.status === 429)) ||
+					(error instanceof AIProviderError && error.message === 'Empty response from AI model');
 
-				if ((is503 || isEmptyResponse) && attempt < this.maxRetries) {
+				if (isRetryable && attempt < this.maxRetries) {
+					const statusText = error instanceof ApiError ? `HTTP ${error.status}` : 'empty response';
 					this.logger.warn(
 						`Retryable error (attempt ${attempt + 1}/${
 							this.maxRetries
-						}) due to ${is503 ? '503 Service Unavailable' : 'empty response'}. Retrying in ${2 ** attempt}s...`,
+						}) due to ${statusText}. Retrying in ${2 ** attempt}s...`,
 					);
 					await new Promise((resolve) => setTimeout(resolve, 1000 * 2 ** attempt));
 					continue;
+				}
+
+				if (error instanceof ApiError) {
+					switch (error.status) {
+						case 404:
+							throw new AIProviderError(`Model not found: ${this.model}. Please check your configuration.`, error);
+						case 429:
+							throw new AIProviderError('Rate limit exceeded for Google GenAI API. Max retries exhausted.', error);
+						case 400:
+							throw new AIProviderError(
+								'Invalid request sent to Google GenAI API. This might be due to content policy (safety filters) or invalid parameters.',
+								error,
+							);
+						case 401:
+						case 403:
+							throw new AIProviderError(
+								'Authentication failed or permission denied with Google GenAI API. Please check your API key.',
+								error,
+							);
+						case 503:
+							throw new AIProviderError('Google GenAI service is unavailable. Max retries exhausted.', error);
+					}
 				}
 
 				if (error instanceof AIProviderError) throw error;

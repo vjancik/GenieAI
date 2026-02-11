@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { beforeEach, describe, expect, mock, test, type Mock } from 'bun:test';
 import type { IAttachmentManager } from '../../src/core/application/interfaces/attachment-manager';
 import type { ILogger } from '../../src/core/application/interfaces/logger.interface';
 import { Message, type MessageAttachment, MessageSource } from '../../src/core/domain/entities/message';
@@ -40,6 +40,14 @@ mock.module('@google/genai/node', () => ({
 		FAILED: 'FAILED',
 		STATE_UNSPECIFIED: 'STATE_UNSPECIFIED',
 	},
+	ApiError: class ApiError extends Error {
+		status: number;
+		constructor({ message, status }: { message: string; status: number }) {
+			super(message);
+			this.status = status;
+			this.name = 'ApiError';
+		}
+	},
 }));
 
 // 2. Import the component under test
@@ -64,6 +72,7 @@ describe('GoogleGenAIAdapter', () => {
 		mockChatsCreate.mockClear();
 		mockFilesUpload.mockClear();
 		mockFilesGet.mockClear();
+		(mockLogger.warn as Mock<ILogger['warn']>).mockClear();
 
 		mockAttachmentManager = {
 			getAttachmentStream: mock(async (_attachment: MessageAttachment, _messageId: string) => ({
@@ -82,6 +91,7 @@ describe('GoogleGenAIAdapter', () => {
 			systemPrompt: 'mock-system-prompt',
 			attachmentMemoryLimit: 20 * 1024 * 1024,
 			attachmentDiskLimit: 100 * 1024 * 1024,
+			maxRetries: 3,
 		});
 	});
 
@@ -97,7 +107,6 @@ describe('GoogleGenAIAdapter', () => {
 			}),
 		];
 
-		// Pass history only
 		const response = await adapter.generateContent(history);
 
 		expect(response.content).toBe('Mocked AI Response');
@@ -117,17 +126,106 @@ describe('GoogleGenAIAdapter', () => {
 			}),
 		];
 
-		// Pass history only
 		await adapter.generateContent(history);
 
 		const callArgs = mockSendMessage.mock.calls[0];
 		if (!callArgs) throw new Error('mockSendMessage should have been called');
 		const payload = callArgs[0] as { message: { text: string }[] };
 
-		// payload is { message: [ { text: 'Test Prompt' } ] }
-		// The adapter should have formatted the message
 		expect(payload.message).toBeDefined();
 		const parts = payload.message;
 		expect(parts[0]?.text).toContain('Test Prompt');
+	});
+
+	test('should retry on 503 error and eventually succeed', async () => {
+		mockSendMessage.mockImplementationOnce(async () => {
+			const { ApiError } = await import('@google/genai/node');
+			throw new ApiError({ message: 'Service Unavailable', status: 503 });
+		});
+
+		const history: Message[] = [
+			Message.create({
+				id: '1',
+				role: Role.USER,
+				content: 'Hello',
+				timestamp: new Date(),
+				source: MessageSource.DISCORD,
+				metadata: { authorName: 'Tester' },
+			}),
+		];
+
+		const response = await adapter.generateContent(history);
+		expect(response.content).toBe('Mocked AI Response');
+		expect(mockSendMessage).toHaveBeenCalledTimes(2);
+		expect(mockLogger.warn).toHaveBeenCalledWith(
+			expect.stringContaining('Retryable error (attempt 1/3) due to HTTP 503'),
+		);
+	});
+
+	test('should retry on 429 error and eventually succeed', async () => {
+		mockSendMessage.mockImplementationOnce(async () => {
+			const { ApiError } = await import('@google/genai/node');
+			throw new ApiError({ message: 'Rate Limit Exceeded', status: 429 });
+		});
+
+		const history: Message[] = [
+			Message.create({
+				id: '1',
+				role: Role.USER,
+				content: 'Hello',
+				timestamp: new Date(),
+				source: MessageSource.DISCORD,
+				metadata: { authorName: 'Tester' },
+			}),
+		];
+
+		const response = await adapter.generateContent(history);
+		expect(response.content).toBe('Mocked AI Response');
+		expect(mockSendMessage).toHaveBeenCalledTimes(2);
+		expect(mockLogger.warn).toHaveBeenCalledWith(
+			expect.stringContaining('Retryable error (attempt 1/3) due to HTTP 429'),
+		);
+	});
+
+	test('should fail immediately on 404 error', async () => {
+		mockSendMessage.mockImplementationOnce(async () => {
+			const { ApiError } = await import('@google/genai/node');
+			throw new ApiError({ message: 'Model Not Found', status: 404 });
+		});
+
+		const history: Message[] = [
+			Message.create({
+				id: '1',
+				role: Role.USER,
+				content: 'Hello',
+				timestamp: new Date(),
+				source: MessageSource.DISCORD,
+				metadata: { authorName: 'Tester' },
+			}),
+		];
+
+		await expect(adapter.generateContent(history)).rejects.toThrow('Model not found');
+		expect(mockSendMessage).toHaveBeenCalledTimes(1);
+	});
+
+	test('should fail immediately on 400 error', async () => {
+		mockSendMessage.mockImplementationOnce(async () => {
+			const { ApiError } = await import('@google/genai/node');
+			throw new ApiError({ message: 'Invalid Request', status: 400 });
+		});
+
+		const history: Message[] = [
+			Message.create({
+				id: '1',
+				role: Role.USER,
+				content: 'Hello',
+				timestamp: new Date(),
+				source: MessageSource.DISCORD,
+				metadata: { authorName: 'Tester' },
+			}),
+		];
+
+		await expect(adapter.generateContent(history)).rejects.toThrow('Invalid request sent to Google GenAI API');
+		expect(mockSendMessage).toHaveBeenCalledTimes(1);
 	});
 });
