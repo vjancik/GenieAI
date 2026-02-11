@@ -22,7 +22,7 @@ export class PinoLogger implements ILogger {
 			// 1. Console Stream
 			if (format === 'text') {
 				streams.push({
-					level: level as string,
+					level: level,
 					stream: {
 						write: (msg: string) => {
 							try {
@@ -67,13 +67,13 @@ export class PinoLogger implements ILogger {
 					},
 				});
 			} else {
-				streams.push({ level: level as string, stream: process.stdout });
+				streams.push({ level, stream: process.stdout });
 			}
 
 			// 2. OpenTelemetry Stream (if configured)
 			if (otelEndpoint) {
 				streams.push({
-					level: level as string,
+					level,
 					stream: pino.transport({
 						target: 'pino-opentelemetry-transport',
 						options: {

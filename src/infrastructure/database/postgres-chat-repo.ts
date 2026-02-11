@@ -15,13 +15,14 @@ import { discordMessages, messages } from './schema';
 
 interface MessageRow {
 	id: string;
-	role: string;
+	role: Role;
 	content: string;
 	timestamp: string | number | Date;
 	metadata: Record<string, unknown> | null;
 	parent_id: string | null;
 	attachments: MessageAttachmentData[];
-	source: string;
+	source: MessageSource;
+	[key: string]: unknown;
 }
 
 export class PostgresChatRepository implements IChatRepository {
@@ -45,7 +46,7 @@ export class PostgresChatRepository implements IChatRepository {
 					.onConflictDoUpdate({
 						target: [messages.id],
 						set: {
-							role: message.role as Role.USER | Role.ASSISTANT | Role.SYSTEM | Role.FUNCTION,
+							role: message.role,
 							content: message.content,
 							timestamp: message.timestamp,
 							metadata: message.metadata,
@@ -104,9 +105,9 @@ export class PostgresChatRepository implements IChatRepository {
 		}
 	}
 
-	async getHistory(messageId: string, limit: number = 50): Promise<Message[]> {
+	async getHistory(messageId: string, limit: number = 100): Promise<Message[]> {
 		try {
-			const results = await this.db.execute(sql`
+			const results = await this.db.execute<MessageRow>(sql`
                 WITH RECURSIVE history AS (
                     SELECT 
                         id, role, content, timestamp, metadata, parent_id, attachments, source, 1 as level
@@ -122,20 +123,19 @@ export class PostgresChatRepository implements IChatRepository {
                 SELECT * FROM history ORDER BY timestamp DESC
             `);
 
-			return (results.rows as unknown as MessageRow[]).reverse().map((r) =>
+			return results.rows.reverse().map((r) =>
 				Message.create({
 					id: r.id,
-					role: r.role as Role,
+					role: r.role,
 					content: r.content,
 					timestamp: new Date(r.timestamp),
 					metadata: r.metadata ?? undefined,
 					parentId: r.parent_id ?? undefined,
 					attachments: (r.attachments ?? []).map((a) => new BaseAttachment(a)),
-					source: r.source as MessageSource,
+					source: r.source,
 				}),
 			);
 		} catch (error) {
-			if (error instanceof DatabaseError) throw error;
 			throw new DatabaseError('Failed to fetch conversation history', error);
 		}
 	}
@@ -148,13 +148,13 @@ export class PostgresChatRepository implements IChatRepository {
 
 			return Message.create({
 				id: result.id,
-				role: result.role as Role,
+				role: result.role,
 				content: result.content,
 				timestamp: result.timestamp,
 				metadata: result.metadata ?? undefined,
 				parentId: result.parentId ?? undefined,
 				attachments: (result.attachments ?? []).map((a) => new BaseAttachment(a)),
-				source: result.source as MessageSource,
+				source: result.source,
 			});
 		} catch (error) {
 			throw new DatabaseError('Failed to retrieve message from database', error);
