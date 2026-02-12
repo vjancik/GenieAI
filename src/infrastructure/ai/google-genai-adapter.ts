@@ -1,7 +1,17 @@
 import { unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ApiError, type Content, GoogleGenAI, type Part } from '@google/genai/node';
+import {
+	ApiError,
+	type Content,
+	createModelContent,
+	createPartFromBase64,
+	createPartFromText,
+	createPartFromUri,
+	createUserContent,
+	GoogleGenAI,
+	type Part,
+} from '@google/genai/node';
 import type { IAttachmentManager } from '../../core/application/interfaces/attachment-manager';
 import type {
 	AttachmentUpdate,
@@ -48,7 +58,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 			maxRetries: number;
 		},
 	) {
-		this.client = new GoogleGenAI({ apiKey: config.apiKey, apiVersion: 'v1beta' });
+		this.client = new GoogleGenAI({ apiKey: config.apiKey });
 		this.model = config.model;
 		this.systemPrompt = config.systemPrompt;
 		this.attachmentMemoryLimit = config.attachmentMemoryLimit;
@@ -60,34 +70,24 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 
 	async generateContent(history: Message[]): Promise<GenerationResult<GenAIAttachmentPersistenceMetadata>> {
 		const attachmentUpdates: AttachmentUpdate<GenAIAttachmentPersistenceMetadata>[] = [];
-		const pastHistoryMessages = history.slice(0, -1);
-		const lastMessage = history[history.length - 1];
-
-		if (!lastMessage) {
+		if (history.length === 0) {
 			throw new AIProviderError('Cannot generate content from empty history');
 		}
 
 		const googleHistory = await Promise.all(
-			pastHistoryMessages.map(async (msg) => {
+			history.map(async (msg) => {
 				const { content, updates } = await this.mapMessageToContent(msg);
 				attachmentUpdates.push(...updates);
 				return content;
 			}),
 		);
 
-		const chat = this.client.chats.create({
-			model: this.model,
-			config: { systemInstruction: this.systemPrompt },
-			history: googleHistory,
-		});
-
-		const { content: lastContent, updates: lastUpdates } = await this.mapMessageToContent(lastMessage);
-		attachmentUpdates.push(...lastUpdates);
-
 		for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
 			try {
-				const result = await chat.sendMessage({
-					message: lastContent.parts ?? [],
+				const result = await this.client.models.generateContent({
+					model: this.model,
+					config: { systemInstruction: this.systemPrompt },
+					contents: googleHistory,
 				});
 
 				const responseText = result.text;
@@ -146,11 +146,9 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 	}
 
 	private async mapMessageToContent(msg: Message): Promise<{ content: Content; updates: AttachmentUpdate[] }> {
-		// We format each message to include author name and dynamic labels,
-		// but keep them as separate turns for the LLM.
 		const { text } = msg.formatForAI();
 
-		const parts: Content['parts'] = [{ text }];
+		const parts = [createPartFromText(text)];
 		const updates: AttachmentUpdate[] = [];
 
 		if (msg.attachments?.length) {
@@ -169,10 +167,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 		}
 
 		return {
-			content: {
-				role: this.mapRole(msg.role),
-				parts: parts,
-			},
+			content: msg.role === Role.ASSISTANT ? createModelContent(parts) : createUserContent(parts),
 			updates,
 		};
 	}
@@ -188,7 +183,7 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 				: undefined;
 
 			if (persistence.genaiUri && genaiExpirationTime && genaiExpirationTime > new Date()) {
-				return { part: { fileData: { fileUri: persistence.genaiUri, mimeType: attachment.mimeType } } };
+				return { part: createPartFromUri(persistence.genaiUri, attachment.mimeType) };
 			}
 
 			if (attachment.url) {
@@ -204,15 +199,19 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 						},
 					};
 
+					if (!fileMetadata.uri) {
+						throw new AIProviderError(`File uploaded but no URI returned for ${attachment.name}`);
+					}
+
 					return {
-						part: { fileData: { fileUri: fileMetadata.uri, mimeType: attachment.mimeType } },
+						part: createPartFromUri(fileMetadata.uri, attachment.mimeType),
 						update,
 					};
 				}
 			}
 
 			if (attachment.data) {
-				return { part: { inlineData: { mimeType: attachment.mimeType, data: attachment.data } } };
+				return { part: createPartFromBase64(attachment.data, attachment.mimeType) };
 			}
 		} catch (error) {
 			this.logger.error('Error resolving attachment:', error);
@@ -270,17 +269,6 @@ export class GoogleGenAIAdapter implements IGenerativeAIModel<GenAIAttachmentPer
 			waiter();
 		} else {
 			GoogleGenAIAdapter.activeUploads--;
-		}
-	}
-
-	private mapRole(role: Role): string {
-		switch (role) {
-			case Role.USER:
-				return 'user';
-			case Role.ASSISTANT:
-				return 'model';
-			default:
-				return 'user';
 		}
 	}
 }

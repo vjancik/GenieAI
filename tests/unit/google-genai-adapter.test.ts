@@ -1,39 +1,26 @@
-import { beforeEach, describe, expect, mock, test, type Mock } from 'bun:test';
+import { beforeEach, describe, expect, type Mock, mock, test } from 'bun:test';
 import type { IAttachmentManager } from '../../src/core/application/interfaces/attachment-manager';
 import type { ILogger } from '../../src/core/application/interfaces/logger.interface';
 import { Message, type MessageAttachment, MessageSource } from '../../src/core/domain/entities/message';
 import { Role } from '../../src/core/domain/value-objects/role';
 
-// 1. Mock the @google/genai module BEFORE importing the component that uses it
-const mockSendMessage = mock(async (_req: unknown) => ({
-	text: 'Mocked AI Response',
-}));
-
-const mockChatsCreate = mock(() => ({
-	sendMessage: mockSendMessage,
-}));
-
-const mockFilesUpload = mock(async () => ({
-	uri: 'mock-file-uri',
-	state: 'ACTIVE',
-	name: 'mock-file-name',
-}));
-
-const mockFilesGet = mock(async () => ({
-	state: 'ACTIVE',
-	name: 'mock-file-name',
-}));
+import { mockFilesGet, mockFilesUpload, mockGenerateContent } from '../mocks/google-genai.mock';
 
 mock.module('@google/genai/node', () => ({
 	GoogleGenAI: mock(() => ({
-		chats: {
-			create: mockChatsCreate,
+		models: {
+			generateContent: mockGenerateContent,
 		},
 		files: {
 			upload: mockFilesUpload,
 			get: mockFilesGet,
 		},
 	})),
+	createUserContent: (parts: unknown) => ({ role: 'user', parts }),
+	createModelContent: (parts: unknown) => ({ role: 'model', parts }),
+	createPartFromText: (text: string) => ({ text }),
+	createPartFromUri: (uri: string, mimeType: string) => ({ fileData: { fileUri: uri, mimeType } }),
+	createPartFromBase64: (data: string, mimeType: string) => ({ inlineData: { data, mimeType } }),
 	FileState: {
 		ACTIVE: 'ACTIVE',
 		PROCESSING: 'PROCESSING',
@@ -68,8 +55,7 @@ describe('GoogleGenAIAdapter', () => {
 
 	beforeEach(() => {
 		// Reset mocks
-		mockSendMessage.mockClear();
-		mockChatsCreate.mockClear();
+		mockGenerateContent.mockClear();
 		mockFilesUpload.mockClear();
 		mockFilesGet.mockClear();
 		(mockLogger.warn as Mock<ILogger['warn']>).mockClear();
@@ -110,8 +96,7 @@ describe('GoogleGenAIAdapter', () => {
 		const response = await adapter.generateContent(history);
 
 		expect(response.content).toBe('Mocked AI Response');
-		expect(mockChatsCreate).toHaveBeenCalled();
-		expect(mockSendMessage).toHaveBeenCalled();
+		expect(mockGenerateContent).toHaveBeenCalled();
 	});
 
 	test('should handle text conversion correctly', async () => {
@@ -128,17 +113,19 @@ describe('GoogleGenAIAdapter', () => {
 
 		await adapter.generateContent(history);
 
-		const callArgs = mockSendMessage.mock.calls[0];
-		if (!callArgs) throw new Error('mockSendMessage should have been called');
-		const payload = callArgs[0] as { message: { text: string }[] };
+		const callArgs = mockGenerateContent.mock.calls[0];
+		if (!callArgs) throw new Error('mockGenerateContent should have been called');
+		const payload = callArgs[0] as { contents: unknown[] };
 
-		expect(payload.message).toBeDefined();
-		const parts = payload.message;
-		expect(parts[0]?.text).toContain('Test Prompt');
+		expect(payload.contents).toBeDefined();
+		const contents = payload.contents;
+		// The last message in history is the second turn (index 1) in googleHistory
+		// Wait, history only has 1 message here.
+		expect((contents[0] as { parts: { text: string }[] }).parts[0]?.text).toContain('Test Prompt');
 	});
 
 	test('should retry on 503 error and eventually succeed', async () => {
-		mockSendMessage.mockImplementationOnce(async () => {
+		mockGenerateContent.mockImplementationOnce(async () => {
 			const { ApiError } = await import('@google/genai/node');
 			throw new ApiError({ message: 'Service Unavailable', status: 503 });
 		});
@@ -156,14 +143,14 @@ describe('GoogleGenAIAdapter', () => {
 
 		const response = await adapter.generateContent(history);
 		expect(response.content).toBe('Mocked AI Response');
-		expect(mockSendMessage).toHaveBeenCalledTimes(2);
+		expect(mockGenerateContent).toHaveBeenCalledTimes(2);
 		expect(mockLogger.warn).toHaveBeenCalledWith(
 			expect.stringContaining('Retryable error (attempt 1/3) due to HTTP 503'),
 		);
 	});
 
 	test('should retry on 429 error and eventually succeed', async () => {
-		mockSendMessage.mockImplementationOnce(async () => {
+		mockGenerateContent.mockImplementationOnce(async () => {
 			const { ApiError } = await import('@google/genai/node');
 			throw new ApiError({ message: 'Rate Limit Exceeded', status: 429 });
 		});
@@ -181,14 +168,14 @@ describe('GoogleGenAIAdapter', () => {
 
 		const response = await adapter.generateContent(history);
 		expect(response.content).toBe('Mocked AI Response');
-		expect(mockSendMessage).toHaveBeenCalledTimes(2);
+		expect(mockGenerateContent).toHaveBeenCalledTimes(2);
 		expect(mockLogger.warn).toHaveBeenCalledWith(
 			expect.stringContaining('Retryable error (attempt 1/3) due to HTTP 429'),
 		);
 	});
 
 	test('should fail immediately on 404 error', async () => {
-		mockSendMessage.mockImplementationOnce(async () => {
+		mockGenerateContent.mockImplementationOnce(async () => {
 			const { ApiError } = await import('@google/genai/node');
 			throw new ApiError({ message: 'Model Not Found', status: 404 });
 		});
@@ -205,11 +192,11 @@ describe('GoogleGenAIAdapter', () => {
 		];
 
 		await expect(adapter.generateContent(history)).rejects.toThrow('Model not found');
-		expect(mockSendMessage).toHaveBeenCalledTimes(1);
+		expect(mockGenerateContent).toHaveBeenCalledTimes(1);
 	});
 
 	test('should fail immediately on 400 error', async () => {
-		mockSendMessage.mockImplementationOnce(async () => {
+		mockGenerateContent.mockImplementationOnce(async () => {
 			const { ApiError } = await import('@google/genai/node');
 			throw new ApiError({ message: 'Invalid Request', status: 400 });
 		});
@@ -226,6 +213,6 @@ describe('GoogleGenAIAdapter', () => {
 		];
 
 		await expect(adapter.generateContent(history)).rejects.toThrow('Invalid request sent to Google GenAI API');
-		expect(mockSendMessage).toHaveBeenCalledTimes(1);
+		expect(mockGenerateContent).toHaveBeenCalledTimes(1);
 	});
 });
