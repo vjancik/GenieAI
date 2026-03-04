@@ -1,0 +1,12 @@
+services:
+    db:
+        image: postgres:17
+        environment:
+            POSTGRES_USER: genie
+            POSTGRES_PASSWORD: genie
+            POSTGRES_DB: genie
+        ports:
+            - "5432:5432"
+        volumes:
+            - ./db:/var/lib/postgresql/data
+        restart: unless-stopped
