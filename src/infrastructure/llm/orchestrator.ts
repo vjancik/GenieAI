@@ -1,10 +1,19 @@
 import { load } from "@langchain/core/load";
 import type { BaseMessage } from "@langchain/core/messages";
 import {
+    AIMessage,
     HumanMessage,
     SystemMessage,
     ToolMessage,
 } from "@langchain/core/messages";
+import {
+    Command,
+    END,
+    MessagesAnnotation,
+    START,
+    StateGraph,
+} from "@langchain/langgraph";
+import { AppError } from "../../domain/errors/AppError.ts";
 import type { DiscordMessage } from "../../domain/message/Message.ts";
 import type { Logger } from "../logging/logger.ts";
 import {
@@ -71,23 +80,28 @@ function extractContent(response: BaseMessage): string {
         .join("");
 }
 
-/** Result of a single LLM invocation: display content + all generated messages to persist. */
-interface InvokeResult {
-    content: string;
-    messages: BaseMessage[];
-}
+/** Graph state type from MessagesAnnotation */
+type GraphState = typeof MessagesAnnotation.State;
 
 /**
- * Orchestrates the multi-agent triage routing pipeline.
+ * Orchestrates the multi-agent triage routing pipeline as a LangGraph StateGraph.
  *
- * Flow:
- * 1. Invoke the triage model (single pass) to classify the request
- * 2. Inspect which tool was called
- * 3a. get_website / get_video_transcription → execute the tool, pass results to general model
- * 3b. route_to_search → invoke the search model (with grounding)
- * 3c. route_to_general / no tool → invoke the general model directly
+ * Graph topology:
+ *   START → triage → executeTool → general → END
+ *                  ↘ general → END
+ *                  ↘ search  → END
+ *
+ * Routing decisions are made in the triage node via Command.goto.
+ * Routing-only tool calls (route_to_search, route_to_general) are NOT added
+ * to the messages state, preventing context bloat in subsequent turns.
+ * Real tool calls (get_website, get_video_transcription) DO add their triage
+ * AIMessage to state because it is required for the ToolMessage to be valid context.
  */
 export class Orchestrator {
+    // Type inferred from buildGraph() return — avoids complex LangGraph generic annotation
+    // biome-ignore lint/suspicious/noExplicitAny: LangGraph compiled graph generic is impractical to annotate
+    private readonly graph: ReturnType<() => any>;
+
     constructor(
         private readonly triageModel: TriageModel,
         private readonly generalModel: GeneralModel,
@@ -95,7 +109,9 @@ export class Orchestrator {
         private readonly getWebsiteTool: GetWebsiteTool,
         private readonly getVideoTranscriptionTool: GetVideoTranscriptionTool,
         private readonly logger: Logger,
-    ) {}
+    ) {
+        this.graph = this.buildGraph();
+    }
 
     /**
      * Process a user message with conversation history.
@@ -111,165 +127,183 @@ export class Orchestrator {
         history: BaseMessage[],
         userMessage: string,
     ): Promise<{ content: string; newMessages: BaseMessage[] }> {
+        const initialMessages = [...history, new HumanMessage(userMessage)];
+        const result = (await this.graph.invoke({
+            messages: initialMessages,
+        })) as { messages: BaseMessage[] };
+
+        // Everything after the initial seed is "new" — generated during this turn
+        const newMessages = result.messages.slice(initialMessages.length);
+        const lastMessage = result.messages.at(-1);
+        if (!lastMessage) {
+            throw new AppError(
+                "ORCHESTRATOR_NO_RESPONSE",
+                "Graph produced no messages",
+            );
+        }
+
+        return { content: extractContent(lastMessage), newMessages };
+    }
+
+    /**
+     * Compiles the LangGraph StateGraph. Called once in the constructor.
+     *
+     * The triage node uses Command.goto for dynamic routing without conditional edges.
+     * Routing sentinel calls (route_to_search / route_to_general) are consumed here
+     * without being added to graph state — they are invisible in persisted history.
+     */
+    private buildGraph() {
+        return new StateGraph(MessagesAnnotation)
+            .addNode("triage", (state: GraphState) => this.triageNode(state), {
+                ends: ["executeTool", "general", "search"],
+            })
+            .addNode("executeTool", (state: GraphState) =>
+                this.executeToolNode(state),
+            )
+            .addNode("general", (state: GraphState) => this.generalNode(state))
+            .addNode("search", (state: GraphState) => this.searchNode(state))
+            .addEdge(START, "triage")
+            .addEdge("executeTool", "general")
+            .addEdge("general", END)
+            .addEdge("search", END)
+            .compile();
+    }
+
+    /**
+     * Triage node: classifies the request via a single model call and routes accordingly.
+     *
+     * Returns a Command that both updates state (adding the triage AIMessage only for
+     * real tool calls) and routes to the correct next node.
+     *
+     * Routing sentinels (route_to_search / route_to_general) are intentionally NOT added
+     * to messages state to prevent context bloat in future turns.
+     */
+    private async triageNode(state: GraphState): Promise<Command> {
         const messages: BaseMessage[] = [
             new SystemMessage(TRIAGE_SYSTEM_PROMPT),
-            ...history,
-            new HumanMessage(userMessage),
+            ...state.messages,
         ];
 
-        // Single-pass triage: one LLM call to classify the request
         const triageResponse = await this.triageModel.invoke(messages);
-        const toolCalls = triageResponse.tool_calls ?? [];
+        const toolCall = (triageResponse as AIMessage).tool_calls?.[0];
 
-        if (toolCalls.length === 0) {
-            // No tool selected — fall through to general agent
+        if (!toolCall) {
             this.logger.info(
                 "Triage made no tool call, routing to general agent",
             );
-            const result = await this.invokeGeneral([
-                ...history,
-                new HumanMessage(userMessage),
-            ]);
-            return { content: result.content, newMessages: result.messages };
+            return new Command({ goto: "general" });
         }
 
-        // toolCalls.length > 0 is guaranteed by the guard above
-        const toolCall = toolCalls[0];
-        if (!toolCall) {
-            const result = await this.invokeGeneral([
-                ...history,
-                new HumanMessage(userMessage),
-            ]);
-            return { content: result.content, newMessages: result.messages };
-        }
         this.logger.info({ toolName: toolCall.name }, "Triage selected route");
 
         switch (toolCall.name) {
-            case "get_website": {
-                const toolResult = await this.getWebsiteTool.invoke(
-                    toolCall.args as { urls: string[] },
-                );
-                const result = await this.invokeGeneralWithToolResult(
-                    history,
-                    userMessage,
-                    triageResponse,
-                    toolCall.id ?? "",
-                    toolResult,
-                );
-                return {
-                    content: result.content,
-                    newMessages: result.messages,
-                };
-            }
-            case "get_video_transcription": {
-                const toolResult = await this.getVideoTranscriptionTool.invoke(
-                    toolCall.args as { urls: string[] },
-                );
-                const result = await this.invokeGeneralWithToolResult(
-                    history,
-                    userMessage,
-                    triageResponse,
-                    toolCall.id ?? "",
-                    toolResult,
-                );
-                return {
-                    content: result.content,
-                    newMessages: result.messages,
-                };
-            }
-            case "route_to_search": {
-                const result = await this.invokeSearch([
-                    ...history,
-                    new HumanMessage(userMessage),
-                ]);
-                return {
-                    content: result.content,
-                    newMessages: result.messages,
-                };
-            }
-            case "route_to_general": {
-                const result = await this.invokeGeneral([
-                    ...history,
-                    new HumanMessage(userMessage),
-                ]);
-                return {
-                    content: result.content,
-                    newMessages: result.messages,
-                };
-            }
-            default: {
+            case "get_website":
+            case "get_video_transcription":
+                // Real tool call: add triage AIMessage to state so the ToolMessage
+                // created in executeToolNode has a valid tool_call_id in history
+                return new Command({
+                    goto: "executeTool",
+                    update: { messages: [triageResponse] },
+                });
+
+            case "route_to_search":
+                // Routing sentinel: do NOT add triage message to state
+                return new Command({ goto: "search" });
+
+            case "route_to_general":
+                // Routing sentinel: do NOT add triage message to state
+                return new Command({ goto: "general" });
+
+            default:
                 this.logger.warn(
                     { toolName: toolCall.name },
                     "Unknown triage tool, falling back to general",
                 );
-                const result = await this.invokeGeneral([
-                    ...history,
-                    new HumanMessage(userMessage),
-                ]);
-                return {
-                    content: result.content,
-                    newMessages: result.messages,
-                };
-            }
+                return new Command({ goto: "general" });
         }
     }
 
     /**
-     * Passes the triage conversation (including the tool result) to the stronger general model
-     * so it can formulate the final answer based on the retrieved content.
+     * Execute tool node: runs the content tool whose call was placed in state by triageNode.
      *
-     * The message sequence sent to the general model is:
-     *   [history...] → [human msg] → [triage AI msg with tool call] → [tool result] → [instruction]
-     *
-     * All three generated messages (triageAIMessage, ToolMessage, finalAIMessage) are returned
-     * for persistence so the full tool-use context is preserved in history.
+     * Reads the last message (the triage AIMessage with tool_calls) to determine which
+     * tool to run and with what arguments. Always routes to the general node via static edge.
      */
-    private async invokeGeneralWithToolResult(
-        history: BaseMessage[],
-        userMessage: string,
-        triageAiMessage: BaseMessage,
-        toolCallId: string,
-        toolResult: string,
-    ): Promise<InvokeResult> {
+    private async executeToolNode(
+        state: GraphState,
+    ): Promise<{ messages: BaseMessage[] }> {
+        const lastMsg = state.messages.at(-1);
+        const toolCall =
+            lastMsg instanceof AIMessage ? lastMsg.tool_calls?.[0] : undefined;
+
+        if (!toolCall) {
+            throw new AppError(
+                "ORCHESTRATOR_MISSING_TOOL_CALL",
+                "executeToolNode reached without a tool call in state",
+            );
+        }
+
+        let toolResult: string;
+        if (toolCall.name === "get_website") {
+            toolResult = await this.getWebsiteTool.invoke(
+                toolCall.args as { urls: string[] },
+            );
+        } else {
+            toolResult = await this.getVideoTranscriptionTool.invoke(
+                toolCall.args as { urls: string[] },
+            );
+        }
+
         const toolMessage = new ToolMessage({
             content: toolResult,
-            tool_call_id: toolCallId,
+            tool_call_id: toolCall.id ?? "",
         });
-        const messagesWithResult: BaseMessage[] = [
+
+        return { messages: [toolMessage] };
+    }
+
+    /**
+     * General agent node: generates the final answer using the general-purpose model.
+     *
+     * When the last state message is a ToolMessage (content tool path), appends an
+     * instruction prompt to focus the model on the retrieved content. This extra
+     * HumanMessage is passed transiently to the model and is NOT stored in state.
+     */
+    private async generalNode(
+        state: GraphState,
+    ): Promise<{ messages: BaseMessage[] }> {
+        const lastMsg = state.messages.at(-1);
+        const hasToolResult = lastMsg instanceof ToolMessage;
+
+        const invokeMessages: BaseMessage[] = [
             new SystemMessage(GENERAL_SYSTEM_PROMPT),
-            ...history,
-            new HumanMessage(userMessage),
-            triageAiMessage,
-            toolMessage,
-            new HumanMessage(
-                "Based on the retrieved content above, please answer the original question. " +
-                    "Keep your response under 1500 characters.",
-            ),
+            ...state.messages,
         ];
 
-        const response = await this.generalModel.invoke(messagesWithResult);
-        return {
-            content: extractContent(response),
-            // triageAiMessage contains the tool_call that makes toolMessage valid context
-            messages: [triageAiMessage, toolMessage, response],
-        };
+        if (hasToolResult) {
+            // Transient instruction: not added to state, only to the invoke call
+            invokeMessages.push(
+                new HumanMessage(
+                    "Based on the retrieved content above, please answer the original question. " +
+                        "Keep your response under 1500 characters.",
+                ),
+            );
+        }
+
+        const response = await this.generalModel.invoke(invokeMessages);
+        return { messages: [response] };
     }
 
-    private async invokeGeneral(
-        messages: BaseMessage[],
-    ): Promise<InvokeResult> {
-        const response = await this.generalModel.invoke([
-            new SystemMessage(GENERAL_SYSTEM_PROMPT),
-            ...messages,
-        ]);
-        return { content: extractContent(response), messages: [response] };
-    }
-
-    private async invokeSearch(messages: BaseMessage[]): Promise<InvokeResult> {
+    /**
+     * Search agent node: generates an answer using the Google-Search-grounded model.
+     */
+    private async searchNode(
+        state: GraphState,
+    ): Promise<{ messages: BaseMessage[] }> {
         const response = await this.searchModel.invoke([
             new SystemMessage(SEARCH_SYSTEM_PROMPT),
-            ...messages,
+            ...state.messages,
         ]);
-        return { content: extractContent(response), messages: [response] };
+        return { messages: [response] };
     }
 }

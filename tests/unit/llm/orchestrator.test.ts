@@ -32,26 +32,30 @@ function makeTriageWithToolCall(
     toolArgs: Record<string, unknown> = {},
 ) {
     return {
-        invoke: mock(async (_messages: BaseMessage[]) => ({
-            content: "",
-            tool_calls: [
-                {
-                    name: toolName,
-                    args: toolArgs,
-                    id: "call_test_123",
-                },
-            ],
-        })),
+        invoke: mock(
+            async (_messages: BaseMessage[]) =>
+                new AIMessage({
+                    content: "",
+                    tool_calls: [
+                        {
+                            name: toolName,
+                            args: toolArgs,
+                            id: "call_test_123",
+                            type: "tool_call",
+                        },
+                    ],
+                }),
+        ),
     };
 }
 
 /** Helper to create a triage model mock with no tool call */
 function makeTriageWithNoToolCall() {
     return {
-        invoke: mock(async (_messages: BaseMessage[]) => ({
-            content: "I am confused",
-            tool_calls: [],
-        })),
+        invoke: mock(
+            async (_messages: BaseMessage[]) =>
+                new AIMessage({ content: "I am confused", tool_calls: [] }),
+        ),
     };
 }
 
@@ -365,6 +369,6 @@ describe("Orchestrator.process", () => {
         expect(result.content).toBe("The actual answer.");
         // But the full message (including thought) is preserved in newMessages
         expect(result.newMessages).toHaveLength(1);
-        expect(result.newMessages[0]).toBe(thoughtResponse);
+        expect(result.newMessages[0]).toEqual(thoughtResponse);
     });
 });

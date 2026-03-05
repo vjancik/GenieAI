@@ -5,6 +5,7 @@
         "dotenv",
         "eslintcache",
         "langchain",
+        "langgraph",
         "WEBVTT"
     ]
 }
