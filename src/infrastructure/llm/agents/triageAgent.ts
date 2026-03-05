@@ -73,7 +73,10 @@ export function createTriageModel({
     const llm = new ChatGoogle({
         model: "gemini-3.1-flash-lite-preview",
         apiKey: config.googleApiKey,
-        thinkingLevel: "minimal",
+        thinkingConfig: {
+            thinkingLevel: config.triageThinkingLevel,
+            includeThoughts: config.includeLLMThoughts,
+        },
         // thinkingBudget: config.triageThinkingBudget,
     });
 

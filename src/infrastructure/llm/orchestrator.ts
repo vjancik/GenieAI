@@ -1,8 +1,10 @@
-import { load } from "@langchain/core/load";
 import type { BaseMessage } from "@langchain/core/messages";
 import {
     AIMessage,
+    ChatMessage,
+    FunctionMessage,
     HumanMessage,
+    RemoveMessage,
     SystemMessage,
     ToolMessage,
 } from "@langchain/core/messages";
@@ -30,30 +32,140 @@ import type { GetVideoTranscriptionTool } from "./tools/getVideoTranscriptionToo
 import type { GetWebsiteTool } from "./tools/getWebsiteTool.ts";
 
 /**
+ * Returns a copy of the serialized message JSON with thought: true content parts removed.
+ * Only modifies messages whose kwargs.content is an array (structured content).
+ * String content messages pass through unchanged.
+ */
+function stripThoughtChunks(
+    json: Record<string, unknown>,
+): Record<string, unknown> {
+    const kwargs = json.kwargs as Record<string, unknown> | undefined;
+    if (!Array.isArray(kwargs?.content)) return json;
+    return {
+        ...json,
+        kwargs: {
+            ...kwargs,
+            content: (kwargs.content as Record<string, unknown>[]).filter(
+                (part) =>
+                    !(
+                        typeof part === "object" &&
+                        part !== null &&
+                        part.thought === true
+                    ),
+            ),
+        },
+    };
+}
+
+/**
+ * Reconstructs a LangChain {@link BaseMessage} from a stored `.toJSON()` object.
+ * Dispatches on the last element of the `id` array to select the correct constructor.
+ *
+ * - {@link SystemMessage} in history is a programmatic error (they are injected dynamically,
+ *   not stored). Logs an error and throws in non-production environments.
+ * - {@link ChatMessage}, {@link FunctionMessage}, {@link RemoveMessage} are unexpected but
+ *   valid — logged as warnings and reconstructed.
+ * - Completely unknown types log a warning and throw an {@link AppError}.
+ */
+function deserializeMessage(
+    json: Record<string, unknown>,
+    logger: Logger,
+): BaseMessage {
+    const className = (json.id as string[]).at(-1);
+    const kwargs = json.kwargs as Record<string, unknown>;
+
+    switch (className) {
+        case "HumanMessage":
+            return new HumanMessage(kwargs);
+        case "AIMessage":
+            return new AIMessage(kwargs);
+        case "ToolMessage":
+            return new ToolMessage(
+                kwargs as unknown as ConstructorParameters<
+                    typeof ToolMessage
+                >[0],
+            );
+        case "ChatMessage":
+            logger.warn(
+                { className },
+                "Unexpected message type in history chain",
+            );
+            return new ChatMessage(
+                kwargs as unknown as ConstructorParameters<
+                    typeof ChatMessage
+                >[0],
+            );
+        case "FunctionMessage":
+            logger.warn(
+                { className },
+                "Unexpected message type in history chain",
+            );
+            return new FunctionMessage(
+                kwargs as unknown as ConstructorParameters<
+                    typeof FunctionMessage
+                >[0],
+            );
+        case "RemoveMessage":
+            logger.warn(
+                { className },
+                "Unexpected message type in history chain",
+            );
+            return new RemoveMessage(
+                kwargs as unknown as ConstructorParameters<
+                    typeof RemoveMessage
+                >[0],
+            );
+        case "SystemMessage": {
+            logger.error(
+                { className },
+                "SystemMessage found in stored history — this is a programmatic error; SystemMessages should be injected dynamically, not persisted",
+            );
+            if (process.env.NODE_ENV !== "production") {
+                throw new AppError(
+                    "INVALID_STORED_MESSAGE_TYPE",
+                    "SystemMessage must not be stored in history — inject it dynamically instead",
+                );
+            }
+            return new SystemMessage(kwargs);
+        }
+        default:
+            logger.warn({ className }, "Unknown message type in history chain");
+            throw new AppError(
+                "UNKNOWN_MESSAGE_TYPE",
+                `Cannot deserialize unknown message type: ${className}`,
+            );
+    }
+}
+
+/**
  * Converts persisted {@link DiscordMessage} records into LangChain {@link BaseMessage} objects.
  *
  * Each DiscordMessage can contain multiple serialized LangChain messages
  * (e.g. a bot turn with tool use stores [triageAIMessage, ToolMessage, finalAIMessage]).
- * All messages are deserialized via load() and flattened into a single chronological array.
+ * All messages are deserialized by dispatching on the serialized class name and flattened
+ * into a single chronological array.
+ *
+ * Optionally strips thought chunks (thought: true) from content arrays before construction,
+ * reducing LLM request size. Gemini uses thoughtSignatures for context continuity, not the
+ * thought text itself, so stripping is safe.
  *
  * @param records - Chronologically ordered DB message records
+ * @param logger - Logger for warnings/errors on unexpected message types
+ * @param filterThoughtChunks - Strip thought: true content parts before reconstruction (default: true)
  */
-export async function dbMessagesToLangchain(
+export function dbMessagesToLangchain(
     records: DiscordMessage[],
-): Promise<BaseMessage[]> {
-    const nested = await Promise.all(
-        records.map((r) =>
-            Promise.all(
-                r.langchainMessages.map(
-                    // load() expects a JSON string; JSON.stringify round-trips the parsed object
-                    // TODO: I hate this, let's do better
-                    (json) =>
-                        load(JSON.stringify(json)) as Promise<BaseMessage>,
-                ),
-            ),
-        ),
+    logger: Logger,
+    filterThoughtChunks = true,
+): BaseMessage[] {
+    return records.flatMap((r) =>
+        r.langchainMessages.map((json) => {
+            const prepared = filterThoughtChunks
+                ? stripThoughtChunks(json)
+                : json;
+            return deserializeMessage(prepared, logger);
+        }),
     );
-    return nested.flat();
 }
 
 /**

@@ -1,7 +1,14 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { BaseMessage } from "@langchain/core/messages";
-import { AIMessage, HumanMessage } from "@langchain/core/messages";
+import {
+    AIMessage,
+    ChatMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+} from "@langchain/core/messages";
 import pino from "pino";
+import { AppError } from "../../../src/domain/errors/AppError.ts";
 import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
 import {
     dbMessagesToLangchain,
@@ -69,7 +76,7 @@ describe("dbMessagesToLangchain", () => {
         createdAt: new Date(),
     };
 
-    test("converts a serialized HumanMessage back to HumanMessage", async () => {
+    test("converts a serialized HumanMessage back to HumanMessage", () => {
         const original = new HumanMessage("Hello!");
         const records: DiscordMessage[] = [
             {
@@ -80,13 +87,13 @@ describe("dbMessagesToLangchain", () => {
                 ],
             },
         ];
-        const result = await dbMessagesToLangchain(records);
+        const result = dbMessagesToLangchain(records, testLogger);
         expect(result).toHaveLength(1);
         expect(result[0]).toBeInstanceOf(HumanMessage);
         expect(result[0]?.content).toBe("Hello!");
     });
 
-    test("converts a serialized AIMessage back to AIMessage", async () => {
+    test("converts a serialized AIMessage back to AIMessage", () => {
         const original = new AIMessage("Hi there!");
         const records: DiscordMessage[] = [
             {
@@ -97,13 +104,13 @@ describe("dbMessagesToLangchain", () => {
                 ],
             },
         ];
-        const result = await dbMessagesToLangchain(records);
+        const result = dbMessagesToLangchain(records, testLogger);
         expect(result).toHaveLength(1);
         expect(result[0]).toBeInstanceOf(AIMessage);
         expect(result[0]?.content).toBe("Hi there!");
     });
 
-    test("flattens multiple langchainMessages per record into a single array", async () => {
+    test("flattens multiple langchainMessages per record into a single array", () => {
         const ai1 = new AIMessage("triage response");
         const ai2 = new AIMessage("final response");
         const records: DiscordMessage[] = [
@@ -116,7 +123,7 @@ describe("dbMessagesToLangchain", () => {
                 ],
             },
         ];
-        const result = await dbMessagesToLangchain(records);
+        const result = dbMessagesToLangchain(records, testLogger);
         expect(result).toHaveLength(2);
         expect(result[0]).toBeInstanceOf(AIMessage);
         expect(result[0]?.content).toBe("triage response");
@@ -124,7 +131,7 @@ describe("dbMessagesToLangchain", () => {
         expect(result[1]?.content).toBe("final response");
     });
 
-    test("preserves chronological order across multiple records", async () => {
+    test("preserves chronological order across multiple records", () => {
         const human = new HumanMessage("msg1");
         const ai = new AIMessage("msg2");
         const humanFollow = new HumanMessage("msg3");
@@ -154,15 +161,187 @@ describe("dbMessagesToLangchain", () => {
                 ],
             },
         ];
-        const result = await dbMessagesToLangchain(records);
+        const result = dbMessagesToLangchain(records, testLogger);
         expect(result).toHaveLength(3);
         expect(result[0]).toBeInstanceOf(HumanMessage);
         expect(result[1]).toBeInstanceOf(AIMessage);
         expect(result[2]).toBeInstanceOf(HumanMessage);
     });
 
-    test("returns empty array for empty input", async () => {
-        expect(await dbMessagesToLangchain([])).toEqual([]);
+    test("returns empty array for empty input", () => {
+        expect(dbMessagesToLangchain([], testLogger)).toEqual([]);
+    });
+});
+
+describe("dbMessagesToLangchain — constructor dispatch", () => {
+    const baseMsg: Omit<DiscordMessage, "role" | "langchainMessages"> = {
+        id: "uuid-1",
+        discordMessageId: "discord-1",
+        repliesToDiscordId: null,
+        channelId: "ch-1",
+        guildId: "guild-1",
+        createdAt: new Date(),
+    };
+
+    function singleRecord(json: Record<string, unknown>): DiscordMessage[] {
+        return [
+            {
+                ...baseMsg,
+                role: "human",
+                langchainMessages: [json],
+            },
+        ];
+    }
+
+    test("round-trips HumanMessage", () => {
+        const original = new HumanMessage("hello");
+        const result = dbMessagesToLangchain(
+            singleRecord(
+                original.toJSON() as unknown as Record<string, unknown>,
+            ),
+            testLogger,
+        );
+        expect(result[0]).toBeInstanceOf(HumanMessage);
+        expect(result[0]?.content).toBe("hello");
+    });
+
+    test("round-trips AIMessage", () => {
+        const original = new AIMessage("hi");
+        const result = dbMessagesToLangchain(
+            singleRecord(
+                original.toJSON() as unknown as Record<string, unknown>,
+            ),
+            testLogger,
+        );
+        expect(result[0]).toBeInstanceOf(AIMessage);
+        expect(result[0]?.content).toBe("hi");
+    });
+
+    test("round-trips ToolMessage preserving tool_call_id", () => {
+        const original = new ToolMessage({
+            content: "tool result",
+            tool_call_id: "call_abc",
+        });
+        const result = dbMessagesToLangchain(
+            singleRecord(
+                original.toJSON() as unknown as Record<string, unknown>,
+            ),
+            testLogger,
+        );
+        expect(result[0]).toBeInstanceOf(ToolMessage);
+        expect((result[0] as ToolMessage).tool_call_id).toBe("call_abc");
+        expect(result[0]?.content).toBe("tool result");
+    });
+
+    test("throws AppError for SystemMessage", () => {
+        const original = new SystemMessage("system prompt");
+        expect(() =>
+            dbMessagesToLangchain(
+                singleRecord(
+                    original.toJSON() as unknown as Record<string, unknown>,
+                ),
+                testLogger,
+            ),
+        ).toThrow(AppError);
+    });
+
+    test("throws AppError for unknown message type", () => {
+        const unknown: Record<string, unknown> = {
+            lc: 1,
+            type: "constructor",
+            id: ["langchain_core", "messages", "WeirdMessage"],
+            kwargs: { content: "hi" },
+        };
+        expect(() =>
+            dbMessagesToLangchain(singleRecord(unknown), testLogger),
+        ).toThrow(AppError);
+    });
+
+    test("round-trips ChatMessage and logs a warning", () => {
+        const warnMock = mock(() => {});
+        const mockLogger = {
+            ...testLogger,
+            warn: warnMock,
+        } as typeof testLogger;
+
+        const original = new ChatMessage({ content: "hi", role: "user" });
+        const result = dbMessagesToLangchain(
+            singleRecord(
+                original.toJSON() as unknown as Record<string, unknown>,
+            ),
+            mockLogger,
+        );
+        expect(result[0]).toBeInstanceOf(ChatMessage);
+        expect(warnMock).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("dbMessagesToLangchain — thought chunk filtering", () => {
+    const baseMsg: Omit<DiscordMessage, "role" | "langchainMessages"> = {
+        id: "uuid-1",
+        discordMessageId: "discord-1",
+        repliesToDiscordId: null,
+        channelId: "ch-1",
+        guildId: "guild-1",
+        createdAt: new Date(),
+    };
+
+    /** Serialized AIMessage with a thought chunk and a visible text chunk */
+    function thoughtRecord(): DiscordMessage[] {
+        const msg = new AIMessage({
+            content: [
+                { type: "text", text: "internal reasoning", thought: true },
+                { type: "text", text: "visible answer" },
+            ],
+        });
+        return [
+            {
+                ...baseMsg,
+                role: "assistant",
+                langchainMessages: [
+                    msg.toJSON() as unknown as Record<string, unknown>,
+                ],
+            },
+        ];
+    }
+
+    test("strips thought chunks by default (filterThoughtChunks = true)", () => {
+        const [result] = dbMessagesToLangchain(thoughtRecord(), testLogger);
+        expect(Array.isArray(result?.content)).toBe(true);
+        const parts = result?.content as {
+            type: string;
+            text: string;
+            thought?: boolean;
+        }[];
+        expect(parts.some((p) => p.thought === true)).toBe(false);
+        expect(parts).toHaveLength(1);
+        expect(parts[0]?.text).toBe("visible answer");
+    });
+
+    test("preserves thought chunks when filterThoughtChunks = false", () => {
+        const [result] = dbMessagesToLangchain(
+            thoughtRecord(),
+            testLogger,
+            false,
+        );
+        const parts = result?.content as { type: string; thought?: boolean }[];
+        expect(parts.some((p) => p.thought === true)).toBe(true);
+        expect(parts).toHaveLength(2);
+    });
+
+    test("does not affect messages with string content", () => {
+        const msg = new HumanMessage("plain text");
+        const records: DiscordMessage[] = [
+            {
+                ...baseMsg,
+                role: "human",
+                langchainMessages: [
+                    msg.toJSON() as unknown as Record<string, unknown>,
+                ],
+            },
+        ];
+        const [result] = dbMessagesToLangchain(records, testLogger);
+        expect(result?.content).toBe("plain text");
     });
 });
 

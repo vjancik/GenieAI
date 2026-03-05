@@ -26,7 +26,10 @@ export function createSearchModel(config: AppConfig) {
         // TODO: switch to gemini-3-flash-preview, lite for development suffices
         model: "gemini-3.1-flash-lite-preview",
         apiKey: config.googleApiKey,
-        thinkingLevel: "high",
+        thinkingConfig: {
+            thinkingLevel: "high",
+            includeThoughts: config.includeLLMThoughts,
+        },
     });
 
     // Bind the native Google Search grounding tool — this uses Gemini's built-in

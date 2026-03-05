@@ -46,10 +46,11 @@ export class HandleDiscordMention {
         // Fetch existing reply chain if this message is a reply
         const history =
             params.referencedMessageId !== null
-                ? await dbMessagesToLangchain(
+                ? dbMessagesToLangchain(
                       await this.messageRepo.fetchChain(
                           params.referencedMessageId,
                       ),
+                      this.logger,
                   )
                 : [];
 

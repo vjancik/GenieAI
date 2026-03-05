@@ -12,6 +12,7 @@ export interface AppConfig {
     /** Number of reasoning tokens allocated to the triage model. Default: 512. Set to 0 to disable. */
     triageThinkingBudget: number;
     triageThinkingLevel: string;
+    includeLLMThoughts: boolean;
     /** Pino log level. Default: "info" */
     logLevel: string;
 }
@@ -52,6 +53,7 @@ function loadConfig(): AppConfig {
             process.env.TRIAGE_THINKING_BUDGET ?? "512",
         ),
         triageThinkingLevel: process.env.TRIAGE_THINKING_LEVEL ?? "minimal",
+        includeLLMThoughts: process.env.INCLUDE_LLM_THOUGHTS === "true",
         logLevel: process.env.LOG_LEVEL ?? "info",
     };
 }
