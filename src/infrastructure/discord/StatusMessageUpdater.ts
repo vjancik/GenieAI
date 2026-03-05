@@ -16,12 +16,17 @@ interface MessagePending {
 }
 
 /**
- * Rate-limited Discord message editor for progressive status updates.
+ * Debouncing + rate-limited Discord message editor for progressive status updates.
  *
- * Enforces a maximum of 1 edit per second per channel to stay within Discord's
- * rate limits. If a channel is on cooldown, incoming updates cancel the previous
- * pending timer for that message and reschedule with the latest content, preventing
- * stale intermediate states and avoiding queue accumulation.
+ * Every `scheduleUpdate` call schedules a deferred edit — never fires immediately.
+ * The delay is `max(0, rateLimitMs - elapsedSinceLastEdit)`, where a channel with
+ * no prior edit is treated as `elapsed = 0` (full `rateLimitMs` delay). This prevents
+ * UI thrashing when a status update arrives immediately after the initial placeholder
+ * reply is sent.
+ *
+ * If a new update arrives while a timer is already pending for the same message, the
+ * content is updated in-place (last wins) without resetting the timer. This collapses
+ * rapid intermediate states into a single edit at the originally scheduled time.
  *
  * Rate limiting is tracked per channel; pending content is tracked per message
  * (a message always belongs to exactly one channel, so these are consistent).
@@ -43,12 +48,16 @@ export class StatusMessageUpdater {
     ) {}
 
     /**
-     * Schedule (or immediately execute) a status edit on a Discord message.
+     * Schedule a debounced status edit on a Discord message.
      *
-     * If the channel's rate limit has cleared, the edit fires immediately.
-     * Otherwise, any previously pending edit for this message is cancelled and
-     * the new content is queued; the timer reads the latest stored content when
-     * it fires, ensuring only the most recent status is ever displayed.
+     * Always deferred — never fires synchronously. The delay is
+     * `max(0, rateLimitMs - elapsed)` where a channel with no prior edit is
+     * treated as `elapsed = 0` so the very first update always waits the full
+     * `rateLimitMs`, preventing thrash against the initial placeholder message.
+     *
+     * If a timer for this message is already pending, the content is updated in-place
+     * and the existing timer is kept — no reset. This collapses rapid intermediate
+     * states into a single edit at the originally scheduled time.
      *
      * @param channelId - Discord channel ID (rate limit key)
      * @param messageId - Discord message ID being edited (deduplication key)
@@ -61,45 +70,27 @@ export class StatusMessageUpdater {
         editFn: EditFn,
         content: string,
     ): void {
-        const now = Date.now();
-        const lastEdit = this.channelLastEdit.get(channelId) ?? 0;
-        const elapsed = now - lastEdit;
-
-        if (elapsed >= this.rateLimitMs) {
-            // Rate limit cleared — execute immediately
-            this.channelLastEdit.set(channelId, now);
-            this.fireEdit(messageId, editFn, content);
-        } else {
-            // Within rate limit window — cancel existing timer and reschedule
-            const existing = this.pendingByMessage.get(messageId);
-            if (existing) {
-                // Update content in-place so the timer closure reads the latest value
-                existing.latestContent = content;
-                existing.editFn = editFn;
-                clearTimeout(existing.timer);
-                existing.timer = this.createTimer(
-                    channelId,
-                    messageId,
-                    this.rateLimitMs - elapsed,
-                );
-            } else {
-                const pending: MessagePending = {
-                    channelId,
-                    latestContent: content,
-                    editFn,
-                    // timer assigned below; object created first so the closure can reference it
-                    timer: undefined as unknown as ReturnType<
-                        typeof setTimeout
-                    >,
-                };
-                pending.timer = this.createTimer(
-                    channelId,
-                    messageId,
-                    this.rateLimitMs - elapsed,
-                );
-                this.pendingByMessage.set(messageId, pending);
-            }
+        const existing = this.pendingByMessage.get(messageId);
+        if (existing) {
+            // Timer already scheduled — update content in-place, keep the timer as-is
+            existing.latestContent = content;
+            existing.editFn = editFn;
+            return;
         }
+
+        // No pending timer — compute delay and schedule
+        const lastEdit = this.channelLastEdit.get(channelId);
+        // Treat no prior edit as elapsed = 0 so the first update always waits rateLimitMs
+        const elapsed = lastEdit !== undefined ? Date.now() - lastEdit : 0;
+        const delay = Math.max(0, this.rateLimitMs - elapsed);
+
+        const pending: MessagePending = {
+            channelId,
+            latestContent: content,
+            editFn,
+            timer: this.createTimer(channelId, messageId, delay),
+        };
+        this.pendingByMessage.set(messageId, pending);
     }
 
     /**

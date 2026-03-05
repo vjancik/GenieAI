@@ -11,85 +11,98 @@ const RATE_MS = 50;
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 describe("StatusMessageUpdater", () => {
-    test("executes edit immediately when channel has no prior edit", async () => {
+    test("never fires synchronously — always deferred even with no prior edit", () => {
         const updater = new StatusMessageUpdater(testLogger, RATE_MS);
         const editFn = mock(async () => {});
 
         updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status A");
 
-        expect(editFn).toHaveBeenCalledTimes(1);
-        expect(editFn).toHaveBeenCalledWith("Status A");
-    });
-
-    test("does not fire immediately when channel is within rate limit window", async () => {
-        const updater = new StatusMessageUpdater(testLogger, RATE_MS);
-        const editFn = mock(async () => {});
-
-        // First edit fires immediately
-        updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status A");
-        expect(editFn).toHaveBeenCalledTimes(1);
-
-        // Second edit within the rate limit window — must be queued
-        updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status B");
-        expect(editFn).toHaveBeenCalledTimes(1);
+        // Must NOT have fired yet — always deferred by rateLimitMs
+        expect(editFn).toHaveBeenCalledTimes(0);
     });
 
     test(
-        "fires queued edit after rate limit window expires",
+        "fires after rateLimitMs when channel has no prior edit",
         async () => {
             const updater = new StatusMessageUpdater(testLogger, RATE_MS);
             const editFn = mock(async () => {});
 
             updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status A");
-            updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status B");
-
-            expect(editFn).toHaveBeenCalledTimes(1);
+            expect(editFn).toHaveBeenCalledTimes(0);
 
             await wait(RATE_MS + 20);
 
-            expect(editFn).toHaveBeenCalledTimes(2);
-            expect(editFn).toHaveBeenLastCalledWith("Status B");
+            expect(editFn).toHaveBeenCalledTimes(1);
+            expect(editFn).toHaveBeenCalledWith("Status A");
         },
         { retry: 5 },
-    ); // Retries to mitigate flakiness from timing issues
+    );
+
+    test("does not fire a second time when a new update arrives while timer is pending", () => {
+        const updater = new StatusMessageUpdater(testLogger, RATE_MS);
+        const editFn = mock(async () => {});
+
+        updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status A");
+        updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status B");
+
+        // Still zero — timer not fired yet and no second timer was created
+        expect(editFn).toHaveBeenCalledTimes(0);
+    });
 
     test(
-        "uses latest content when multiple updates arrive during cooldown",
+        "fires once with the latest content when multiple updates arrive before timer",
         async () => {
             const updater = new StatusMessageUpdater(testLogger, RATE_MS);
             const editFn = mock(async () => {});
 
             updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status A");
-            // Rapidly queue several — only the last should fire
             updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status B");
             updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status C");
             updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status D");
 
-            expect(editFn).toHaveBeenCalledTimes(1);
-
             await wait(RATE_MS + 20);
 
-            expect(editFn).toHaveBeenCalledTimes(2);
-            expect(editFn).toHaveBeenLastCalledWith("Status D");
+            // Exactly one edit, with the last content
+            expect(editFn).toHaveBeenCalledTimes(1);
+            expect(editFn).toHaveBeenCalledWith("Status D");
         },
         { retry: 5 },
     );
 
     test(
-        "cancel() prevents a pending edit from firing",
+        "subsequent update after first fires uses remaining rate limit delay",
+        async () => {
+            const updater = new StatusMessageUpdater(testLogger, RATE_MS);
+            const editFn = mock(async () => {});
+
+            // First update — fires after RATE_MS
+            updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status A");
+            await wait(RATE_MS + 20);
+            expect(editFn).toHaveBeenCalledTimes(1);
+
+            // Second update arrives immediately after — fires after another ~RATE_MS
+            updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status B");
+            expect(editFn).toHaveBeenCalledTimes(1); // not yet
+
+            await wait(RATE_MS + 20);
+            expect(editFn).toHaveBeenCalledTimes(2);
+            expect(editFn).toHaveBeenLastCalledWith("Status B");
+        },
+        { retry: 5 },
+    );
+
+    test(
+        "cancel() prevents the pending edit from firing",
         async () => {
             const updater = new StatusMessageUpdater(testLogger, RATE_MS);
             const editFn = mock(async () => {});
 
             updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status A");
-            updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status B");
-
             updater.cancel("msg-1");
 
             await wait(RATE_MS + 20);
 
-            // Only the first immediate call should have happened
-            expect(editFn).toHaveBeenCalledTimes(1);
+            expect(editFn).toHaveBeenCalledTimes(0);
         },
         { retry: 5 },
     );
@@ -99,7 +112,7 @@ describe("StatusMessageUpdater", () => {
         expect(() => updater.cancel("msg-never-seen")).not.toThrow();
     });
 
-    test("rate limit is per channel — different channels do not share cooldown", () => {
+    test("rate limit is per channel — first update on each channel is independently deferred", async () => {
         const updater = new StatusMessageUpdater(testLogger, RATE_MS);
         const editFnA = mock(async () => {});
         const editFnB = mock(async () => {});
@@ -107,9 +120,9 @@ describe("StatusMessageUpdater", () => {
         updater.scheduleUpdate("ch-1", "msg-1", editFnA, "A");
         updater.scheduleUpdate("ch-2", "msg-2", editFnB, "B");
 
-        // Both fire immediately because they are independent channels
-        expect(editFnA).toHaveBeenCalledTimes(1);
-        expect(editFnB).toHaveBeenCalledTimes(1);
+        // Neither fires synchronously
+        expect(editFnA).toHaveBeenCalledTimes(0);
+        expect(editFnB).toHaveBeenCalledTimes(0);
     });
 
     test("editFn errors are caught and do not propagate", async () => {
@@ -118,12 +131,10 @@ describe("StatusMessageUpdater", () => {
             throw new Error("Discord API error");
         });
 
-        expect(() => {
-            updater.scheduleUpdate("ch-1", "msg-1", throwingEdit, "Status A");
-        }).not.toThrow();
+        updater.scheduleUpdate("ch-1", "msg-1", throwingEdit, "Status A");
 
-        // Allow the rejected promise's catch handler to run
-        await Promise.resolve();
+        // Allow the timer to fire and the rejected promise to be handled
+        await wait(RATE_MS + 20);
         await Promise.resolve();
     });
 });
