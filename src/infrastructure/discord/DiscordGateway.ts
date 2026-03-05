@@ -1,7 +1,36 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import { Client, Events, GatewayIntentBits, type Message } from "discord.js";
+import type {
+    AgentStatusUpdate,
+    OnStatusUpdate,
+} from "../../application/types/AgentStatus.ts";
+import {
+    AgentStatusType,
+    assertNever,
+} from "../../application/types/AgentStatus.ts";
 import { DiscordError } from "../../domain/errors/AppError.ts";
 import type { Logger } from "../logging/logger.ts";
+import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
+
+/**
+ * Maps an agent status update to the Discord message string shown to the user
+ * while the bot is processing. The switch is exhaustive: any new AgentStatusType
+ * value without a matching case here is caught at compile time via `assertNever`.
+ */
+function statusUpdateContent(update: AgentStatusUpdate): string {
+    switch (update.type) {
+        case AgentStatusType.TRIAGE:
+            return "Analyzing your request since";
+        case AgentStatusType.FETCHING_CONTENT:
+            return "Fetching content since";
+        case AgentStatusType.GENERATING:
+            return "Generating response since";
+        case AgentStatusType.SEARCHING:
+            return "Searching the web since";
+        default:
+            return assertNever(update.type);
+    }
+}
 
 /**
  * Determines whether the bot was explicitly @mentioned in a Discord message,
@@ -51,6 +80,7 @@ export type MentionHandler = (params: {
     channelId: string;
     guildId: string | null;
     userContent: string;
+    onStatusUpdate?: OnStatusUpdate;
 }) => Promise<{ response: string; newMessages: BaseMessage[] }>;
 
 /** Callback invoked after the bot's reply is sent, to persist the bot's message. */
@@ -79,6 +109,7 @@ export class DiscordGateway {
         private readonly mentionHandler: MentionHandler,
         private readonly botReplySaved: BotReplySavedCallback,
         private readonly logger: Logger,
+        private readonly statusUpdater: StatusMessageUpdater,
     ) {
         this.client = new Client({
             intents: [
@@ -147,6 +178,23 @@ export class DiscordGateway {
             "Processing bot mention",
         );
 
+        // Send the "Thinking" placeholder immediately so the user gets instant feedback
+        const thinkingMessage = await message.reply(
+            `*Thinking since <t:${Math.round(Date.now() / 1000)}:R>*`,
+        );
+
+        const onStatusUpdate: OnStatusUpdate = (update) => {
+            this.statusUpdater.scheduleUpdate(
+                message.channelId,
+                thinkingMessage.id,
+                async (content) =>
+                    void (await thinkingMessage.edit(
+                        `*${content} <t:${Math.round(Date.now() / 1000)}:R>*`,
+                    )),
+                statusUpdateContent(update),
+            );
+        };
+
         try {
             const { response, newMessages } = await this.mentionHandler({
                 discordMessageId: message.id,
@@ -154,7 +202,11 @@ export class DiscordGateway {
                 channelId: message.channelId,
                 guildId: message.guildId,
                 userContent,
+                onStatusUpdate,
             });
+
+            // Cancel any pending status edit before writing the final response
+            this.statusUpdater.cancel(thinkingMessage.id);
 
             // Truncate to Discord's 2000-character limit
             const safeResponse =
@@ -162,14 +214,15 @@ export class DiscordGateway {
                     ? `${response.slice(0, 1997)}...`
                     : response;
 
-            // Send the reply and get the sent message's Discord ID for persistence
-            const sentMessage = await message.reply(safeResponse);
+            // Replace the placeholder with the final response
+            await thinkingMessage.edit(safeResponse);
 
+            // Persist only after the final response is successfully displayed
             await this.botReplySaved({
-                botDiscordMessageId: sentMessage.id,
+                botDiscordMessageId: thinkingMessage.id,
                 repliesToDiscordId: message.id,
-                channelId: sentMessage.channelId,
-                guildId: sentMessage.guildId,
+                channelId: thinkingMessage.channelId,
+                guildId: thinkingMessage.guildId,
                 newMessages,
             });
         } catch (err) {
@@ -177,12 +230,15 @@ export class DiscordGateway {
                 { err, discordMessageId: message.id },
                 "Failed to process mention",
             );
+
+            this.statusUpdater.cancel(thinkingMessage.id);
+
             try {
-                await message.reply(
+                await thinkingMessage.edit(
                     "Sorry, I encountered an error processing your request.",
                 );
-            } catch (replyErr) {
-                throw new DiscordError("Failed to send error reply", replyErr);
+            } catch (editErr) {
+                throw new DiscordError("Failed to send error reply", editErr);
             }
         }
     }

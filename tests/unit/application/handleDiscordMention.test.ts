@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
 import { HandleDiscordMention } from "../../../src/application/HandleDiscordMention.ts";
+import type { OnStatusUpdate } from "../../../src/application/types/AgentStatus.ts";
 import type { IMessageRepository } from "../../../src/domain/message/IMessageRepository.ts";
 import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
 import type { Orchestrator } from "../../../src/infrastructure/llm/orchestrator.ts";
@@ -133,6 +134,33 @@ describe("HandleDiscordMention.handle", () => {
         // baseMessage has one serialized AIMessage → deserialized to 1 BaseMessage
         expect(history).toHaveLength(1);
         expect(userMessage).toBe("Follow-up");
+    });
+
+    test("forwards onStatusUpdate to orchestrator.process as the third argument", async () => {
+        const repo = makeRepo();
+        const orchestrator = makeOrchestrator();
+        const handler = new HandleDiscordMention(
+            repo,
+            orchestrator as never,
+            testLogger,
+        );
+
+        const onStatusUpdate: OnStatusUpdate = mock(() => {});
+
+        await handler.handle({
+            discordMessageId: "user-msg-1",
+            referencedMessageId: null,
+            channelId: "ch-1",
+            guildId: null,
+            userContent: "Hello",
+            onStatusUpdate,
+        });
+
+        const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock
+            .calls[0];
+        expect(firstCall).toBeDefined();
+        // Third argument must be the exact callback passed in
+        expect(firstCall?.[2]).toBe(onStatusUpdate);
     });
 
     test("passes empty history to orchestrator when no reply chain", async () => {

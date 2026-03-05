@@ -15,6 +15,9 @@ import {
     START,
     StateGraph,
 } from "@langchain/langgraph";
+import { z } from "zod/v4";
+import type { OnStatusUpdate } from "../../application/types/AgentStatus.ts";
+import { AgentStatusType } from "../../application/types/AgentStatus.ts";
 import { AppError } from "../../domain/errors/AppError.ts";
 import type { DiscordMessage } from "../../domain/message/Message.ts";
 import type { Logger } from "../logging/logger.ts";
@@ -30,6 +33,23 @@ import type { TriageModel } from "./agents/triageAgent.ts";
 import { TRIAGE_SYSTEM_PROMPT } from "./agents/triageAgent.ts";
 import type { GetVideoTranscriptionTool } from "./tools/getVideoTranscriptionTool.ts";
 import type { GetWebsiteTool } from "./tools/getWebsiteTool.ts";
+
+/**
+ * Zod schema for the LangGraph runtime context passed to each node.
+ * Lives in context (not state) so it is never serialized by a checkpointer.
+ */
+const OrchestratorContextSchema = z.object({
+    onStatusUpdate: z.custom<OnStatusUpdate>().optional(),
+});
+
+type OrchestratorContext = z.infer<typeof OrchestratorContextSchema>;
+
+/**
+ * Config shape received by each node. LangGraph types `context` as potentially
+ * undefined even when a schema is provided, so it is optional here. The bound
+ * node functions always receive a config object, so `config` itself is non-optional.
+ */
+type NodeConfig = { context?: OrchestratorContext };
 
 /**
  * Returns a copy of the serialized message JSON with thought: true content parts removed.
@@ -234,15 +254,19 @@ export class Orchestrator {
      *
      * @param history - Prior messages in the reply chain, chronologically ordered
      * @param userMessage - The current user's message text
+     * @param onStatusUpdate - Optional callback invoked as the agent transitions between processing phases
      */
     async process(
         history: BaseMessage[],
         userMessage: string,
+        onStatusUpdate?: OnStatusUpdate,
     ): Promise<{ content: string; newMessages: BaseMessage[] }> {
         const initialMessages = [...history, new HumanMessage(userMessage)];
-        const result = (await this.graph.invoke({
-            messages: initialMessages,
-        })) as { messages: BaseMessage[] };
+        // Always pass context so nodes receive a non-optional config; onStatusUpdate may be undefined
+        const result = (await this.graph.invoke(
+            { messages: initialMessages },
+            { context: { onStatusUpdate } },
+        )) as { messages: BaseMessage[] };
 
         // Everything after the initial seed is "new" — generated during this turn
         const newMessages = result.messages.slice(initialMessages.length);
@@ -265,15 +289,13 @@ export class Orchestrator {
      * without being added to graph state — they are invisible in persisted history.
      */
     private buildGraph() {
-        return new StateGraph(MessagesAnnotation)
-            .addNode("triage", (state: GraphState) => this.triageNode(state), {
+        return new StateGraph(MessagesAnnotation, OrchestratorContextSchema)
+            .addNode("triage", this.triageNode.bind(this), {
                 ends: ["executeTool", "general", "search"],
             })
-            .addNode("executeTool", (state: GraphState) =>
-                this.executeToolNode(state),
-            )
-            .addNode("general", (state: GraphState) => this.generalNode(state))
-            .addNode("search", (state: GraphState) => this.searchNode(state))
+            .addNode("executeTool", this.executeToolNode.bind(this))
+            .addNode("general", this.generalNode.bind(this))
+            .addNode("search", this.searchNode.bind(this))
             .addEdge(START, "triage")
             .addEdge("executeTool", "general")
             .addEdge("general", END)
@@ -290,7 +312,11 @@ export class Orchestrator {
      * Routing sentinels (route_to_search / route_to_general) are intentionally NOT added
      * to messages state to prevent context bloat in future turns.
      */
-    private async triageNode(state: GraphState): Promise<Command> {
+    private async triageNode(
+        state: GraphState,
+        config: NodeConfig,
+    ): Promise<Command> {
+        config.context?.onStatusUpdate?.({ type: AgentStatusType.TRIAGE });
         const messages: BaseMessage[] = [
             new SystemMessage(TRIAGE_SYSTEM_PROMPT),
             ...state.messages,
@@ -343,7 +369,11 @@ export class Orchestrator {
      */
     private async executeToolNode(
         state: GraphState,
+        config: NodeConfig,
     ): Promise<{ messages: BaseMessage[] }> {
+        config.context?.onStatusUpdate?.({
+            type: AgentStatusType.FETCHING_CONTENT,
+        });
         const lastMsg = state.messages.at(-1);
         const toolCall =
             lastMsg instanceof AIMessage ? lastMsg.tool_calls?.[0] : undefined;
@@ -383,7 +413,9 @@ export class Orchestrator {
      */
     private async generalNode(
         state: GraphState,
+        config: NodeConfig,
     ): Promise<{ messages: BaseMessage[] }> {
+        config.context?.onStatusUpdate?.({ type: AgentStatusType.GENERATING });
         const lastMsg = state.messages.at(-1);
         const hasToolResult = lastMsg instanceof ToolMessage;
 
@@ -411,7 +443,9 @@ export class Orchestrator {
      */
     private async searchNode(
         state: GraphState,
+        config: NodeConfig,
     ): Promise<{ messages: BaseMessage[] }> {
+        config.context?.onStatusUpdate?.({ type: AgentStatusType.SEARCHING });
         const response = await this.searchModel.invoke([
             new SystemMessage(SEARCH_SYSTEM_PROMPT),
             ...state.messages,

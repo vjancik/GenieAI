@@ -8,6 +8,8 @@ import {
     ToolMessage,
 } from "@langchain/core/messages";
 import pino from "pino";
+import type { AgentStatusUpdate } from "../../../src/application/types/AgentStatus.ts";
+import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
 import { AppError } from "../../../src/domain/errors/AppError.ts";
 import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
 import {
@@ -549,5 +551,107 @@ describe("Orchestrator.process", () => {
         // But the full message (including thought) is preserved in newMessages
         expect(result.newMessages).toHaveLength(1);
         expect(result.newMessages[0]).toEqual(thoughtResponse);
+    });
+
+    test("emits TRIAGE and GENERATING status updates on general route", async () => {
+        const triageModel = makeTriageWithToolCall("route_to_general");
+        const generalModel = makeModel("response");
+        const searchModel = makeModel("search");
+        const websiteTool = makeTool("content");
+        const videoTool = makeTool("transcript");
+
+        const orchestrator = new Orchestrator(
+            triageModel as never,
+            generalModel as never,
+            searchModel as never,
+            websiteTool as never,
+            videoTool as never,
+            testLogger,
+        );
+
+        const updates: AgentStatusUpdate[] = [];
+        await orchestrator.process([], "Hello", (u) => updates.push(u));
+
+        expect(updates.map((u) => u.type)).toEqual([
+            AgentStatusType.TRIAGE,
+            AgentStatusType.GENERATING,
+        ]);
+    });
+
+    test("emits TRIAGE and SEARCHING status updates on search route", async () => {
+        const triageModel = makeTriageWithToolCall("route_to_search");
+        const generalModel = makeModel("response");
+        const searchModel = makeModel("search");
+        const websiteTool = makeTool("content");
+        const videoTool = makeTool("transcript");
+
+        const orchestrator = new Orchestrator(
+            triageModel as never,
+            generalModel as never,
+            searchModel as never,
+            websiteTool as never,
+            videoTool as never,
+            testLogger,
+        );
+
+        const updates: AgentStatusUpdate[] = [];
+        await orchestrator.process([], "What happened today?", (u) =>
+            updates.push(u),
+        );
+
+        expect(updates.map((u) => u.type)).toEqual([
+            AgentStatusType.TRIAGE,
+            AgentStatusType.SEARCHING,
+        ]);
+    });
+
+    test("emits TRIAGE, FETCHING_CONTENT, and GENERATING status updates on tool route", async () => {
+        const triageModel = makeTriageWithToolCall("get_website", {
+            urls: ["https://example.com"],
+        });
+        const generalModel = makeModel("summary");
+        const searchModel = makeModel("search");
+        const websiteTool = makeTool("page content");
+        const videoTool = makeTool("transcript");
+
+        const orchestrator = new Orchestrator(
+            triageModel as never,
+            generalModel as never,
+            searchModel as never,
+            websiteTool as never,
+            videoTool as never,
+            testLogger,
+        );
+
+        const updates: AgentStatusUpdate[] = [];
+        await orchestrator.process([], "Summarize example.com", (u) =>
+            updates.push(u),
+        );
+
+        expect(updates.map((u) => u.type)).toEqual([
+            AgentStatusType.TRIAGE,
+            AgentStatusType.FETCHING_CONTENT,
+            AgentStatusType.GENERATING,
+        ]);
+    });
+
+    test("works without onStatusUpdate (backward compatible)", async () => {
+        const triageModel = makeTriageWithToolCall("route_to_general");
+        const generalModel = makeModel("response");
+        const searchModel = makeModel("search");
+        const websiteTool = makeTool("content");
+        const videoTool = makeTool("transcript");
+
+        const orchestrator = new Orchestrator(
+            triageModel as never,
+            generalModel as never,
+            searchModel as never,
+            websiteTool as never,
+            videoTool as never,
+            testLogger,
+        );
+
+        // Two-arg call must still work; no callback provided
+        expect(orchestrator.process([], "Hello")).resolves.toBeDefined();
     });
 });

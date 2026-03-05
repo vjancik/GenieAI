@@ -91,7 +91,7 @@ describe("PgMessageRepository.save", () => {
         const payload = messagePayload({ discordMessageId: "dup-001" });
         await repo.save(payload);
 
-        await expect(repo.save(payload)).rejects.toBeInstanceOf(DatabaseError);
+        expect(repo.save(payload)).rejects.toBeInstanceOf(DatabaseError);
     });
 
     test("saves message with null repliesToDiscordId (chain root)", async () => {

@@ -1,9 +1,12 @@
 {
     "cSpell.words": [
         "bunx",
+        "checkpointer",
         "codecheck",
+        "cooldown",
         "dotenv",
         "eslintcache",
+        "kwargs",
         "langchain",
         "langgraph",
         "WEBVTT"

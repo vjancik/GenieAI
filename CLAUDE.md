@@ -18,6 +18,7 @@
 - use ?? instead of || for nullish coalescing
 - don't install dotenv, .env is loaded automatically by bun
 - don't use the "any" type to resolve type errors, except where it actually makes sense logically
+- prefer bind(this / instanceObj), when passing methods as callbacks, to lambda wrappers
 
 # Third-Party APIs & SDKs Rules
 - use `context7` MCP to look up up-to-date API docs and usage patterns for major libraries (e.g. langchain, @langchain/google) before writing code using them, or when trying to resolve type discrepancies  

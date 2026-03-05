@@ -4,6 +4,7 @@ import type { IMessageRepository } from "../domain/message/IMessageRepository.ts
 import type { Orchestrator } from "../infrastructure/llm/orchestrator.ts";
 import { dbMessagesToLangchain } from "../infrastructure/llm/orchestrator.ts";
 import type { Logger } from "../infrastructure/logging/logger.ts";
+import type { OnStatusUpdate } from "./types/AgentStatus.ts";
 
 /**
  * Application use case: handle an incoming Discord @mention.
@@ -34,6 +35,7 @@ export class HandleDiscordMention {
      * @param params.channelId - Discord channel snowflake
      * @param params.guildId - Discord guild snowflake (null for DMs)
      * @param params.userContent - Message content with bot mention stripped
+     * @param params.onStatusUpdate - Optional callback forwarded to the orchestrator for live status updates
      * @returns The AI-generated response string and the new LangChain messages generated
      */
     async handle(params: {
@@ -42,6 +44,7 @@ export class HandleDiscordMention {
         channelId: string;
         guildId: string | null;
         userContent: string;
+        onStatusUpdate?: OnStatusUpdate;
     }): Promise<{ response: string; newMessages: BaseMessage[] }> {
         // Fetch existing reply chain if this message is a reply
         const history =
@@ -67,6 +70,7 @@ export class HandleDiscordMention {
         const { content, newMessages } = await this.orchestrator.process(
             history,
             params.userContent,
+            params.onStatusUpdate,
         );
 
         // Persist the user's message as a serialized HumanMessage

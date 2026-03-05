@@ -9,6 +9,7 @@ import { config } from "./infrastructure/config/config.ts";
 import { createDb } from "./infrastructure/db/connection.ts";
 import { PgMessageRepository } from "./infrastructure/db/repositories/PgMessageRepository.ts";
 import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
+import { StatusMessageUpdater } from "./infrastructure/discord/StatusMessageUpdater.ts";
 import { createGeneralModel } from "./infrastructure/llm/agents/generalAgent.ts";
 import { createSearchModel } from "./infrastructure/llm/agents/searchAgent.ts";
 import { createTriageModel } from "./infrastructure/llm/agents/triageAgent.ts";
@@ -62,11 +63,15 @@ const handleDiscordMention = new HandleDiscordMention(
 );
 
 // Discord gateway
+const statusUpdater = new StatusMessageUpdater(
+    logger.child({ module: "statusUpdater" }),
+);
 const gateway = new DiscordGateway(
     config.discordToken,
-    (params) => handleDiscordMention.handle(params),
-    (params) => handleDiscordMention.saveBotResponse(params),
+    handleDiscordMention.handle.bind(handleDiscordMention),
+    handleDiscordMention.saveBotResponse.bind(handleDiscordMention),
     logger.child({ module: "discord" }),
+    statusUpdater,
 );
 
 // Graceful shutdown
