@@ -1,4 +1,4 @@
-import { ChatGoogle } from "@langchain/google";
+import { ChatGoogle } from "@langchain/google/node";
 import type { AppConfig } from "../../config/config.ts";
 
 /**
@@ -16,9 +16,10 @@ export const GENERAL_SYSTEM_PROMPT =
  */
 export function createGeneralModel(config: AppConfig) {
     return new ChatGoogle({
-        model: "gemini-3-flash-preview",
+        // TODO: switch to gemini-3-flash-preview, lite for development suffices
+        model: "gemini-3.1-flash-lite-preview",
         apiKey: config.googleApiKey,
-        thinkingLevel: 'high',
+        thinkingLevel: "high",
     });
 }
 

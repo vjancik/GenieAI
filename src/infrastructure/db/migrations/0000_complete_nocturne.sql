@@ -5,7 +5,7 @@ CREATE TABLE "messages" (
 	"channel_id" text NOT NULL,
 	"guild_id" text,
 	"role" text NOT NULL,
-	"content_chunks" jsonb NOT NULL,
+	"langchain_messages" json NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "messages_discord_message_id_unique" UNIQUE("discord_message_id")
 );

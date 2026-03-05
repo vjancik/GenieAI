@@ -56,7 +56,7 @@ function makeTriageWithNoToolCall() {
 }
 
 describe("dbMessagesToLangchain", () => {
-    const baseMsg: Omit<DiscordMessage, "role" | "contentChunks"> = {
+    const baseMsg: Omit<DiscordMessage, "role" | "langchainMessages"> = {
         id: "uuid-1",
         discordMessageId: "discord-1",
         repliesToDiscordId: null,
@@ -65,64 +65,100 @@ describe("dbMessagesToLangchain", () => {
         createdAt: new Date(),
     };
 
-    test("converts human messages to HumanMessage", () => {
+    test("converts a serialized HumanMessage back to HumanMessage", async () => {
+        const original = new HumanMessage("Hello!");
         const records: DiscordMessage[] = [
             {
                 ...baseMsg,
                 role: "human",
-                contentChunks: [{ type: "text", text: "Hello!" }],
+                langchainMessages: [
+                    original.toJSON() as unknown as Record<string, unknown>,
+                ],
             },
         ];
-        const result = dbMessagesToLangchain(records);
+        const result = await dbMessagesToLangchain(records);
         expect(result).toHaveLength(1);
         expect(result[0]).toBeInstanceOf(HumanMessage);
         expect(result[0]?.content).toBe("Hello!");
     });
 
-    test("converts assistant messages to AIMessage", () => {
+    test("converts a serialized AIMessage back to AIMessage", async () => {
+        const original = new AIMessage("Hi there!");
         const records: DiscordMessage[] = [
             {
                 ...baseMsg,
                 role: "assistant",
-                contentChunks: [{ type: "text", text: "Hi there!" }],
+                langchainMessages: [
+                    original.toJSON() as unknown as Record<string, unknown>,
+                ],
             },
         ];
-        const result = dbMessagesToLangchain(records);
+        const result = await dbMessagesToLangchain(records);
         expect(result).toHaveLength(1);
         expect(result[0]).toBeInstanceOf(AIMessage);
         expect(result[0]?.content).toBe("Hi there!");
     });
 
-    test("preserves chronological order of multiple messages", () => {
+    test("flattens multiple langchainMessages per record into a single array", async () => {
+        const ai1 = new AIMessage("triage response");
+        const ai2 = new AIMessage("final response");
+        const records: DiscordMessage[] = [
+            {
+                ...baseMsg,
+                role: "assistant",
+                langchainMessages: [
+                    ai1.toJSON() as unknown as Record<string, unknown>,
+                    ai2.toJSON() as unknown as Record<string, unknown>,
+                ],
+            },
+        ];
+        const result = await dbMessagesToLangchain(records);
+        expect(result).toHaveLength(2);
+        expect(result[0]).toBeInstanceOf(AIMessage);
+        expect(result[0]?.content).toBe("triage response");
+        expect(result[1]).toBeInstanceOf(AIMessage);
+        expect(result[1]?.content).toBe("final response");
+    });
+
+    test("preserves chronological order across multiple records", async () => {
+        const human = new HumanMessage("msg1");
+        const ai = new AIMessage("msg2");
+        const humanFollow = new HumanMessage("msg3");
         const records: DiscordMessage[] = [
             {
                 ...baseMsg,
                 discordMessageId: "d1",
                 role: "human",
-                contentChunks: [{ type: "text", text: "msg1" }],
+                langchainMessages: [
+                    human.toJSON() as unknown as Record<string, unknown>,
+                ],
             },
             {
                 ...baseMsg,
                 discordMessageId: "d2",
                 role: "assistant",
-                contentChunks: [{ type: "text", text: "msg2" }],
+                langchainMessages: [
+                    ai.toJSON() as unknown as Record<string, unknown>,
+                ],
             },
             {
                 ...baseMsg,
                 discordMessageId: "d3",
                 role: "human",
-                contentChunks: [{ type: "text", text: "msg3" }],
+                langchainMessages: [
+                    humanFollow.toJSON() as unknown as Record<string, unknown>,
+                ],
             },
         ];
-        const result = dbMessagesToLangchain(records);
+        const result = await dbMessagesToLangchain(records);
         expect(result).toHaveLength(3);
         expect(result[0]).toBeInstanceOf(HumanMessage);
         expect(result[1]).toBeInstanceOf(AIMessage);
         expect(result[2]).toBeInstanceOf(HumanMessage);
     });
 
-    test("returns empty array for empty input", () => {
-        expect(dbMessagesToLangchain([])).toEqual([]);
+    test("returns empty array for empty input", async () => {
+        expect(await dbMessagesToLangchain([])).toEqual([]);
     });
 });
 
@@ -147,7 +183,9 @@ describe("Orchestrator.process", () => {
 
         expect(searchModel.invoke).toHaveBeenCalledTimes(1);
         expect(generalModel.invoke).not.toHaveBeenCalled();
-        expect(result).toBe("search response");
+        expect(result.content).toBe("search response");
+        expect(result.newMessages).toHaveLength(1);
+        expect(result.newMessages[0]).toBeInstanceOf(AIMessage);
     });
 
     test("routes to general model when triage selects route_to_general", async () => {
@@ -170,10 +208,12 @@ describe("Orchestrator.process", () => {
 
         expect(generalModel.invoke).toHaveBeenCalledTimes(1);
         expect(searchModel.invoke).not.toHaveBeenCalled();
-        expect(result).toBe("general response");
+        expect(result.content).toBe("general response");
+        expect(result.newMessages).toHaveLength(1);
+        expect(result.newMessages[0]).toBeInstanceOf(AIMessage);
     });
 
-    test("calls get_website tool and passes result to general model", async () => {
+    test("calls get_website tool and passes result to general model, returning 3 messages", async () => {
         const triageModel = makeTriageWithToolCall("get_website", {
             urls: ["https://example.com"],
         });
@@ -201,13 +241,14 @@ describe("Orchestrator.process", () => {
         expect(websiteTool.invoke).toHaveBeenCalledWith({
             urls: ["https://example.com"],
         });
-        // General model is called (with tool result context)
         expect(generalModel.invoke).toHaveBeenCalledTimes(1);
         expect(searchModel.invoke).not.toHaveBeenCalled();
-        expect(result).toBe("summary of website");
+        expect(result.content).toBe("summary of website");
+        // triage AIMessage + ToolMessage + final AIMessage
+        expect(result.newMessages).toHaveLength(3);
     });
 
-    test("calls get_video_transcription tool and passes result to general model", async () => {
+    test("calls get_video_transcription tool and passes result to general model, returning 3 messages", async () => {
         const triageModel = makeTriageWithToolCall("get_video_transcription", {
             urls: ["https://youtube.com/watch?v=abc"],
         });
@@ -233,7 +274,9 @@ describe("Orchestrator.process", () => {
             urls: ["https://youtube.com/watch?v=abc"],
         });
         expect(generalModel.invoke).toHaveBeenCalledTimes(1);
-        expect(result).toBe("video summary");
+        expect(result.content).toBe("video summary");
+        // triage AIMessage + ToolMessage + final AIMessage
+        expect(result.newMessages).toHaveLength(3);
     });
 
     test("falls back to general model when triage returns no tool call", async () => {
@@ -255,7 +298,8 @@ describe("Orchestrator.process", () => {
         const result = await orchestrator.process([], "Hello");
 
         expect(generalModel.invoke).toHaveBeenCalledTimes(1);
-        expect(result).toBe("fallback response");
+        expect(result.content).toBe("fallback response");
+        expect(result.newMessages).toHaveLength(1);
     });
 
     test("passes conversation history to the invoked model", async () => {
@@ -289,5 +333,38 @@ describe("Orchestrator.process", () => {
         expect(contents).toContain("First message");
         expect(contents).toContain("First response");
         expect(contents).toContain("Follow-up question");
+    });
+
+    test("filters out thought chunks from content but includes them in newMessages", async () => {
+        const triageModel = makeTriageWithToolCall("route_to_general");
+        const thoughtResponse = new AIMessage({
+            content: [
+                { type: "text", text: "My reasoning here...", thought: true },
+                { type: "text", text: "The actual answer." },
+            ],
+        });
+        const generalModel = {
+            invoke: mock(async (_messages: BaseMessage[]) => thoughtResponse),
+        };
+        const searchModel = makeModel("search response");
+        const websiteTool = makeTool("website content");
+        const videoTool = makeTool("video transcript");
+
+        const orchestrator = new Orchestrator(
+            triageModel as never,
+            generalModel as never,
+            searchModel as never,
+            websiteTool as never,
+            videoTool as never,
+            testLogger,
+        );
+
+        const result = await orchestrator.process([], "Think about this");
+
+        // Thought chunks excluded from displayed content
+        expect(result.content).toBe("The actual answer.");
+        // But the full message (including thought) is preserved in newMessages
+        expect(result.newMessages).toHaveLength(1);
+        expect(result.newMessages[0]).toBe(thoughtResponse);
     });
 });

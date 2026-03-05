@@ -1,4 +1,4 @@
-import { ChatGoogle } from "@langchain/google";
+import { ChatGoogle } from "@langchain/google/node";
 import type { AppConfig } from "../../config/config.ts";
 
 /**
@@ -23,14 +23,15 @@ export const SEARCH_SYSTEM_PROMPT =
  */
 export function createSearchModel(config: AppConfig) {
     const llm = new ChatGoogle({
-        model: "gemini-3-flash-preview",
+        // TODO: switch to gemini-3-flash-preview, lite for development suffices
+        model: "gemini-3.1-flash-lite-preview",
         apiKey: config.googleApiKey,
-        thinkingLevel: 'high',
+        thinkingLevel: "high",
     });
 
     // Bind the native Google Search grounding tool — this uses Gemini's built-in
     // search capability rather than a custom web search implementation.
-    return llm.bindTools([{ google_search: {} }]);
+    return llm.bindTools([{ googleSearch: {} }]);
 }
 
 export type SearchModel = ReturnType<typeof createSearchModel>;

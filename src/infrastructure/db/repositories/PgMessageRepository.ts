@@ -16,10 +16,12 @@ import { messages } from "../schema.ts";
 export class PgMessageRepository implements IMessageRepository {
     constructor(
         private readonly db: Db,
-        private readonly logger: Logger
+        private readonly logger: Logger,
     ) {}
 
-    async save(msg: Omit<DiscordMessage, "id" | "createdAt">): Promise<DiscordMessage> {
+    async save(
+        msg: Omit<DiscordMessage, "id" | "createdAt">,
+    ): Promise<DiscordMessage> {
         try {
             const [result] = await this.db
                 .insert(messages)
@@ -29,7 +31,7 @@ export class PgMessageRepository implements IMessageRepository {
                     channelId: msg.channelId,
                     guildId: msg.guildId,
                     role: msg.role,
-                    contentChunks: msg.contentChunks,
+                    langchainMessages: msg.langchainMessages,
                 })
                 .returning();
 
@@ -39,7 +41,7 @@ export class PgMessageRepository implements IMessageRepository {
 
             this.logger.debug(
                 { discordMessageId: msg.discordMessageId, role: msg.role },
-                "Saved message to database"
+                "Saved message to database",
             );
 
             return result as DiscordMessage;
@@ -60,6 +62,10 @@ export class PgMessageRepository implements IMessageRepository {
          *
          * The collected rows are then ordered by created_at ASC to produce
          * chronological conversation history.
+         *
+         * langchain_messages is a JSON column; Bun's SQL driver may return it as either
+         * a pre-parsed JS value or as a raw JSON string depending on the query path.
+         * The row mapping below handles both cases defensively.
          */
         try {
             const rows = await this.db.execute(sql`
@@ -75,21 +81,22 @@ export class PgMessageRepository implements IMessageRepository {
 
             this.logger.debug(
                 { startDiscordMessageId, chainLength: rows.length },
-                "Fetched message chain"
+                "Fetched message chain",
             );
 
             return rows.map((row) => ({
-                id: row["id"] as string,
-                discordMessageId: row["discord_message_id"] as string,
-                repliesToDiscordId: (row["replies_to_discord_id"] as string | null) ?? null,
-                channelId: row["channel_id"] as string,
-                guildId: (row["guild_id"] as string | null) ?? null,
-                role: row["role"] as DiscordMessage["role"],
-                // content_chunks is a JSONB column returned as a raw string by db.execute(); parse it if needed
-                contentChunks: (typeof row["content_chunks"] === "string"
-                    ? JSON.parse(row["content_chunks"])
-                    : row["content_chunks"]) as DiscordMessage["contentChunks"],
-                createdAt: row["created_at"] as Date,
+                id: row.id as string,
+                discordMessageId: row.discord_message_id as string,
+                repliesToDiscordId:
+                    (row.replies_to_discord_id as string | null) ?? null,
+                channelId: row.channel_id as string,
+                guildId: (row.guild_id as string | null) ?? null,
+                role: row.role as DiscordMessage["role"],
+                // langchain_messages is a JSON column; handle both string (raw) and pre-parsed cases
+                langchainMessages: (typeof row.langchain_messages === "string"
+                    ? JSON.parse(row.langchain_messages)
+                    : row.langchain_messages) as DiscordMessage["langchainMessages"],
+                createdAt: row.created_at as Date,
             }));
         } catch (err) {
             if (err instanceof DatabaseError) throw err;

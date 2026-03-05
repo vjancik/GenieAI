@@ -1,9 +1,5 @@
-import {
-    Client,
-    Events,
-    GatewayIntentBits,
-    type Message,
-} from "discord.js";
+import type { BaseMessage } from "@langchain/core/messages";
+import { Client, Events, GatewayIntentBits, type Message } from "discord.js";
 import { DiscordError } from "../../domain/errors/AppError.ts";
 import type { Logger } from "../logging/logger.ts";
 
@@ -39,11 +35,13 @@ export function extractUserContent(
     message: Message,
     botUserId: string,
 ): string {
-    return message.content
-        .replace(new RegExp(`<@!?${botUserId}>`, "g"), "")
-        // TODO: pass the bot default server role ID to selectively strip only the bot's role mention, if present
-        .replace(/<@&\d+>/g, "")
-        .trim();
+    return (
+        message.content
+            .replace(new RegExp(`<@!?${botUserId}>`, "g"), "")
+            // TODO: pass the bot default server role ID to selectively strip only the bot's role mention, if present
+            .replace(/<@&\d+>/g, "")
+            .trim()
+    );
 }
 
 /** Callback invoked when the bot receives a valid explicit mention. */
@@ -53,7 +51,7 @@ export type MentionHandler = (params: {
     channelId: string;
     guildId: string | null;
     userContent: string;
-}) => Promise<string>;
+}) => Promise<{ response: string; newMessages: BaseMessage[] }>;
 
 /** Callback invoked after the bot's reply is sent, to persist the bot's message. */
 export type BotReplySavedCallback = (params: {
@@ -61,7 +59,7 @@ export type BotReplySavedCallback = (params: {
     repliesToDiscordId: string;
     channelId: string;
     guildId: string | null;
-    response: string;
+    newMessages: BaseMessage[];
 }) => Promise<void>;
 
 /**
@@ -150,7 +148,7 @@ export class DiscordGateway {
         );
 
         try {
-            const response = await this.mentionHandler({
+            const { response, newMessages } = await this.mentionHandler({
                 discordMessageId: message.id,
                 referencedMessageId: message.reference?.messageId ?? null,
                 channelId: message.channelId,
@@ -158,15 +156,21 @@ export class DiscordGateway {
                 userContent,
             });
 
+            // Truncate to Discord's 2000-character limit
+            const safeResponse =
+                response.length > 2000
+                    ? `${response.slice(0, 1997)}...`
+                    : response;
+
             // Send the reply and get the sent message's Discord ID for persistence
-            const sentMessage = await message.reply(response);
+            const sentMessage = await message.reply(safeResponse);
 
             await this.botReplySaved({
                 botDiscordMessageId: sentMessage.id,
                 repliesToDiscordId: message.id,
                 channelId: sentMessage.channelId,
                 guildId: sentMessage.guildId,
-                response,
+                newMessages,
             });
         } catch (err) {
             this.logger.error(

@@ -1,14 +1,8 @@
 /**
  * Domain entity types for Discord message persistence.
- * Content is stored as an array of typed chunks to support multimodal content
- * (text, images, links) while remaining LangChain-compatible.
+ * Content is stored as an array of serialized LangChain message objects (via BaseMessage.toJSON())
+ * to preserve all metadata including thoughtSignatures, tool calls, and response_metadata.
  */
-
-export type TextChunk = { type: "text"; text: string };
-export type ImageUrlChunk = { type: "image_url"; image_url: string };
-
-/** A single piece of message content, typed for LangChain message format compatibility. */
-export type ContentChunk = TextChunk | ImageUrlChunk;
 
 export type MessageRole = "human" | "assistant";
 
@@ -17,6 +11,10 @@ export type MessageRole = "human" | "assistant";
  *
  * Only the message's own content is stored (not the full conversation),
  * allowing the recursive CTE to reconstruct the chain on demand.
+ *
+ * Each record can hold multiple serialized LangChain messages — e.g. for a bot
+ * turn that involved tool use, this array would contain:
+ * [triageAIMessage, ToolMessage, finalAIMessage].
  */
 export interface DiscordMessage {
     /** UUID primary key */
@@ -28,6 +26,10 @@ export interface DiscordMessage {
     channelId: string;
     guildId: string | null;
     role: MessageRole;
-    contentChunks: ContentChunk[];
+    /**
+     * Serialized LangChain BaseMessage objects (output of BaseMessage.toJSON()).
+     * Deserialized via load() from @langchain/core/load.
+     */
+    langchainMessages: Record<string, unknown>[];
     createdAt: Date;
 }

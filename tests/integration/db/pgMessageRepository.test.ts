@@ -1,4 +1,13 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import {
+    afterAll,
+    afterEach,
+    beforeAll,
+    describe,
+    expect,
+    test,
+} from "bun:test";
+import { load } from "@langchain/core/load";
+import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { sql } from "drizzle-orm";
 import pino from "pino";
 import { DatabaseError } from "../../../src/domain/errors/AppError.ts";
@@ -17,7 +26,7 @@ import { PgMessageRepository } from "../../../src/infrastructure/db/repositories
  */
 
 const TEST_DB_URL =
-    process.env["DATABASE_URL"] ??
+    process.env.DATABASE_URL ??
     "postgresql://genie_test:genie_test@localhost:5433/genie_test";
 
 const testLogger = pino({ level: "silent" });
@@ -37,32 +46,44 @@ afterEach(async () => {
 
 afterAll(async () => {
     // Close the Bun SQL connection
-    await (db as unknown as { $client: { end?: () => Promise<void> } }).$client?.end?.();
+    await (
+        db as unknown as { $client: { end?: () => Promise<void> } }
+    ).$client?.end?.();
 });
 
 /** Helper: build a minimal save payload */
-function messagePayload(overrides: Partial<Omit<DiscordMessage, "id" | "createdAt">> = {}): Omit<DiscordMessage, "id" | "createdAt"> {
+function messagePayload(
+    overrides: Partial<Omit<DiscordMessage, "id" | "createdAt">> = {},
+): Omit<DiscordMessage, "id" | "createdAt"> {
+    const defaultMsg = new HumanMessage("Hello!");
     return {
         discordMessageId: `discord-${Date.now()}-${Math.random()}`,
         repliesToDiscordId: null,
         channelId: "ch-001",
         guildId: "guild-001",
         role: "human",
-        contentChunks: [{ type: "text", text: "Hello!" }],
+        langchainMessages: [
+            defaultMsg.toJSON() as unknown as Record<string, unknown>,
+        ],
         ...overrides,
     };
 }
 
 describe("PgMessageRepository.save", () => {
     test("saves a message and returns it with id and createdAt", async () => {
-        const payload = messagePayload();
+        const humanMsg = new HumanMessage("Hello!");
+        const payload = messagePayload({
+            langchainMessages: [
+                humanMsg.toJSON() as unknown as Record<string, unknown>,
+            ],
+        });
         const saved = await repo.save(payload);
 
         expect(saved.id).toBeDefined();
         expect(typeof saved.id).toBe("string");
         expect(saved.discordMessageId).toBe(payload.discordMessageId);
         expect(saved.role).toBe("human");
-        expect(saved.contentChunks).toEqual([{ type: "text", text: "Hello!" }]);
+        expect(saved.langchainMessages).toHaveLength(1);
         expect(saved.createdAt).toBeInstanceOf(Date);
     });
 
@@ -80,12 +101,14 @@ describe("PgMessageRepository.save", () => {
     });
 
     test("saves message with a repliesToDiscordId reference", async () => {
-        const root = await repo.save(messagePayload({ discordMessageId: "root-001" }));
+        const root = await repo.save(
+            messagePayload({ discordMessageId: "root-001" }),
+        );
         const child = await repo.save(
             messagePayload({
                 discordMessageId: "child-001",
                 repliesToDiscordId: root.discordMessageId,
-            })
+            }),
         );
         expect(child.repliesToDiscordId).toBe("root-001");
     });
@@ -98,24 +121,29 @@ describe("PgMessageRepository.fetchChain", () => {
     });
 
     test("returns single message for chain with no parents", async () => {
-        const saved = await repo.save(
-            messagePayload({ discordMessageId: "single-001" })
+        const _saved = await repo.save(
+            messagePayload({ discordMessageId: "single-001" }),
         );
 
         const chain = await repo.fetchChain("single-001");
 
         expect(chain).toHaveLength(1);
-        expect(chain[0]!.discordMessageId).toBe("single-001");
+        expect(chain[0]?.discordMessageId).toBe("single-001");
     });
 
     test("returns two messages in correct chronological order for two-message chain", async () => {
         // root (no parent) → child (replies to root)
+        const humanMsg = new HumanMessage("User question");
+        const aiMsg = new AIMessage("Bot response");
+
         const root = await repo.save(
             messagePayload({
                 discordMessageId: "chain2-root",
                 role: "human",
-                contentChunks: [{ type: "text", text: "User question" }],
-            })
+                langchainMessages: [
+                    humanMsg.toJSON() as unknown as Record<string, unknown>,
+                ],
+            }),
         );
 
         // Brief delay to ensure distinct createdAt timestamps
@@ -126,16 +154,18 @@ describe("PgMessageRepository.fetchChain", () => {
                 discordMessageId: "chain2-child",
                 repliesToDiscordId: root.discordMessageId,
                 role: "assistant",
-                contentChunks: [{ type: "text", text: "Bot response" }],
-            })
+                langchainMessages: [
+                    aiMsg.toJSON() as unknown as Record<string, unknown>,
+                ],
+            }),
         );
 
         const chain = await repo.fetchChain(child.discordMessageId);
 
         expect(chain).toHaveLength(2);
         // Chronological: root first, then child
-        expect(chain[0]!.discordMessageId).toBe("chain2-root");
-        expect(chain[1]!.discordMessageId).toBe("chain2-child");
+        expect(chain[0]?.discordMessageId).toBe("chain2-root");
+        expect(chain[1]?.discordMessageId).toBe("chain2-child");
     });
 
     test("returns all four messages in a full user→bot→user→bot chain", async () => {
@@ -149,18 +179,48 @@ describe("PgMessageRepository.fetchChain", () => {
          * fetchChain(msg4) should walk: msg4 → msg3 → msg2 → msg1
          * and return them chronologically: msg1, msg2, msg3, msg4
          */
-        const ids = ["chain4-1", "chain4-2", "chain4-3", "chain4-4"];
+        const [id1, id2, id3, id4] = [
+            "chain4-1",
+            "chain4-2",
+            "chain4-3",
+            "chain4-4",
+        ] as [string, string, string, string];
+        const ids = [id1, id2, id3, id4];
 
-        await repo.save(messagePayload({ discordMessageId: ids[0]!, repliesToDiscordId: null, role: "human" }));
+        await repo.save(
+            messagePayload({
+                discordMessageId: id1,
+                repliesToDiscordId: null,
+                role: "human",
+            }),
+        );
         await Bun.sleep(5);
-        await repo.save(messagePayload({ discordMessageId: ids[1]!, repliesToDiscordId: ids[0]!, role: "assistant" }));
+        await repo.save(
+            messagePayload({
+                discordMessageId: id2,
+                repliesToDiscordId: id1,
+                role: "assistant",
+            }),
+        );
         await Bun.sleep(5);
-        await repo.save(messagePayload({ discordMessageId: ids[2]!, repliesToDiscordId: ids[1]!, role: "human" }));
+        await repo.save(
+            messagePayload({
+                discordMessageId: id3,
+                repliesToDiscordId: id2,
+                role: "human",
+            }),
+        );
         await Bun.sleep(5);
-        await repo.save(messagePayload({ discordMessageId: ids[3]!, repliesToDiscordId: ids[2]!, role: "assistant" }));
+        await repo.save(
+            messagePayload({
+                discordMessageId: id4,
+                repliesToDiscordId: id3,
+                role: "assistant",
+            }),
+        );
 
         // Fetch starting from the leaf — the new user message would reference the last bot reply
-        const chain = await repo.fetchChain(ids[3]!);
+        const chain = await repo.fetchChain(id4);
 
         expect(chain).toHaveLength(4);
         expect(chain.map((m) => m.discordMessageId)).toEqual(ids);
@@ -169,34 +229,90 @@ describe("PgMessageRepository.fetchChain", () => {
     test("fetching from an intermediate node only returns that sub-chain", async () => {
         // A 3-message chain: A → B → C
         // fetchChain(B) should return [A, B] not [A, B, C]
-        await repo.save(messagePayload({ discordMessageId: "sub-A", repliesToDiscordId: null }));
+        await repo.save(
+            messagePayload({
+                discordMessageId: "sub-A",
+                repliesToDiscordId: null,
+            }),
+        );
         await Bun.sleep(5);
-        await repo.save(messagePayload({ discordMessageId: "sub-B", repliesToDiscordId: "sub-A" }));
+        await repo.save(
+            messagePayload({
+                discordMessageId: "sub-B",
+                repliesToDiscordId: "sub-A",
+            }),
+        );
         await Bun.sleep(5);
-        await repo.save(messagePayload({ discordMessageId: "sub-C", repliesToDiscordId: "sub-B" }));
+        await repo.save(
+            messagePayload({
+                discordMessageId: "sub-C",
+                repliesToDiscordId: "sub-B",
+            }),
+        );
 
         const chain = await repo.fetchChain("sub-B");
 
         expect(chain).toHaveLength(2);
-        expect(chain.map((m) => m.discordMessageId)).toEqual(["sub-A", "sub-B"]);
+        expect(chain.map((m) => m.discordMessageId)).toEqual([
+            "sub-A",
+            "sub-B",
+        ]);
     });
 
-    test("preserves contentChunks JSONB round-trip correctly", async () => {
-        const chunks = [
-            { type: "text" as const, text: "Here is an image:" },
-            { type: "image_url" as const, image_url: "https://example.com/img.png" },
-        ];
-
+    test("preserves langchainMessages JSON round-trip correctly for a single message", async () => {
+        const originalMsg = new HumanMessage("Hello, round-trip!");
         const saved = await repo.save(
             messagePayload({
                 discordMessageId: "json-001",
-                contentChunks: chunks,
-            })
+                langchainMessages: [
+                    originalMsg.toJSON() as unknown as Record<string, unknown>,
+                ],
+            }),
         );
 
         const chain = await repo.fetchChain(saved.discordMessageId);
 
         expect(chain).toHaveLength(1);
-        expect(chain[0]!.contentChunks).toEqual(chunks);
+        expect(chain[0]?.langchainMessages).toHaveLength(1);
+
+        // Verify the stored JSON reconstructs to the correct LangChain class
+        const reconstructed = await load(
+            JSON.stringify(chain[0]?.langchainMessages[0]),
+        );
+        expect(reconstructed).toBeInstanceOf(HumanMessage);
+        expect((reconstructed as HumanMessage).content).toBe(
+            "Hello, round-trip!",
+        );
+    });
+
+    test("preserves multiple langchainMessages per record (e.g. triage + tool + final)", async () => {
+        const triageMsg = new AIMessage("triage response");
+        const finalMsg = new AIMessage("final answer");
+
+        const saved = await repo.save(
+            messagePayload({
+                discordMessageId: "multi-001",
+                role: "assistant",
+                langchainMessages: [
+                    triageMsg.toJSON() as unknown as Record<string, unknown>,
+                    finalMsg.toJSON() as unknown as Record<string, unknown>,
+                ],
+            }),
+        );
+
+        const chain = await repo.fetchChain(saved.discordMessageId);
+
+        expect(chain[0]?.langchainMessages).toHaveLength(2);
+
+        const first = await load(
+            JSON.stringify(chain[0]?.langchainMessages[0]),
+        );
+        const second = await load(
+            JSON.stringify(chain[0]?.langchainMessages[1]),
+        );
+        expect(first).toBeInstanceOf(AIMessage);
+        expect((first as AIMessage).content).toBe("triage response");
+        expect(second).toBeInstanceOf(AIMessage);
+        expect((second as AIMessage).content).toBe("final answer");
     });
 });

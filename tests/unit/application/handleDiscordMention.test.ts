@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
 import { HandleDiscordMention } from "../../../src/application/HandleDiscordMention.ts";
 import type { IMessageRepository } from "../../../src/domain/message/IMessageRepository.ts";
@@ -7,6 +8,8 @@ import type { Orchestrator } from "../../../src/infrastructure/llm/orchestrator.
 
 const testLogger = pino({ level: "silent" });
 
+const prevAiMessage = new AIMessage("Previous response");
+
 const baseMessage: DiscordMessage = {
     id: "uuid-1",
     discordMessageId: "discord-123",
@@ -14,9 +17,13 @@ const baseMessage: DiscordMessage = {
     channelId: "ch-456",
     guildId: "guild-789",
     role: "assistant",
-    contentChunks: [{ type: "text", text: "Previous response" }],
+    langchainMessages: [
+        prevAiMessage.toJSON() as unknown as Record<string, unknown>,
+    ],
     createdAt: new Date("2024-01-01T00:00:00Z"),
 };
+
+const mockAiResponse = new AIMessage("AI response");
 
 function makeRepo(chainMessages: DiscordMessage[] = []): IMessageRepository {
     return {
@@ -33,7 +40,10 @@ function makeOrchestrator(
     response = "AI response",
 ): Pick<Orchestrator, "process"> {
     return {
-        process: mock(async () => response),
+        process: mock(async () => ({
+            content: response,
+            newMessages: [mockAiResponse],
+        })),
     };
 }
 
@@ -55,7 +65,8 @@ describe("HandleDiscordMention.handle", () => {
             userContent: "Hello",
         });
 
-        expect(result).toBe("Hello back!");
+        expect(result.response).toBe("Hello back!");
+        expect(result.newMessages).toHaveLength(1);
     });
 
     test("does not fetch chain when referencedMessageId is null", async () => {
@@ -119,6 +130,7 @@ describe("HandleDiscordMention.handle", () => {
             .calls[0];
         expect(firstCall).toBeDefined();
         const [history, userMessage] = firstCall as [unknown[], string];
+        // baseMessage has one serialized AIMessage → deserialized to 1 BaseMessage
         expect(history).toHaveLength(1);
         expect(userMessage).toBe("Follow-up");
     });
@@ -147,7 +159,7 @@ describe("HandleDiscordMention.handle", () => {
         expect(history).toHaveLength(0);
     });
 
-    test("saves the user's message with correct role and content", async () => {
+    test("saves the user's message as a serialized HumanMessage", async () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator();
         const handler = new HandleDiscordMention(
@@ -164,19 +176,25 @@ describe("HandleDiscordMention.handle", () => {
             userContent: "What is 2+2?",
         });
 
-        expect(repo.save).toHaveBeenCalledWith(
-            expect.objectContaining({
-                discordMessageId: "user-msg-1",
-                repliesToDiscordId: "prev-123",
-                role: "human",
-                contentChunks: [{ type: "text", text: "What is 2+2?" }],
-            }),
-        );
+        const saveCall = (repo.save as ReturnType<typeof mock>).mock
+            .calls[0]?.[0] as DiscordMessage;
+        expect(saveCall.discordMessageId).toBe("user-msg-1");
+        expect(saveCall.repliesToDiscordId).toBe("prev-123");
+        expect(saveCall.role).toBe("human");
+        // langchainMessages should contain a serialized HumanMessage
+        expect(saveCall.langchainMessages).toHaveLength(1);
+        // Verify it round-trips correctly via load()
+        const reconstructed = await (async () => {
+            const { load } = await import("@langchain/core/load");
+            return load(JSON.stringify(saveCall.langchainMessages[0]));
+        })();
+        expect(reconstructed).toBeInstanceOf(HumanMessage);
+        expect((reconstructed as HumanMessage).content).toBe("What is 2+2?");
     });
 });
 
 describe("HandleDiscordMention.saveBotResponse", () => {
-    test("saves bot response with assistant role", async () => {
+    test("saves bot response with assistant role and serialized messages", async () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator();
         const handler = new HandleDiscordMention(
@@ -185,21 +203,48 @@ describe("HandleDiscordMention.saveBotResponse", () => {
             testLogger,
         );
 
+        const aiMsg = new AIMessage("The answer is 4");
         await handler.saveBotResponse({
             botDiscordMessageId: "bot-msg-1",
             repliesToDiscordId: "user-msg-1",
             channelId: "ch-1",
             guildId: "guild-1",
-            response: "The answer is 4",
+            newMessages: [aiMsg],
         });
 
-        expect(repo.save).toHaveBeenCalledWith(
-            expect.objectContaining({
-                discordMessageId: "bot-msg-1",
-                repliesToDiscordId: "user-msg-1",
-                role: "assistant",
-                contentChunks: [{ type: "text", text: "The answer is 4" }],
-            }),
+        const saveCall = (repo.save as ReturnType<typeof mock>).mock
+            .calls[0]?.[0] as DiscordMessage;
+        expect(saveCall.discordMessageId).toBe("bot-msg-1");
+        expect(saveCall.repliesToDiscordId).toBe("user-msg-1");
+        expect(saveCall.role).toBe("assistant");
+        expect(saveCall.langchainMessages).toHaveLength(1);
+    });
+
+    test("saves multiple newMessages (e.g. triage + tool + final)", async () => {
+        const repo = makeRepo();
+        const orchestrator = makeOrchestrator();
+        const handler = new HandleDiscordMention(
+            repo,
+            orchestrator as never,
+            testLogger,
         );
+
+        const messages = [
+            new AIMessage("triage response"),
+            new AIMessage("tool result"),
+            new AIMessage("final answer"),
+        ];
+
+        await handler.saveBotResponse({
+            botDiscordMessageId: "bot-msg-1",
+            repliesToDiscordId: "user-msg-1",
+            channelId: "ch-1",
+            guildId: "guild-1",
+            newMessages: messages,
+        });
+
+        const saveCall = (repo.save as ReturnType<typeof mock>).mock
+            .calls[0]?.[0] as DiscordMessage;
+        expect(saveCall.langchainMessages).toHaveLength(3);
     });
 });

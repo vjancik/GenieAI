@@ -1,3 +1,4 @@
+name: genieaiv2-test
 services:
     db:
         image: postgres:17

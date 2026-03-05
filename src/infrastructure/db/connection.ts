@@ -10,7 +10,7 @@ import * as schema from "./schema.ts";
  * @param url - PostgreSQL connection string. Falls back to DATABASE_URL env var.
  */
 export function createDb(url?: string) {
-    const connectionUrl = url ?? process.env["DATABASE_URL"];
+    const connectionUrl = url ?? process.env.DATABASE_URL;
     if (!connectionUrl) {
         throw new Error("No DATABASE_URL provided for database connection");
     }

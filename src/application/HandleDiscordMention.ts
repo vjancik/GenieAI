@@ -1,3 +1,5 @@
+import type { BaseMessage } from "@langchain/core/messages";
+import { HumanMessage } from "@langchain/core/messages";
 import type { IMessageRepository } from "../domain/message/IMessageRepository.ts";
 import type { Orchestrator } from "../infrastructure/llm/orchestrator.ts";
 import { dbMessagesToLangchain } from "../infrastructure/llm/orchestrator.ts";
@@ -13,6 +15,9 @@ import type { Logger } from "../infrastructure/logging/logger.ts";
  *
  * The bot's response message is persisted separately (via {@link saveBotResponse})
  * after it has been sent to Discord, because we need Discord's message ID.
+ *
+ * All messages are serialized using LangChain's BaseMessage.toJSON() to preserve
+ * full metadata (thoughtSignatures, tool calls, response_metadata) for context continuity.
  */
 export class HandleDiscordMention {
     constructor(
@@ -29,7 +34,7 @@ export class HandleDiscordMention {
      * @param params.channelId - Discord channel snowflake
      * @param params.guildId - Discord guild snowflake (null for DMs)
      * @param params.userContent - Message content with bot mention stripped
-     * @returns The AI-generated response string to send to Discord
+     * @returns The AI-generated response string and the new LangChain messages generated
      */
     async handle(params: {
         discordMessageId: string;
@@ -37,11 +42,11 @@ export class HandleDiscordMention {
         channelId: string;
         guildId: string | null;
         userContent: string;
-    }): Promise<string> {
+    }): Promise<{ response: string; newMessages: BaseMessage[] }> {
         // Fetch existing reply chain if this message is a reply
         const history =
             params.referencedMessageId !== null
-                ? dbMessagesToLangchain(
+                ? await dbMessagesToLangchain(
                       await this.messageRepo.fetchChain(
                           params.referencedMessageId,
                       ),
@@ -57,41 +62,47 @@ export class HandleDiscordMention {
             "Processing mention with history",
         );
 
-        // Generate the AI response
-        const response = await this.orchestrator.process(
+        // Generate the AI response; collect all new messages for persistence
+        const { content, newMessages } = await this.orchestrator.process(
             history,
             params.userContent,
         );
 
-        // Persist the user's message now that we have the response
+        // Persist the user's message as a serialized HumanMessage
+        const humanMsg = new HumanMessage(params.userContent);
         await this.messageRepo.save({
             discordMessageId: params.discordMessageId,
             repliesToDiscordId: params.referencedMessageId,
             channelId: params.channelId,
             guildId: params.guildId,
             role: "human",
-            contentChunks: [{ type: "text", text: params.userContent }],
+            langchainMessages: [
+                humanMsg.toJSON() as unknown as Record<string, unknown>,
+            ],
         });
 
-        return response;
+        return { response: content, newMessages };
     }
 
     /**
      * Persist the bot's reply message after it has been sent to Discord.
      * Must be called after sending the reply so we can capture Discord's assigned message ID.
      *
+     * Stores all LangChain messages generated during processing (triage response, tool messages,
+     * final response) so the conversation history has no gaps.
+     *
      * @param params.botDiscordMessageId - The Discord ID of the sent bot reply
      * @param params.repliesToDiscordId - The Discord ID of the user message this replies to
      * @param params.channelId - Discord channel snowflake
      * @param params.guildId - Discord guild snowflake (null for DMs)
-     * @param params.response - The response text that was sent
+     * @param params.newMessages - All LangChain messages generated during this turn
      */
     async saveBotResponse(params: {
         botDiscordMessageId: string;
         repliesToDiscordId: string;
         channelId: string;
         guildId: string | null;
-        response: string;
+        newMessages: BaseMessage[];
     }): Promise<void> {
         await this.messageRepo.save({
             discordMessageId: params.botDiscordMessageId,
@@ -99,11 +110,16 @@ export class HandleDiscordMention {
             channelId: params.channelId,
             guildId: params.guildId,
             role: "assistant",
-            contentChunks: [{ type: "text", text: params.response }],
+            langchainMessages: params.newMessages.map(
+                (m) => m.toJSON() as unknown as Record<string, unknown>,
+            ),
         });
 
         this.logger.debug(
-            { botDiscordMessageId: params.botDiscordMessageId },
+            {
+                botDiscordMessageId: params.botDiscordMessageId,
+                messageCount: params.newMessages.length,
+            },
             "Saved bot response to database",
         );
     }

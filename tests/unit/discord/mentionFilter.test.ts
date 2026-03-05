@@ -32,7 +32,8 @@ function makeMessage(opts: {
              */
             has: (id: string, options?: { ignoreRepliedUser?: boolean }) => {
                 if (id !== opts.mentionsBotId) return false;
-                if (options?.ignoreRepliedUser && repliedUser?.id === id) return false;
+                if (options?.ignoreRepliedUser && repliedUser?.id === id)
+                    return false;
                 return true;
             },
         },

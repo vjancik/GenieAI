@@ -1,6 +1,6 @@
+import { load } from "@langchain/core/load";
 import type { BaseMessage } from "@langchain/core/messages";
 import {
-    AIMessage,
     HumanMessage,
     SystemMessage,
     ToolMessage,
@@ -23,45 +23,58 @@ import type { GetWebsiteTool } from "./tools/getWebsiteTool.ts";
 /**
  * Converts persisted {@link DiscordMessage} records into LangChain {@link BaseMessage} objects.
  *
- * Single text-only messages use a plain string content for simplicity.
- * Multi-chunk or non-text messages use the structured array format for multimodal support.
+ * Each DiscordMessage can contain multiple serialized LangChain messages
+ * (e.g. a bot turn with tool use stores [triageAIMessage, ToolMessage, finalAIMessage]).
+ * All messages are deserialized via load() and flattened into a single chronological array.
  *
  * @param records - Chronologically ordered DB message records
  */
-export function dbMessagesToLangchain(
+export async function dbMessagesToLangchain(
     records: DiscordMessage[],
-): BaseMessage[] {
-    return records.map((r) => {
-        // Use plain string content for single-text-chunk messages (most common case)
-        const content =
-            r.contentChunks.length === 1 && r.contentChunks[0]?.type === "text"
-                ? r.contentChunks[0].text
-                : r.contentChunks;
-
-        if (r.role === "human") {
-            return new HumanMessage(content as string);
-        }
-        return new AIMessage(content as string);
-    });
+): Promise<BaseMessage[]> {
+    const nested = await Promise.all(
+        records.map((r) =>
+            Promise.all(
+                r.langchainMessages.map(
+                    // load() expects a JSON string; JSON.stringify round-trips the parsed object
+                    // TODO: I hate this, let's do better
+                    (json) =>
+                        load(JSON.stringify(json)) as Promise<BaseMessage>,
+                ),
+            ),
+        ),
+    );
+    return nested.flat();
 }
 
 /**
- * Extracts the text content from a model response, handling both string and array formats.
+ * Extracts the displayable text content from a model response, handling both
+ * string and structured array formats. Filters out Gemini thought chunks
+ * (internal reasoning marked with thought: true) which should not be shown to users,
+ * while preserving them in the stored message for context continuity.
  */
 function extractContent(response: BaseMessage): string {
     if (typeof response.content === "string") {
         return response.content;
     }
-    // For structured content arrays, join all text parts
+    // For structured content arrays, join all non-thought text parts
     return response.content
         .filter(
             (part) =>
                 typeof part === "object" &&
                 "type" in part &&
-                part.type === "text",
+                part.type === "text" &&
+                // Exclude Gemini thought chunks (internal reasoning, not display content)
+                !("thought" in part && (part as { thought?: boolean }).thought),
         )
         .map((part) => (part as { type: "text"; text: string }).text)
         .join("");
+}
+
+/** Result of a single LLM invocation: display content + all generated messages to persist. */
+interface InvokeResult {
+    content: string;
+    messages: BaseMessage[];
 }
 
 /**
@@ -85,7 +98,11 @@ export class Orchestrator {
     ) {}
 
     /**
-     * Process a user message with conversation history, returning the AI response string.
+     * Process a user message with conversation history.
+     *
+     * Returns the display content string and all new LangChain messages generated
+     * during processing (for persistence). The newMessages array includes intermediate
+     * messages (triage response, tool messages) so history has no gaps.
      *
      * @param history - Prior messages in the reply chain, chronologically ordered
      * @param userMessage - The current user's message text
@@ -93,7 +110,7 @@ export class Orchestrator {
     async process(
         history: BaseMessage[],
         userMessage: string,
-    ): Promise<string> {
+    ): Promise<{ content: string; newMessages: BaseMessage[] }> {
         const messages: BaseMessage[] = [
             new SystemMessage(TRIAGE_SYSTEM_PROMPT),
             ...history,
@@ -109,66 +126,91 @@ export class Orchestrator {
             this.logger.info(
                 "Triage made no tool call, routing to general agent",
             );
-            return this.invokeGeneral([
+            const result = await this.invokeGeneral([
                 ...history,
                 new HumanMessage(userMessage),
             ]);
+            return { content: result.content, newMessages: result.messages };
         }
 
         // toolCalls.length > 0 is guaranteed by the guard above
         const toolCall = toolCalls[0];
         if (!toolCall) {
-            return this.invokeGeneral([
+            const result = await this.invokeGeneral([
                 ...history,
                 new HumanMessage(userMessage),
             ]);
+            return { content: result.content, newMessages: result.messages };
         }
         this.logger.info({ toolName: toolCall.name }, "Triage selected route");
 
         switch (toolCall.name) {
             case "get_website": {
-                const result = await this.getWebsiteTool.invoke(
+                const toolResult = await this.getWebsiteTool.invoke(
                     toolCall.args as { urls: string[] },
                 );
-                return this.invokeGeneralWithToolResult(
+                const result = await this.invokeGeneralWithToolResult(
                     history,
                     userMessage,
                     triageResponse,
                     toolCall.id ?? "",
-                    result,
+                    toolResult,
                 );
+                return {
+                    content: result.content,
+                    newMessages: result.messages,
+                };
             }
             case "get_video_transcription": {
-                const result = await this.getVideoTranscriptionTool.invoke(
+                const toolResult = await this.getVideoTranscriptionTool.invoke(
                     toolCall.args as { urls: string[] },
                 );
-                return this.invokeGeneralWithToolResult(
+                const result = await this.invokeGeneralWithToolResult(
                     history,
                     userMessage,
                     triageResponse,
                     toolCall.id ?? "",
-                    result,
+                    toolResult,
                 );
+                return {
+                    content: result.content,
+                    newMessages: result.messages,
+                };
             }
-            case "route_to_search":
-                return this.invokeSearch([
+            case "route_to_search": {
+                const result = await this.invokeSearch([
                     ...history,
                     new HumanMessage(userMessage),
                 ]);
-            case "route_to_general":
-                return this.invokeGeneral([
+                return {
+                    content: result.content,
+                    newMessages: result.messages,
+                };
+            }
+            case "route_to_general": {
+                const result = await this.invokeGeneral([
                     ...history,
                     new HumanMessage(userMessage),
                 ]);
-            default:
+                return {
+                    content: result.content,
+                    newMessages: result.messages,
+                };
+            }
+            default: {
                 this.logger.warn(
                     { toolName: toolCall.name },
                     "Unknown triage tool, falling back to general",
                 );
-                return this.invokeGeneral([
+                const result = await this.invokeGeneral([
                     ...history,
                     new HumanMessage(userMessage),
                 ]);
+                return {
+                    content: result.content,
+                    newMessages: result.messages,
+                };
+            }
         }
     }
 
@@ -178,6 +220,9 @@ export class Orchestrator {
      *
      * The message sequence sent to the general model is:
      *   [history...] → [human msg] → [triage AI msg with tool call] → [tool result] → [instruction]
+     *
+     * All three generated messages (triageAIMessage, ToolMessage, finalAIMessage) are returned
+     * for persistence so the full tool-use context is preserved in history.
      */
     private async invokeGeneralWithToolResult(
         history: BaseMessage[],
@@ -185,16 +230,17 @@ export class Orchestrator {
         triageAiMessage: BaseMessage,
         toolCallId: string,
         toolResult: string,
-    ): Promise<string> {
+    ): Promise<InvokeResult> {
+        const toolMessage = new ToolMessage({
+            content: toolResult,
+            tool_call_id: toolCallId,
+        });
         const messagesWithResult: BaseMessage[] = [
             new SystemMessage(GENERAL_SYSTEM_PROMPT),
             ...history,
             new HumanMessage(userMessage),
             triageAiMessage,
-            new ToolMessage({
-                content: toolResult,
-                tool_call_id: toolCallId,
-            }),
+            toolMessage,
             new HumanMessage(
                 "Based on the retrieved content above, please answer the original question. " +
                     "Keep your response under 1500 characters.",
@@ -202,22 +248,28 @@ export class Orchestrator {
         ];
 
         const response = await this.generalModel.invoke(messagesWithResult);
-        return extractContent(response);
+        return {
+            content: extractContent(response),
+            // triageAiMessage contains the tool_call that makes toolMessage valid context
+            messages: [triageAiMessage, toolMessage, response],
+        };
     }
 
-    private async invokeGeneral(messages: BaseMessage[]): Promise<string> {
+    private async invokeGeneral(
+        messages: BaseMessage[],
+    ): Promise<InvokeResult> {
         const response = await this.generalModel.invoke([
             new SystemMessage(GENERAL_SYSTEM_PROMPT),
             ...messages,
         ]);
-        return extractContent(response);
+        return { content: extractContent(response), messages: [response] };
     }
 
-    private async invokeSearch(messages: BaseMessage[]): Promise<string> {
+    private async invokeSearch(messages: BaseMessage[]): Promise<InvokeResult> {
         const response = await this.searchModel.invoke([
             new SystemMessage(SEARCH_SYSTEM_PROMPT),
             ...messages,
         ]);
-        return extractContent(response);
+        return { content: extractContent(response), messages: [response] };
     }
 }
