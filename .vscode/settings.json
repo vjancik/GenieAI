@@ -10,6 +10,7 @@
         "kwargs",
         "langchain",
         "langgraph",
+        "LANGSMITH",
         "quicktime",
         "Refetcher",
         "WEBVTT"

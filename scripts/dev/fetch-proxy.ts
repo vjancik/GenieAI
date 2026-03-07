@@ -1,7 +1,7 @@
 /**
  * Fetch proxy preload script — intercepts generateContent API calls and logs the full request body.
  *
- * Load with: bun --preload ./src/devScripts/fetch-proxy.ts <your-script>
+ * Load with: bun --preload ./scripts/dev/fetch-proxy.ts <your-script>
  */
 
 const originalFetch = globalThis.fetch;
