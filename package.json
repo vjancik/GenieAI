@@ -1,6 +1,6 @@
 {
     "name": "genie-ai",
-    "module": "index.ts",
+    "module": "src/index.ts",
     "type": "module",
     "private": true,
     "scripts": {
@@ -29,6 +29,7 @@
         "typescript": "^5"
     },
     "dependencies": {
+        "@google/genai": "^1.44.0",
         "@langchain/core": "^1.1.30",
         "@langchain/google": "^0.1.5",
         "@langchain/langgraph": "^1.2.0",

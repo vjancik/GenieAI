@@ -20,6 +20,7 @@ import type { OnStatusUpdate } from "../../application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../application/types/AgentStatus.ts";
 import { AppError } from "../../domain/errors/AppError.ts";
 import type { DiscordMessage } from "../../domain/message/Message.ts";
+import type { AppConfig } from "../config/config.ts";
 import type { Logger } from "../logging/logger.ts";
 import {
     GENERAL_SYSTEM_PROMPT,
@@ -31,6 +32,7 @@ import {
 } from "./agents/searchAgent.ts";
 import type { TriageModel } from "./agents/triageAgent.ts";
 import { TRIAGE_SYSTEM_PROMPT } from "./agents/triageAgent.ts";
+import { filterHistoryForInlineSize } from "./inlineAttachmentFilter.ts";
 import type { GetVideoTranscriptionTool } from "./tools/getVideoTranscriptionTool.ts";
 import type { GetWebsiteTool } from "./tools/getWebsiteTool.ts";
 
@@ -233,6 +235,9 @@ export class Orchestrator {
     // Type inferred from buildGraph() return — avoids complex LangGraph generic annotation
     // biome-ignore lint/suspicious/noExplicitAny: LangGraph compiled graph generic is impractical to annotate
     private readonly graph: ReturnType<() => any>;
+    /** Pre-computed byte limit for inline attachment filtering (0 = no filtering). */
+    private readonly maxInlineBytes: number;
+    private readonly attachmentMode: AppConfig["attachmentMode"];
 
     constructor(
         private readonly triageModel: TriageModel,
@@ -241,7 +246,10 @@ export class Orchestrator {
         private readonly getWebsiteTool: GetWebsiteTool,
         private readonly getVideoTranscriptionTool: GetVideoTranscriptionTool,
         private readonly logger: Logger,
+        config: Pick<AppConfig, "attachmentMode" | "maxInlineAttachmentSizeMb">,
     ) {
+        this.attachmentMode = config.attachmentMode;
+        this.maxInlineBytes = config.maxInlineAttachmentSizeMb * 1024 * 1024;
         this.graph = this.buildGraph();
     }
 
@@ -253,15 +261,15 @@ export class Orchestrator {
      * messages (triage response, tool messages) so history has no gaps.
      *
      * @param history - Prior messages in the reply chain, chronologically ordered
-     * @param userMessage - The current user's message text
+     * @param userMessage - The current user's HumanMessage (may contain multimodal content blocks)
      * @param onStatusUpdate - Optional callback invoked as the agent transitions between processing phases
      */
     async process(
         history: BaseMessage[],
-        userMessage: string,
+        userMessage: HumanMessage,
         onStatusUpdate?: OnStatusUpdate,
     ): Promise<{ content: string; newMessages: BaseMessage[] }> {
-        const initialMessages = [...history, new HumanMessage(userMessage)];
+        const initialMessages = [...history, userMessage];
         // Always pass context so nodes receive a non-optional config; onStatusUpdate may be undefined
         const result = (await this.graph.invoke(
             { messages: initialMessages },
@@ -279,6 +287,35 @@ export class Orchestrator {
         }
 
         return { content: extractContent(lastMessage), newMessages };
+    }
+
+    /**
+     * Middleware helper: applies inline attachment size filtering before invoking a model.
+     *
+     * In "inline" attachment mode, all attachment data is base64-encoded directly in
+     * message content. Long reply chains can accumulate large amounts of inline data,
+     * exceeding context limits. This method trims oldest attachment blocks from the
+     * ephemeral message copy until the total inline data is within the configured limit.
+     *
+     * The original messages array (graph state) is never mutated — filtering operates
+     * on a copy. This is the extension point for future per-invocation middleware.
+     *
+     * @param model - Any model with an `invoke(messages, options?)` method
+     * @param messages - The full message array to pass to the model
+     * @param options - Optional model invocation options
+     */
+    private async invokeWithFilter<T extends BaseMessage>(
+        model: {
+            invoke(messages: BaseMessage[], options?: unknown): Promise<T>;
+        },
+        messages: BaseMessage[],
+        options?: unknown,
+    ): Promise<T> {
+        const filtered =
+            this.attachmentMode === "inline"
+                ? filterHistoryForInlineSize(messages, this.maxInlineBytes)
+                : messages;
+        return model.invoke(filtered, options);
     }
 
     /**
@@ -322,8 +359,13 @@ export class Orchestrator {
             ...state.messages,
         ];
 
-        const triageResponse = await this.triageModel.invoke(messages);
-        const toolCall = (triageResponse as AIMessage).tool_calls?.[0];
+        const triageResponse = await this.invokeWithFilter(
+            this.triageModel,
+            messages,
+        );
+
+        // TODO: we should check if there are more than 1 tool calls and add a log warning
+        const toolCall = triageResponse.tool_calls?.[0];
 
         if (!toolCall) {
             this.logger.info(
@@ -434,7 +476,10 @@ export class Orchestrator {
             );
         }
 
-        const response = await this.generalModel.invoke(invokeMessages);
+        const response = await this.invokeWithFilter(
+            this.generalModel,
+            invokeMessages,
+        );
         return { messages: [response] };
     }
 
@@ -446,7 +491,7 @@ export class Orchestrator {
         config: NodeConfig,
     ): Promise<{ messages: BaseMessage[] }> {
         config.context?.onStatusUpdate?.({ type: AgentStatusType.SEARCHING });
-        const response = await this.searchModel.invoke([
+        const response = await this.invokeWithFilter(this.searchModel, [
             new SystemMessage(SEARCH_SYSTEM_PROMPT),
             ...state.messages,
         ]);

@@ -1,5 +1,6 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import { Client, Events, GatewayIntentBits, type Message } from "discord.js";
+import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type {
     AgentStatusUpdate,
     OnStatusUpdate,
@@ -21,6 +22,8 @@ function statusUpdateContent(update: AgentStatusUpdate): string {
     switch (update.type) {
         case AgentStatusType.TRIAGE:
             return "Analyzing your request since";
+        case AgentStatusType.DOWNLOADING_ATTACHMENTS:
+            return "Downloading attachments since";
         case AgentStatusType.FETCHING_CONTENT:
             return "Fetching content since";
         case AgentStatusType.GENERATING:
@@ -80,6 +83,7 @@ export type MentionHandler = (params: {
     channelId: string;
     guildId: string | null;
     userContent: string;
+    attachments: DiscordAttachmentInfo[];
     onStatusUpdate?: OnStatusUpdate;
 }) => Promise<{ response: string; newMessages: BaseMessage[] }>;
 
@@ -164,7 +168,17 @@ export class DiscordGateway {
         if (!isExplicitMention(message, botUserId)) return;
 
         const userContent = extractUserContent(message, botUserId);
-        if (!userContent) {
+        const attachments: DiscordAttachmentInfo[] = [
+            ...message.attachments.values(),
+        ].map((a) => ({
+            url: a.url,
+            proxyURL: a.proxyURL,
+            name: a.name ?? "attachment",
+            size: a.size,
+            contentType: a.contentType,
+        }));
+
+        if (!userContent && attachments.length === 0) {
             await message.reply("Hi! Mention me with a question or a request.");
             return;
         }
@@ -174,6 +188,7 @@ export class DiscordGateway {
                 discordMessageId: message.id,
                 channelId: message.channelId,
                 referencedMessageId: message.reference?.messageId ?? null,
+                attachmentCount: attachments.length,
             },
             "Processing bot mention",
         );
@@ -202,6 +217,7 @@ export class DiscordGateway {
                 channelId: message.channelId,
                 guildId: message.guildId,
                 userContent,
+                attachments,
                 onStatusUpdate,
             });
 

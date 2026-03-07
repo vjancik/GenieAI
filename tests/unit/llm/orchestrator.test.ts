@@ -362,9 +362,16 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
+            {
+                attachmentMode: "inline" as const,
+                maxInlineAttachmentSizeMb: 100,
+            },
         );
 
-        const result = await orchestrator.process([], "What happened today?");
+        const result = await orchestrator.process(
+            [],
+            new HumanMessage("What happened today?"),
+        );
 
         expect(searchModel.invoke).toHaveBeenCalledTimes(1);
         expect(generalModel.invoke).not.toHaveBeenCalled();
@@ -387,9 +394,16 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
+            {
+                attachmentMode: "inline" as const,
+                maxInlineAttachmentSizeMb: 100,
+            },
         );
 
-        const result = await orchestrator.process([], "Tell me a joke");
+        const result = await orchestrator.process(
+            [],
+            new HumanMessage("Tell me a joke"),
+        );
 
         expect(generalModel.invoke).toHaveBeenCalledTimes(1);
         expect(searchModel.invoke).not.toHaveBeenCalled();
@@ -416,11 +430,15 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
+            {
+                attachmentMode: "inline" as const,
+                maxInlineAttachmentSizeMb: 100,
+            },
         );
 
         const result = await orchestrator.process(
             [],
-            "Summarize https://example.com",
+            new HumanMessage("Summarize https://example.com"),
         );
 
         expect(websiteTool.invoke).toHaveBeenCalledWith({
@@ -451,9 +469,16 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
+            {
+                attachmentMode: "inline" as const,
+                maxInlineAttachmentSizeMb: 100,
+            },
         );
 
-        const result = await orchestrator.process([], "Summarize this video");
+        const result = await orchestrator.process(
+            [],
+            new HumanMessage("Summarize this video"),
+        );
 
         expect(videoTool.invoke).toHaveBeenCalledWith({
             urls: ["https://youtube.com/watch?v=abc"],
@@ -478,9 +503,16 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
+            {
+                attachmentMode: "inline" as const,
+                maxInlineAttachmentSizeMb: 100,
+            },
         );
 
-        const result = await orchestrator.process([], "Hello");
+        const result = await orchestrator.process(
+            [],
+            new HumanMessage("Hello"),
+        );
 
         expect(generalModel.invoke).toHaveBeenCalledTimes(1);
         expect(result.content).toBe("fallback response");
@@ -501,6 +533,10 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
+            {
+                attachmentMode: "inline" as const,
+                maxInlineAttachmentSizeMb: 100,
+            },
         );
 
         const history: BaseMessage[] = [
@@ -508,7 +544,10 @@ describe("Orchestrator.process", () => {
             new AIMessage("First response"),
         ];
 
-        await orchestrator.process(history, "Follow-up question");
+        await orchestrator.process(
+            history,
+            new HumanMessage("Follow-up question"),
+        );
 
         const callArgs = (generalModel.invoke as ReturnType<typeof mock>).mock
             .calls[0]?.[0] as BaseMessage[];
@@ -542,9 +581,16 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
+            {
+                attachmentMode: "inline" as const,
+                maxInlineAttachmentSizeMb: 100,
+            },
         );
 
-        const result = await orchestrator.process([], "Think about this");
+        const result = await orchestrator.process(
+            [],
+            new HumanMessage("Think about this"),
+        );
 
         // Thought chunks excluded from displayed content
         expect(result.content).toBe("The actual answer.");
@@ -567,10 +613,16 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
+            {
+                attachmentMode: "inline" as const,
+                maxInlineAttachmentSizeMb: 100,
+            },
         );
 
         const updates: AgentStatusUpdate[] = [];
-        await orchestrator.process([], "Hello", (u) => updates.push(u));
+        await orchestrator.process([], new HumanMessage("Hello"), (u) =>
+            updates.push(u),
+        );
 
         expect(updates.map((u) => u.type)).toEqual([
             AgentStatusType.TRIAGE,
@@ -592,11 +644,17 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
+            {
+                attachmentMode: "inline" as const,
+                maxInlineAttachmentSizeMb: 100,
+            },
         );
 
         const updates: AgentStatusUpdate[] = [];
-        await orchestrator.process([], "What happened today?", (u) =>
-            updates.push(u),
+        await orchestrator.process(
+            [],
+            new HumanMessage("What happened today?"),
+            (u) => updates.push(u),
         );
 
         expect(updates.map((u) => u.type)).toEqual([
@@ -621,11 +679,17 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
+            {
+                attachmentMode: "inline" as const,
+                maxInlineAttachmentSizeMb: 100,
+            },
         );
 
         const updates: AgentStatusUpdate[] = [];
-        await orchestrator.process([], "Summarize example.com", (u) =>
-            updates.push(u),
+        await orchestrator.process(
+            [],
+            new HumanMessage("Summarize example.com"),
+            (u) => updates.push(u),
         );
 
         expect(updates.map((u) => u.type)).toEqual([
@@ -649,9 +713,15 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
+            {
+                attachmentMode: "inline" as const,
+                maxInlineAttachmentSizeMb: 100,
+            },
         );
 
         // Two-arg call must still work; no callback provided
-        expect(orchestrator.process([], "Hello")).resolves.toBeDefined();
+        expect(
+            orchestrator.process([], new HumanMessage("Hello")),
+        ).resolves.toBeDefined();
     });
 });

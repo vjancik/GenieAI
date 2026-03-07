@@ -5,6 +5,7 @@
  * injected into abstractions. All other modules depend on interfaces.
  */
 import { HandleDiscordMention } from "./application/HandleDiscordMention.ts";
+import { FetchAttachmentDownloader } from "./infrastructure/attachments/FetchAttachmentDownloader.ts";
 import { config } from "./infrastructure/config/config.ts";
 import { createDb } from "./infrastructure/db/connection.ts";
 import { PgMessageRepository } from "./infrastructure/db/repositories/PgMessageRepository.ts";
@@ -53,13 +54,21 @@ const orchestrator = new Orchestrator(
     getWebsiteTool,
     getVideoTranscriptionTool,
     logger.child({ module: "orchestrator" }),
+    config,
+);
+
+// Attachment downloader
+const attachmentDownloader = new FetchAttachmentDownloader(
+    logger.child({ module: "attachments" }),
 );
 
 // Application use case
 const handleDiscordMention = new HandleDiscordMention(
     messageRepository,
     orchestrator,
+    attachmentDownloader,
     logger.child({ module: "handler" }),
+    config,
 );
 
 // Discord gateway

@@ -6,9 +6,11 @@
         "cooldown",
         "dotenv",
         "eslintcache",
+        "genai",
         "kwargs",
         "langchain",
         "langgraph",
+        "quicktime",
         "WEBVTT"
     ]
 }

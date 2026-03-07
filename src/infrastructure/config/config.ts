@@ -1,5 +1,8 @@
 import { ConfigError } from "../../domain/errors/AppError.ts";
 
+/** Controls how file attachments are included in LLM requests. */
+export type AttachmentMode = "inline" | "upload";
+
 /**
  * Typed configuration for the application.
  * All values are sourced from environment variables and validated at startup.
@@ -15,6 +18,19 @@ export interface AppConfig {
     includeLLMThoughts: boolean;
     /** Pino log level. Default: "info" */
     logLevel: string;
+    /**
+     * How file attachments are passed to the LLM.
+     * - "inline": base64-encoded directly in the message (cross-provider, high memory overhead)
+     * - "upload": uploaded via provider file API (Gemini-only, not yet implemented)
+     * Default: "inline"
+     */
+    attachmentMode: AttachmentMode;
+    /**
+     * Maximum total size in MB for inline attachments per message and for the cumulative
+     * inline attachment data across the entire conversation history.
+     * Default: 100
+     */
+    maxInlineAttachmentSizeMb: number;
 }
 
 /**
@@ -55,7 +71,29 @@ function loadConfig(): AppConfig {
         triageThinkingLevel: process.env.TRIAGE_THINKING_LEVEL ?? "minimal",
         includeLLMThoughts: process.env.INCLUDE_LLM_THOUGHTS === "true",
         logLevel: process.env.LOG_LEVEL ?? "info",
+        attachmentMode: parseAttachmentMode(process.env.UPLOAD_ATTACHMENT_MODE),
+        maxInlineAttachmentSizeMb: Number(
+            process.env.MAX_INLINE_ATTACHMENT_SZ_MB ?? "100",
+        ),
     };
+}
+
+/**
+ * Parses and validates the UPLOAD_ATTACHMENT_MODE environment variable.
+ * Throws {@link ConfigError} if the value is "upload" (not yet implemented)
+ * or an unknown string.
+ */
+function parseAttachmentMode(raw: string | undefined): AttachmentMode {
+    const value = raw ?? "inline";
+    if (value === "inline") return "inline";
+    if (value === "upload") {
+        throw new ConfigError(
+            "Upload attachment mode is not yet implemented. Set UPLOAD_ATTACHMENT_MODE=inline or leave it unset.",
+        );
+    }
+    throw new ConfigError(
+        `Invalid UPLOAD_ATTACHMENT_MODE value: "${value}". Expected "inline" or "upload".`,
+    );
 }
 
 export const config: AppConfig = loadConfig();

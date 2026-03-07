@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
 import { HandleDiscordMention } from "../../../src/application/HandleDiscordMention.ts";
+import type { IAttachmentDownloader } from "../../../src/application/ports/IAttachmentDownloader.ts";
 import type { OnStatusUpdate } from "../../../src/application/types/AgentStatus.ts";
 import type { IMessageRepository } from "../../../src/domain/message/IMessageRepository.ts";
 import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
@@ -48,6 +49,18 @@ function makeOrchestrator(
     };
 }
 
+function makeDownloader(): IAttachmentDownloader {
+    return {
+        download: mock(async (a) => ({
+            data: "base64data",
+            mimeType: a.contentType ?? "application/octet-stream",
+            name: a.name,
+        })),
+    };
+}
+
+const testConfig = { maxInlineAttachmentSizeMb: 100 };
+
 describe("HandleDiscordMention.handle", () => {
     test("returns the orchestrator response", async () => {
         const repo = makeRepo();
@@ -55,7 +68,9 @@ describe("HandleDiscordMention.handle", () => {
         const handler = new HandleDiscordMention(
             repo,
             orchestrator as never,
+            makeDownloader(),
             testLogger,
+            testConfig,
         );
 
         const result = await handler.handle({
@@ -64,6 +79,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             userContent: "Hello",
+            attachments: [],
         });
 
         expect(result.response).toBe("Hello back!");
@@ -76,7 +92,9 @@ describe("HandleDiscordMention.handle", () => {
         const handler = new HandleDiscordMention(
             repo,
             orchestrator as never,
+            makeDownloader(),
             testLogger,
+            testConfig,
         );
 
         await handler.handle({
@@ -85,6 +103,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: null,
             userContent: "Hello",
+            attachments: [],
         });
 
         expect(repo.fetchChain).not.toHaveBeenCalled();
@@ -96,7 +115,9 @@ describe("HandleDiscordMention.handle", () => {
         const handler = new HandleDiscordMention(
             repo,
             orchestrator as never,
+            makeDownloader(),
             testLogger,
+            testConfig,
         );
 
         await handler.handle({
@@ -105,6 +126,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             userContent: "Follow-up",
+            attachments: [],
         });
 
         expect(repo.fetchChain).toHaveBeenCalledWith("discord-123");
@@ -116,7 +138,9 @@ describe("HandleDiscordMention.handle", () => {
         const handler = new HandleDiscordMention(
             repo,
             orchestrator as never,
+            makeDownloader(),
             testLogger,
+            testConfig,
         );
 
         await handler.handle({
@@ -125,15 +149,17 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             userContent: "Follow-up",
+            attachments: [],
         });
 
         const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock
             .calls[0];
         expect(firstCall).toBeDefined();
-        const [history, userMessage] = firstCall as [unknown[], string];
+        const [history, userMessage] = firstCall as [unknown[], HumanMessage];
         // baseMessage has one serialized AIMessage → deserialized to 1 BaseMessage
         expect(history).toHaveLength(1);
-        expect(userMessage).toBe("Follow-up");
+        expect(userMessage).toBeInstanceOf(HumanMessage);
+        expect((userMessage as HumanMessage).content).toBe("Follow-up");
     });
 
     test("forwards onStatusUpdate to orchestrator.process as the third argument", async () => {
@@ -142,7 +168,9 @@ describe("HandleDiscordMention.handle", () => {
         const handler = new HandleDiscordMention(
             repo,
             orchestrator as never,
+            makeDownloader(),
             testLogger,
+            testConfig,
         );
 
         const onStatusUpdate: OnStatusUpdate = mock(() => {});
@@ -153,6 +181,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: null,
             userContent: "Hello",
+            attachments: [],
             onStatusUpdate,
         });
 
@@ -169,7 +198,9 @@ describe("HandleDiscordMention.handle", () => {
         const handler = new HandleDiscordMention(
             repo,
             orchestrator as never,
+            makeDownloader(),
             testLogger,
+            testConfig,
         );
 
         await handler.handle({
@@ -178,12 +209,13 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: null,
             userContent: "Hello",
+            attachments: [],
         });
 
         const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock
             .calls[0];
         expect(firstCall).toBeDefined();
-        const [history] = firstCall as [unknown[], string];
+        const [history] = firstCall as [unknown[], HumanMessage];
         expect(history).toHaveLength(0);
     });
 
@@ -193,7 +225,9 @@ describe("HandleDiscordMention.handle", () => {
         const handler = new HandleDiscordMention(
             repo,
             orchestrator as never,
+            makeDownloader(),
             testLogger,
+            testConfig,
         );
 
         await handler.handle({
@@ -202,6 +236,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             userContent: "What is 2+2?",
+            attachments: [],
         });
 
         const saveCall = (repo.save as ReturnType<typeof mock>).mock
@@ -219,6 +254,81 @@ describe("HandleDiscordMention.handle", () => {
         expect(reconstructed).toBeInstanceOf(HumanMessage);
         expect((reconstructed as HumanMessage).content).toBe("What is 2+2?");
     });
+
+    test("returns error response when attachment total size exceeds limit", async () => {
+        const repo = makeRepo();
+        const orchestrator = makeOrchestrator();
+        const handler = new HandleDiscordMention(
+            repo,
+            orchestrator as never,
+            makeDownloader(),
+            testLogger,
+            { maxInlineAttachmentSizeMb: 1 }, // 1 MB limit
+        );
+
+        const result = await handler.handle({
+            discordMessageId: "user-msg-1",
+            referencedMessageId: null,
+            channelId: "ch-1",
+            guildId: null,
+            userContent: "Here are files",
+            attachments: [
+                {
+                    url: "https://cdn.discord.com/file1",
+                    proxyURL: "https://proxy/file1",
+                    name: "big.zip",
+                    size: 2 * 1024 * 1024, // 2 MB
+                    contentType: "application/zip",
+                },
+            ],
+        });
+
+        expect(result.response).toContain("exceeds");
+        expect(result.newMessages).toHaveLength(0);
+        // Orchestrator should NOT have been called
+        expect(
+            (orchestrator.process as ReturnType<typeof mock>).mock.calls,
+        ).toHaveLength(0);
+    });
+
+    test("downloads attachments and passes multimodal HumanMessage to orchestrator", async () => {
+        const repo = makeRepo();
+        const orchestrator = makeOrchestrator();
+        const downloader = makeDownloader();
+        const handler = new HandleDiscordMention(
+            repo,
+            orchestrator as never,
+            downloader,
+            testLogger,
+            testConfig,
+        );
+
+        await handler.handle({
+            discordMessageId: "user-msg-1",
+            referencedMessageId: null,
+            channelId: "ch-1",
+            guildId: null,
+            userContent: "What's in this image?",
+            attachments: [
+                {
+                    url: "https://cdn.discord.com/img.png",
+                    proxyURL: "https://proxy/img.png",
+                    name: "img.png",
+                    size: 512,
+                    contentType: "image/png",
+                },
+            ],
+        });
+
+        expect(downloader.download).toHaveBeenCalledTimes(1);
+
+        const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock
+            .calls[0];
+        const userMessage = firstCall?.[1] as HumanMessage;
+        expect(userMessage).toBeInstanceOf(HumanMessage);
+        // Should have structured content (array), not a plain string
+        expect(Array.isArray(userMessage.content)).toBe(true);
+    });
 });
 
 describe("HandleDiscordMention.saveBotResponse", () => {
@@ -228,7 +338,9 @@ describe("HandleDiscordMention.saveBotResponse", () => {
         const handler = new HandleDiscordMention(
             repo,
             orchestrator as never,
+            makeDownloader(),
             testLogger,
+            testConfig,
         );
 
         const aiMsg = new AIMessage("The answer is 4");
@@ -254,7 +366,9 @@ describe("HandleDiscordMention.saveBotResponse", () => {
         const handler = new HandleDiscordMention(
             repo,
             orchestrator as never,
+            makeDownloader(),
             testLogger,
+            testConfig,
         );
 
         const messages = [
