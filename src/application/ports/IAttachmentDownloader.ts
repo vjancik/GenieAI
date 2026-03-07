@@ -6,6 +6,8 @@
 
 /** Metadata Discord provides for a message attachment. */
 export interface DiscordAttachmentInfo {
+    /** Discord snowflake for the attachment. Stable identifier used for refetching. */
+    id: string;
     /** Primary CDN URL for the attachment. */
     url: string;
     /** Proxy URL — used as a fallback if the primary URL fails. */

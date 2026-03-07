@@ -21,4 +21,4 @@
 - prefer bind(this / instanceObj), when passing methods as callbacks, to lambda wrappers
 
 # Third-Party APIs & SDKs Rules
-- use `context7` MCP to look up up-to-date API docs and usage patterns for major libraries (e.g. langchain, @langchain/google) before writing code using them, or when trying to resolve type discrepancies  
+- use `context7` MCP to look up up-to-date API docs and usage patterns for major libraries (e.g. langchain, @langchain/google, genai) before writing code using them, or when trying to resolve type discrepancies  

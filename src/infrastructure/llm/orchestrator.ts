@@ -8,6 +8,7 @@ import {
     SystemMessage,
     ToolMessage,
 } from "@langchain/core/messages";
+import { ChatGoogle } from "@langchain/google";
 import {
     Command,
     END,
@@ -218,6 +219,26 @@ function extractContent(response: BaseMessage): string {
 type GraphState = typeof MessagesAnnotation.State;
 
 /**
+ * Recursively unwraps LangChain Runnable wrappers to reach the base model.
+ *
+ * LangChain wrapper types hold the underlying runnable under different property names:
+ * - `RunnableBinding` (.bindTools(), .withConfig()) → `.bound`
+ * - `RunnableRetry` (.withRetry()) → `.bound` (extends RunnableBinding)
+ * - `RunnableWithFallbacks` (.withFallbacks()) → `.runnable`
+ *
+ * The recursion bottoms out when neither property exists, returning the value as-is.
+ */
+function unwrapRunnable(model: unknown): unknown {
+    if (typeof model !== "object" || model === null) return model;
+    const m = model as Record<string, unknown>;
+    if (typeof m.bound === "object" && m.bound !== null)
+        return unwrapRunnable(m.bound);
+    if (typeof m.runnable === "object" && m.runnable !== null)
+        return unwrapRunnable(m.runnable);
+    return model;
+}
+
+/**
  * Orchestrates the multi-agent triage routing pipeline as a LangGraph StateGraph.
  *
  * Graph topology:
@@ -248,6 +269,22 @@ export class Orchestrator {
         private readonly logger: Logger,
         config: Pick<AppConfig, "attachmentMode" | "maxInlineAttachmentSizeMb">,
     ) {
+        // Upload mode uses the Gemini Files API, which is only supported by ChatGoogle.
+        // Guard here to catch wiring mistakes early — in production all models are ChatGoogle.
+        if (config.attachmentMode === "upload") {
+            for (const [name, model] of [
+                ["triageModel", triageModel],
+                ["generalModel", generalModel],
+                ["searchModel", searchModel],
+            ] as const) {
+                if (!(unwrapRunnable(model) instanceof ChatGoogle)) {
+                    throw new Error(
+                        `Orchestrator: upload attachment mode requires all models to be ChatGoogle, but "${name}" is not`,
+                    );
+                }
+            }
+        }
+
         this.attachmentMode = config.attachmentMode;
         this.maxInlineBytes = config.maxInlineAttachmentSizeMb * 1024 * 1024;
         this.graph = this.buildGraph();
@@ -440,6 +477,7 @@ export class Orchestrator {
 
         const toolMessage = new ToolMessage({
             content: toolResult,
+            name: toolCall.name,
             tool_call_id: toolCall.id ?? "",
         });
 

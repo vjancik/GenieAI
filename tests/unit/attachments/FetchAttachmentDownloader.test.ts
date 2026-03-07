@@ -7,6 +7,7 @@ import { FetchAttachmentDownloader } from "../../../src/infrastructure/attachmen
 const testLogger = pino({ level: "silent" });
 
 const testAttachment: DiscordAttachmentInfo = {
+    id: "att-123",
     url: "https://cdn.discordapp.com/attachments/test/image.jpg",
     proxyURL: "https://media.discordapp.net/attachments/test/image.jpg",
     name: "image.jpg",

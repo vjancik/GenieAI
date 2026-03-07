@@ -57,10 +57,7 @@ export function createGetWebsiteTool(logger: Logger) {
                 "Fetch one or more web page URLs and return their full content as Markdown. " +
                 "Use this when the user provides URLs to web pages they want analyzed, summarized, or referenced.",
             schema: z.object({
-                urls: z
-                    .array(z.string().url())
-                    .min(1)
-                    .describe("List of URLs to fetch"),
+                urls: z.array(z.url()).min(1).describe("List of URLs to fetch"),
             }),
         },
     );

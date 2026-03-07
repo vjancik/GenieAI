@@ -1,5 +1,5 @@
 import { tool } from "@langchain/core/tools";
-import { ChatGoogle } from "@langchain/google/node";
+import { ChatGoogle } from "@langchain/google";
 import { z } from "zod/v4";
 import type { AppConfig } from "../../config/config.ts";
 import type { GetVideoTranscriptionTool } from "../tools/getVideoTranscriptionTool.ts";

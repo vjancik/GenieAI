@@ -44,7 +44,7 @@ export class PgMessageRepository implements IMessageRepository {
                 "Saved message to database",
             );
 
-            return result as DiscordMessage;
+            return result;
         } catch (err) {
             if (err instanceof DatabaseError) throw err;
             throw new DatabaseError("Failed to save message", err);

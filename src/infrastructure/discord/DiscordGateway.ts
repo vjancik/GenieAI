@@ -1,6 +1,7 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import { Client, Events, GatewayIntentBits, type Message } from "discord.js";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
+import type { IDiscordAttachmentRefetcher } from "../../application/ports/IDiscordAttachmentRefetcher.ts";
 import type {
     AgentStatusUpdate,
     OnStatusUpdate,
@@ -85,6 +86,7 @@ export type MentionHandler = (params: {
     userContent: string;
     attachments: DiscordAttachmentInfo[];
     onStatusUpdate?: OnStatusUpdate;
+    attachmentRefetcher?: IDiscordAttachmentRefetcher;
 }) => Promise<{ response: string; newMessages: BaseMessage[] }>;
 
 /** Callback invoked after the bot's reply is sent, to persist the bot's message. */
@@ -171,6 +173,7 @@ export class DiscordGateway {
         const attachments: DiscordAttachmentInfo[] = [
             ...message.attachments.values(),
         ].map((a) => ({
+            id: a.id,
             url: a.url,
             proxyURL: a.proxyURL,
             name: a.name ?? "attachment",
@@ -192,6 +195,39 @@ export class DiscordGateway {
             },
             "Processing bot mention",
         );
+
+        /**
+         * Per-request attachment refetcher: closes over the discord.js client and
+         * the current channelId. All messages in a reply chain share the same channel,
+         * so this is valid for refetching any historical message in the chain.
+         * Used by GeminiFileRefreshService in upload mode to get fresh CDN URLs.
+         */
+        const channelId = message.channelId;
+        const client = this.client;
+        const attachmentRefetcher: IDiscordAttachmentRefetcher = {
+            async fetchAttachment(
+                messageDiscordId: string,
+                attachmentId: string,
+            ): Promise<DiscordAttachmentInfo | null> {
+                try {
+                    const channel = await client.channels.fetch(channelId);
+                    if (!channel?.isTextBased()) return null;
+                    const msg = await channel.messages.fetch(messageDiscordId);
+                    const att = msg.attachments.get(attachmentId);
+                    if (!att) return null;
+                    return {
+                        id: att.id,
+                        url: att.url,
+                        proxyURL: att.proxyURL,
+                        name: att.name ?? "attachment",
+                        size: att.size,
+                        contentType: att.contentType,
+                    };
+                } catch {
+                    return null;
+                }
+            },
+        };
 
         // Send the "Thinking" placeholder immediately so the user gets instant feedback
         const thinkingMessage = await message.reply(
@@ -219,6 +255,7 @@ export class DiscordGateway {
                 userContent,
                 attachments,
                 onStatusUpdate,
+                attachmentRefetcher,
             });
 
             // Cancel any pending status edit before writing the final response

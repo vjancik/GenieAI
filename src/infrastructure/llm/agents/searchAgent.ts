@@ -1,4 +1,4 @@
-import { ChatGoogle } from "@langchain/google/node";
+import { ChatGoogle } from "@langchain/google";
 import type { AppConfig } from "../../config/config.ts";
 
 /**

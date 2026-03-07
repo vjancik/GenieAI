@@ -4,10 +4,14 @@
  * This is the only place where concrete implementations are constructed and
  * injected into abstractions. All other modules depend on interfaces.
  */
+import { GeminiFileRefreshService } from "./application/GeminiFileRefreshService.ts";
 import { HandleDiscordMention } from "./application/HandleDiscordMention.ts";
 import { FetchAttachmentDownloader } from "./infrastructure/attachments/FetchAttachmentDownloader.ts";
+import { FetchDiskAttachmentDownloader } from "./infrastructure/attachments/FetchDiskAttachmentDownloader.ts";
+import { GenaiFileUploader } from "./infrastructure/attachments/GenaiFileUploader.ts";
 import { config } from "./infrastructure/config/config.ts";
 import { createDb } from "./infrastructure/db/connection.ts";
+import { PgGeminiFileRepository } from "./infrastructure/db/repositories/PgGeminiFileRepository.ts";
 import { PgMessageRepository } from "./infrastructure/db/repositories/PgMessageRepository.ts";
 import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
 import { StatusMessageUpdater } from "./infrastructure/discord/StatusMessageUpdater.ts";
@@ -57,9 +61,29 @@ const orchestrator = new Orchestrator(
     config,
 );
 
-// Attachment downloader
+// Attachment infrastructure
 const attachmentDownloader = new FetchAttachmentDownloader(
     logger.child({ module: "attachments" }),
+);
+
+// Upload-mode dependencies (constructed unconditionally; only used when attachmentMode=upload)
+const diskDownloader = new FetchDiskAttachmentDownloader(
+    logger.child({ module: "attachments:disk" }),
+);
+const geminiFileUploader = new GenaiFileUploader(
+    config.googleApiKey,
+    logger.child({ module: "attachments:gemini" }),
+);
+const geminiFileRepository = new PgGeminiFileRepository(
+    db,
+    logger.child({ module: "repository:gemini" }),
+);
+const geminiFileRefreshService = new GeminiFileRefreshService(
+    geminiFileRepository,
+    geminiFileUploader,
+    diskDownloader,
+    logger.child({ module: "attachments:refresh" }),
+    config,
 );
 
 // Application use case
@@ -69,6 +93,10 @@ const handleDiscordMention = new HandleDiscordMention(
     attachmentDownloader,
     logger.child({ module: "handler" }),
     config,
+    diskDownloader,
+    geminiFileUploader,
+    geminiFileRepository,
+    geminiFileRefreshService,
 );
 
 // Discord gateway

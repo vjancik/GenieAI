@@ -21,7 +21,7 @@ export interface AppConfig {
     /**
      * How file attachments are passed to the LLM.
      * - "inline": base64-encoded directly in the message (cross-provider, high memory overhead)
-     * - "upload": uploaded via provider file API (Gemini-only, not yet implemented)
+     * - "upload": uploaded via Gemini Files API (Gemini only, streaming to disk)
      * Default: "inline"
      */
     attachmentMode: AttachmentMode;
@@ -31,6 +31,14 @@ export interface AppConfig {
      * Default: 100
      */
     maxInlineAttachmentSizeMb: number;
+    /**
+     * How many minutes before expiry a Gemini file is considered stale and will be
+     * re-uploaded before the next LLM invocation. Gemini files expire after 48 hours.
+     * A file uploaded more than (48h - staleThreshold) ago is refreshed.
+     * Only relevant when attachmentMode is "upload".
+     * Default: 60 (refresh when less than 1 hour of TTL remains)
+     */
+    geminiFileStaleThresholdMinutes: number;
 }
 
 /**
@@ -75,22 +83,20 @@ function loadConfig(): AppConfig {
         maxInlineAttachmentSizeMb: Number(
             process.env.MAX_INLINE_ATTACHMENT_SZ_MB ?? "100",
         ),
+        geminiFileStaleThresholdMinutes: Number(
+            process.env.GEMINI_FILE_STALE_THRESHOLD_MINUTES ?? "60",
+        ),
     };
 }
 
 /**
  * Parses and validates the UPLOAD_ATTACHMENT_MODE environment variable.
- * Throws {@link ConfigError} if the value is "upload" (not yet implemented)
- * or an unknown string.
+ * Throws {@link ConfigError} for unknown values.
  */
 function parseAttachmentMode(raw: string | undefined): AttachmentMode {
     const value = raw ?? "inline";
     if (value === "inline") return "inline";
-    if (value === "upload") {
-        throw new ConfigError(
-            "Upload attachment mode is not yet implemented. Set UPLOAD_ATTACHMENT_MODE=inline or leave it unset.",
-        );
-    }
+    if (value === "upload") return "upload";
     throw new ConfigError(
         `Invalid UPLOAD_ATTACHMENT_MODE value: "${value}". Expected "inline" or "upload".`,
     );

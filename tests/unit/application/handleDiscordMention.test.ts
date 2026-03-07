@@ -59,7 +59,10 @@ function makeDownloader(): IAttachmentDownloader {
     };
 }
 
-const testConfig = { maxInlineAttachmentSizeMb: 100 };
+const testConfig = {
+    maxInlineAttachmentSizeMb: 100,
+    attachmentMode: "inline" as const,
+};
 
 describe("HandleDiscordMention.handle", () => {
     test("returns the orchestrator response", async () => {
@@ -263,7 +266,7 @@ describe("HandleDiscordMention.handle", () => {
             orchestrator as never,
             makeDownloader(),
             testLogger,
-            { maxInlineAttachmentSizeMb: 1 }, // 1 MB limit
+            { maxInlineAttachmentSizeMb: 1, attachmentMode: "inline" as const }, // 1 MB limit
         );
 
         const result = await handler.handle({
@@ -274,6 +277,7 @@ describe("HandleDiscordMention.handle", () => {
             userContent: "Here are files",
             attachments: [
                 {
+                    id: "att-001",
                     url: "https://cdn.discord.com/file1",
                     proxyURL: "https://proxy/file1",
                     name: "big.zip",
@@ -311,6 +315,7 @@ describe("HandleDiscordMention.handle", () => {
             userContent: "What's in this image?",
             attachments: [
                 {
+                    id: "att-002",
                     url: "https://cdn.discord.com/img.png",
                     proxyURL: "https://proxy/img.png",
                     name: "img.png",

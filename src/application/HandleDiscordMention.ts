@@ -1,26 +1,39 @@
+import { randomUUID } from "node:crypto";
+import { unlink } from "node:fs/promises";
+import { join } from "node:path";
 import type { BaseMessage } from "@langchain/core/messages";
 import { HumanMessage } from "@langchain/core/messages";
+import type { GeminiFileUpload } from "../domain/message/GeminiFileUpload.ts";
 import type { IMessageRepository } from "../domain/message/IMessageRepository.ts";
-import { getBlockType } from "../infrastructure/attachments/contentBlockMapper.ts";
+
 import type { AppConfig } from "../infrastructure/config/config.ts";
 import type { Orchestrator } from "../infrastructure/llm/orchestrator.ts";
 import { dbMessagesToLangchain } from "../infrastructure/llm/orchestrator.ts";
 import type { Logger } from "../infrastructure/logging/logger.ts";
+import type { GeminiFileRefreshService } from "./GeminiFileRefreshService.ts";
 import type {
     DiscordAttachmentInfo,
     IAttachmentDownloader,
 } from "./ports/IAttachmentDownloader.ts";
+import type { IDiscordAttachmentRefetcher } from "./ports/IDiscordAttachmentRefetcher.ts";
+import type { IDiskAttachmentDownloader } from "./ports/IDiskAttachmentDownloader.ts";
+import type { IGeminiFileRepository } from "./ports/IGeminiFileRepository.ts";
+import type { IGeminiFileUploader } from "./ports/IGeminiFileUploader.ts";
 import type { OnStatusUpdate } from "./types/AgentStatus.ts";
 import { AgentStatusType } from "./types/AgentStatus.ts";
+
+/** Temp directory for streaming attachments before Gemini upload. */
+const UPLOAD_TEMP_DIR = "/var/tmp/genie-attachments";
 
 /**
  * Application use case: handle an incoming Discord @mention.
  *
  * Coordinates:
  * 1. Fetching prior conversation history from the reply chain
- * 2. Downloading any file attachments (inline mode) and building a multimodal HumanMessage
- * 3. Invoking the LLM orchestrator with history + current message
- * 4. Persisting the user's message to the database
+ * 2. (upload mode) Refreshing any stale Gemini file references in history
+ * 3. Downloading and building a multimodal HumanMessage (inline or upload mode)
+ * 4. Invoking the LLM orchestrator with history + current message
+ * 5. Persisting the user's message to the database
  *
  * The bot's response message is persisted separately (via {@link saveBotResponse})
  * after it has been sent to Discord, because we need Discord's message ID.
@@ -30,15 +43,22 @@ import { AgentStatusType } from "./types/AgentStatus.ts";
  */
 export class HandleDiscordMention {
     private readonly maxInlineBytes: number;
+    private readonly attachmentMode: AppConfig["attachmentMode"];
 
     constructor(
         private readonly messageRepo: IMessageRepository,
         private readonly orchestrator: Orchestrator,
         private readonly attachmentDownloader: IAttachmentDownloader,
         private readonly logger: Logger,
-        config: Pick<AppConfig, "maxInlineAttachmentSizeMb">,
+        config: Pick<AppConfig, "maxInlineAttachmentSizeMb" | "attachmentMode">,
+        /** Required in upload mode; unused in inline mode. */
+        private readonly diskDownloader?: IDiskAttachmentDownloader,
+        private readonly geminiFileUploader?: IGeminiFileUploader,
+        private readonly geminiFileRepo?: IGeminiFileRepository,
+        private readonly geminiFileRefreshService?: GeminiFileRefreshService,
     ) {
         this.maxInlineBytes = config.maxInlineAttachmentSizeMb * 1024 * 1024;
+        this.attachmentMode = config.attachmentMode;
     }
 
     /**
@@ -51,8 +71,9 @@ export class HandleDiscordMention {
      * @param params.userContent - Message content with bot mention stripped
      * @param params.attachments - File attachments on the Discord message
      * @param params.onStatusUpdate - Optional callback forwarded to the orchestrator for live status updates
+     * @param params.attachmentRefetcher - Per-request Discord attachment fetcher (required in upload mode)
      * @returns The AI-generated response string and the new LangChain messages generated,
-     *          or an error string if attachments exceed the size limit
+     *          or an error string if attachments exceed the size limit (inline mode only)
      */
     async handle(params: {
         discordMessageId: string;
@@ -62,41 +83,54 @@ export class HandleDiscordMention {
         userContent: string;
         attachments: DiscordAttachmentInfo[];
         onStatusUpdate?: OnStatusUpdate;
+        attachmentRefetcher?: IDiscordAttachmentRefetcher;
     }): Promise<{ response: string; newMessages: BaseMessage[] }> {
-        // Guard: reject if total attachment size exceeds the configured limit
-        if (params.attachments.length > 0) {
-            const totalBytes = params.attachments.reduce(
-                (sum, a) => sum + a.size,
-                0,
-            );
-            if (totalBytes > this.maxInlineBytes) {
-                const limitMb = this.maxInlineBytes / (1024 * 1024);
-                const actualMb = (totalBytes / (1024 * 1024)).toFixed(1);
-                this.logger.warn(
-                    {
-                        totalBytes,
-                        maxBytes: this.maxInlineBytes,
-                        discordMessageId: params.discordMessageId,
-                    },
-                    "Attachment size exceeds limit — rejecting",
+        if (this.attachmentMode === "inline") {
+            // Guard: reject if total attachment size exceeds the configured limit
+            if (params.attachments.length > 0) {
+                const totalBytes = params.attachments.reduce(
+                    (sum, a) => sum + a.size,
+                    0,
                 );
-                return {
-                    response: `Sorry, your attachments total ${actualMb} MB which exceeds the ${limitMb} MB limit. Please send smaller files.`,
-                    newMessages: [],
-                };
+                if (totalBytes > this.maxInlineBytes) {
+                    const limitMb = this.maxInlineBytes / (1024 * 1024);
+                    const actualMb = (totalBytes / (1024 * 1024)).toFixed(1);
+                    this.logger.warn(
+                        {
+                            totalBytes,
+                            maxBytes: this.maxInlineBytes,
+                            discordMessageId: params.discordMessageId,
+                        },
+                        "Attachment size exceeds limit — rejecting",
+                    );
+                    return {
+                        response: `Sorry, your attachments total ${actualMb} MB which exceeds the ${limitMb} MB limit. Please send smaller files.`,
+                        newMessages: [],
+                    };
+                }
             }
         }
 
         // Fetch existing reply chain if this message is a reply
-        const history =
+        const dbHistory =
             params.referencedMessageId !== null
-                ? dbMessagesToLangchain(
-                      await this.messageRepo.fetchChain(
-                          params.referencedMessageId,
-                      ),
-                      this.logger,
-                  )
+                ? await this.messageRepo.fetchChain(params.referencedMessageId)
                 : [];
+
+        let history = dbMessagesToLangchain(dbHistory, this.logger);
+
+        // In upload mode: refresh any stale Gemini file references before invoking the LLM
+        if (
+            this.attachmentMode === "upload" &&
+            this.geminiFileRefreshService &&
+            params.attachmentRefetcher &&
+            history.length > 0
+        ) {
+            history = await this.geminiFileRefreshService.refreshHistory(
+                history,
+                params.attachmentRefetcher,
+            );
+        }
 
         this.logger.debug(
             {
@@ -104,26 +138,22 @@ export class HandleDiscordMention {
                 historyLength: history.length,
                 hasReply: params.referencedMessageId !== null,
                 attachmentCount: params.attachments.length,
+                attachmentMode: this.attachmentMode,
             },
             "Processing mention with history",
         );
 
-        // TODO: this could use some logging, especially so we can see the type + mimeType combinations. You can truncate the actual message text to first 100 characters and also omit the data in the log
-        // Build the human message — multimodal if attachments are present
-        const humanMsg = await this.buildHumanMessage(
+        // Build the human message — multimodal if attachments are present.
+        // In upload mode this also returns pending gemini file records that must
+        // be saved AFTER the user's message row exists (FK constraint).
+        const { humanMsg, pendingGeminiRecords } = await this.buildHumanMessage(
+            params.discordMessageId,
             params.userContent,
             params.attachments,
             params.onStatusUpdate,
         );
 
-        // Generate the AI response; collect all new messages for persistence
-        const { content, newMessages } = await this.orchestrator.process(
-            history,
-            humanMsg,
-            params.onStatusUpdate,
-        );
-
-        // Persist the user's message (may contain multimodal content blocks)
+        // Persist the user's message first so gemini_file_uploads FK is satisfied.
         await this.messageRepo.save({
             discordMessageId: params.discordMessageId,
             repliesToDiscordId: params.referencedMessageId,
@@ -134,6 +164,18 @@ export class HandleDiscordMention {
                 humanMsg.toJSON() as unknown as Record<string, unknown>,
             ],
         });
+
+        // Save gemini file upload records after the message row exists.
+        for (const record of pendingGeminiRecords) {
+            await this.geminiFileRepo?.save(record);
+        }
+
+        // Generate the AI response; collect all new messages for persistence
+        const { content, newMessages } = await this.orchestrator.process(
+            history,
+            humanMsg,
+            params.onStatusUpdate,
+        );
 
         return { response: content, newMessages };
     }
@@ -180,27 +222,60 @@ export class HandleDiscordMention {
 
     /**
      * Constructs a HumanMessage from user text and optional file attachments.
+     * Delegates to the appropriate builder based on the configured attachment mode.
      *
-     * If there are no attachments, returns a simple string-content HumanMessage.
-     * Otherwise emits a DOWNLOADING_ATTACHMENTS status update, downloads all
-     * attachments in parallel, and returns a multimodal HumanMessage with
-     * a text block followed by one content block per attachment.
+     * If there are no attachments, always returns a simple string-content HumanMessage.
      *
-     * The text block is always first; attachment blocks follow in Discord message order.
+     * In upload mode, also returns `pendingGeminiRecords` — Gemini file upload rows
+     * that must be saved to the DB **after** the user message row exists (FK constraint).
+     * In all other modes `pendingGeminiRecords` is always an empty array.
      */
     private async buildHumanMessage(
+        discordMessageId: string,
         userContent: string,
         attachments: DiscordAttachmentInfo[],
         onStatusUpdate?: OnStatusUpdate,
-    ): Promise<HumanMessage> {
+    ): Promise<{
+        humanMsg: HumanMessage;
+        pendingGeminiRecords: Omit<GeminiFileUpload, "id">[];
+    }> {
         if (attachments.length === 0) {
-            return new HumanMessage(userContent);
+            return {
+                humanMsg: new HumanMessage(userContent),
+                pendingGeminiRecords: [],
+            };
         }
 
         onStatusUpdate?.({ type: AgentStatusType.DOWNLOADING_ATTACHMENTS });
 
+        if (this.attachmentMode === "upload") {
+            return this.buildUploadModeMessage(
+                discordMessageId,
+                userContent,
+                attachments,
+            );
+        }
+
+        const humanMsg = await this.buildInlineModeMessage(
+            userContent,
+            attachments,
+        );
+        return { humanMsg, pendingGeminiRecords: [] };
+    }
+
+    /**
+     * Inline mode: downloads each attachment to memory as base64, embeds directly in message.
+     */
+    private async buildInlineModeMessage(
+        userContent: string,
+        attachments: DiscordAttachmentInfo[],
+    ): Promise<HumanMessage> {
         const downloaded = await Promise.all(
-            attachments.map((a) => this.attachmentDownloader.download(a)),
+            attachments.map(
+                this.attachmentDownloader.download.bind(
+                    this.attachmentDownloader,
+                ),
+            ),
         );
 
         this.logger.debug(
@@ -208,19 +283,127 @@ export class HandleDiscordMention {
             "Downloaded attachments for inline embedding",
         );
 
-        const blocks = [
-            // Text block first — only included when the user typed something
+        // Use legacy LangChain media format — contentBlocks produces message.content = []
+        // which the @langchain/google converter drops, removing the user's message from
+        // the Gemini contents array entirely.
+        const contentParts: Array<
+            | { type: "text"; text: string }
+            | { type: "media"; mimeType: string; data: string }
+        > = [
             ...(userContent
                 ? [{ type: "text" as const, text: userContent }]
                 : []),
-            // One block per attachment; block type is inferred from the MIME type
             ...downloaded.map((d) => ({
-                type: getBlockType(d.mimeType),
+                type: "media" as const,
                 mimeType: d.mimeType,
                 data: d.data,
             })),
         ];
 
-        return new HumanMessage({ content: blocks });
+        return new HumanMessage({ content: contentParts });
+    }
+
+    /**
+     * Upload mode: streams each attachment to a temp file, uploads to Gemini Files API,
+     * then builds a message with Gemini URL references.
+     *
+     * Temp files are deleted in a try/finally after each upload.
+     * Gemini file upload records are NOT saved here — they are returned as
+     * `pendingGeminiRecords` so that `handle()` can persist them after the user
+     * message row exists (required to satisfy the FK constraint).
+     */
+    private async buildUploadModeMessage(
+        discordMessageId: string,
+        userContent: string,
+        attachments: DiscordAttachmentInfo[],
+    ): Promise<{
+        humanMsg: HumanMessage;
+        pendingGeminiRecords: Omit<GeminiFileUpload, "id">[];
+    }> {
+        if (!this.diskDownloader || !this.geminiFileUploader) {
+            throw new Error(
+                "Upload mode dependencies not injected into HandleDiscordMention",
+            );
+        }
+
+        // Legacy LangChain media format for file references — uses fileUri instead of data.
+        // contentBlocks produces message.content = [] which the @langchain/google converter
+        // drops, removing the user's message from the Gemini contents array entirely.
+        const uploadedParts: Array<{
+            type: "media";
+            mimeType: string;
+            fileUri: string;
+        }> = [];
+        const pendingGeminiRecords: Omit<GeminiFileUpload, "id">[] = [];
+
+        for (const attachment of attachments) {
+            const tempPath = join(
+                UPLOAD_TEMP_DIR,
+                `${randomUUID()}-${attachment.name}`,
+            );
+            try {
+                const mimeType = await this.diskDownloader.downloadToFile(
+                    attachment,
+                    tempPath,
+                );
+
+                const fileName = `files/${randomUUID()}`;
+                const uploaded = await this.geminiFileUploader.upload(
+                    tempPath,
+                    fileName,
+                    mimeType,
+                    attachment.name,
+                );
+
+                this.logger.debug(
+                    {
+                        name: attachment.name,
+                        geminiFileName: uploaded.geminiFileName,
+                        mimeType,
+                    },
+                    "Uploaded attachment to Gemini Files API",
+                );
+
+                // Collect the record; it will be saved by handle() after the message row exists.
+                // originalGeminiUrl = geminiUrl on first upload — this is the immutable lookup key.
+                pendingGeminiRecords.push({
+                    originalGeminiUrl: uploaded.geminiUrl,
+                    geminiFileName: uploaded.geminiFileName,
+                    geminiUrl: uploaded.geminiUrl,
+                    uploadedAt: new Date(),
+                    discordAttachmentId: attachment.id,
+                    discordFilename: attachment.name,
+                    messageDiscordId: discordMessageId,
+                });
+
+                uploadedParts.push({
+                    type: "media",
+                    mimeType,
+                    fileUri: uploaded.geminiUrl,
+                });
+            } finally {
+                await unlink(tempPath).catch((err) => {
+                    this.logger.warn(
+                        { tempPath, err },
+                        "Failed to delete temp file after Gemini upload",
+                    );
+                });
+            }
+        }
+
+        const contentParts: Array<
+            | { type: "text"; text: string }
+            | { type: "media"; mimeType: string; fileUri: string }
+        > = [
+            ...(userContent
+                ? [{ type: "text" as const, text: userContent }]
+                : []),
+            ...uploadedParts,
+        ];
+
+        return {
+            humanMsg: new HumanMessage({ content: contentParts }),
+            pendingGeminiRecords,
+        };
     }
 }
