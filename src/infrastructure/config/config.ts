@@ -9,15 +9,20 @@ export type AttachmentMode = "inline" | "upload";
  */
 export interface AppConfig {
     discordToken: string;
-    // discordClientId: string;
     googleApiKey: string;
     databaseUrl: string;
-    /** Number of reasoning tokens allocated to the triage model. Default: 512. Set to 0 to disable. */
-    triageThinkingBudget: number;
+    /** Gemini 3 Reasoning effort level */
     triageThinkingLevel: string;
+    /** Whether to include LLM thoughts in the LLM responses for debugging purposes */
     includeLLMThoughts: boolean;
     /** Pino log level. Default: "info" */
     logLevel: string;
+    /**
+     * Whether to additionally write structured JSON logs to a file at
+     * `./logs/<process-start-timestamp>-pino.log`. Runs in parallel with console output.
+     * Default: false
+     */
+    fileLog: boolean;
     /**
      * How file attachments are passed to the LLM.
      * - "inline": base64-encoded directly in the message (cross-provider, high memory overhead)
@@ -73,18 +78,16 @@ function loadConfig(): AppConfig {
         // discordClientId,
         googleApiKey,
         databaseUrl,
-        triageThinkingBudget: Number(
-            process.env.TRIAGE_THINKING_BUDGET ?? "512",
-        ),
         triageThinkingLevel: process.env.TRIAGE_THINKING_LEVEL ?? "minimal",
         includeLLMThoughts: process.env.INCLUDE_LLM_THOUGHTS === "true",
         logLevel: process.env.LOG_LEVEL ?? "info",
+        fileLog: process.env.FILE_LOG === "true",
         attachmentMode: parseAttachmentMode(process.env.UPLOAD_ATTACHMENT_MODE),
         maxInlineAttachmentSizeMb: Number(
             process.env.MAX_INLINE_ATTACHMENT_SZ_MB ?? "100",
         ),
         geminiFileStaleThresholdMinutes: Number(
-            process.env.GEMINI_FILE_STALE_THRESHOLD_MINUTES ?? "60",
+            process.env.GEMINI_FILE_STALE_THRESHOLD_MINUTES ?? "15",
         ),
     };
 }
@@ -94,7 +97,7 @@ function loadConfig(): AppConfig {
  * Throws {@link ConfigError} for unknown values.
  */
 function parseAttachmentMode(raw: string | undefined): AttachmentMode {
-    const value = raw ?? "inline";
+    const value = raw ?? "upload";
     if (value === "inline") return "inline";
     if (value === "upload") return "upload";
     throw new ConfigError(

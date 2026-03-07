@@ -34,16 +34,19 @@ Copy `.env.example` to `.env` and fill in the values:
 cp .env.example .env
 ```
 
-| Variable                 | Required | Default   | Description                                      |
-|--------------------------|----------|-----------|--------------------------------------------------|
-| `DISCORD_TOKEN`          | ✅       |           | Bot token from the Discord Developer Portal      |
-| `DISCORD_CLIENT_ID`      | ✅       |           | Application client ID                            |
-| `GOOGLE_API_KEY`         | ✅       |           | Google AI API key                                |
-| `DATABASE_URL`           | ✅       |           | PostgreSQL connection string                     |
-| `TRIAGE_THINKING_BUDGET` |          | `512`     | Reasoning tokens for the triage model (0 to disable) |
-| `TRIAGE_THINKING_LEVEL`  |          | `minimal` | Thinking level for the triage model              |
-| `LOG_LEVEL`              |          | `info`    | Pino log level (`trace`, `debug`, `info`, `warn`, `error`) |
-| `NODE_ENV`               |          |           | Set to `production` to disable pino-pretty       |
+| Variable                              | Required | Default    | Description                                                                                                   |
+|---------------------------------------|----------|------------|---------------------------------------------------------------------------------------------------------------|
+| `DISCORD_TOKEN`                       | ✅       |            | Bot token from the Discord Developer Portal                                                                   |
+| `GOOGLE_API_KEY`                      | ✅       |            | Google AI API key                                                                                             |
+| `DATABASE_URL`                        | ✅       |            | PostgreSQL connection string                                                                                  |
+| `TRIAGE_THINKING_LEVEL`               |          | `minimal`  | Thinking level for the triage model                                                                           |
+| `INCLUDE_LLM_THOUGHTS`               |          | `false`    | Expose raw LLM thought tokens in responses and traces (increases latency)                                     |
+| `LOG_LEVEL`                           |          | `info`     | Pino log level: `trace`, `debug`, `info`, `warn`, `error`                                                    |
+| `FILE_LOG`                            |          | `false`    | Write structured JSON logs to `./logs/<timestamp>-pino.log` in parallel with console output                  |
+| `UPLOAD_ATTACHMENT_MODE`              |          | `upload`   | `inline` — base64 in message (cross-provider); `upload` — Gemini Files API (lower memory, Gemini only)       |
+| `MAX_INLINE_ATTACHMENT_SZ_MB`         |          | `100`      | Max total MB of inline attachment data per message and across conversation history                            |
+| `GEMINI_FILE_STALE_THRESHOLD_MINUTES` |          | `60`       | Minutes before Gemini file expiry to consider a file stale and re-upload (only when `UPLOAD_ATTACHMENT_MODE=upload`) |
+| `NODE_ENV`                            |          |            | Set to `production` to disable pino-pretty (output raw JSON)                                                 |
 
 ### 3. Start the database
 

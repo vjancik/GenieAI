@@ -5,6 +5,7 @@
 
 # Code Architecture Rules
 - use Domain-Driven Design principles and adhere to Hexagonal Architecture
+- dependencies should flow as Infrastructure -> Application -> Domain, anytime a reverse direction is needed, depend on an abstraction (type import of an interface)
 - adhere to SOLID principles
 - the code you write should be easy to test by being decoupled and easy to mock, prefer DI over hardwired dependencies
 - always write unit tests for code involving non-trivial transformations
@@ -18,6 +19,7 @@
 - use ?? instead of || for nullish coalescing
 - don't install dotenv, .env is loaded automatically by bun
 - don't use the "any" type to resolve type errors, except where it actually makes sense logically
+- any type coercions must have a preceding comment explaining why they are necessary or acceptable in the format // TYPE COERCION: ..., this applies to project source code, tests are an exception
 - prefer bind(this / instanceObj), when passing methods as callbacks, to lambda wrappers
 
 # Third-Party APIs & SDKs Rules

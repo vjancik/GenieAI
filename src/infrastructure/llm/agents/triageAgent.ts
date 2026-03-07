@@ -77,7 +77,6 @@ export function createTriageModel({
             thinkingLevel: config.triageThinkingLevel,
             includeThoughts: config.includeLLMThoughts,
         },
-        // thinkingBudget: config.triageThinkingBudget,
     });
 
     const tools = [

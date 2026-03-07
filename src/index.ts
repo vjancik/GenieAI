@@ -23,7 +23,7 @@ import { createGetVideoTranscriptionTool } from "./infrastructure/llm/tools/getV
 import { createGetWebsiteTool } from "./infrastructure/llm/tools/getWebsiteTool.ts";
 import { createLogger } from "./infrastructure/logging/logger.ts";
 
-const logger = createLogger(config.logLevel);
+const logger = createLogger(config.logLevel, config.fileLog);
 logger.info("Starting GenieAI bot...");
 
 // Database
