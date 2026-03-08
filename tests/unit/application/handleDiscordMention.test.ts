@@ -2,11 +2,11 @@ import { describe, expect, mock, test } from "bun:test";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
 import { HandleDiscordMention } from "../../../src/application/HandleDiscordMention.ts";
+import type { IAgentOrchestrator } from "../../../src/application/ports/IAgentOrchestrator.ts";
 import type { IAttachmentDownloader } from "../../../src/application/ports/IAttachmentDownloader.ts";
 import type { OnStatusUpdate } from "../../../src/application/types/AgentStatus.ts";
 import type { IMessageRepository } from "../../../src/domain/message/IMessageRepository.ts";
 import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
-import type { Orchestrator } from "../../../src/infrastructure/llm/orchestrator.ts";
 
 const testLogger = pino({ level: "silent" });
 
@@ -38,10 +38,12 @@ function makeRepo(chainMessages: DiscordMessage[] = []): IMessageRepository {
     };
 }
 
-function makeOrchestrator(
-    response = "AI response",
-): Pick<Orchestrator, "process"> {
+function makeOrchestrator(response = "AI response"): IAgentOrchestrator {
     return {
+        // Return deserialized messages only when records are present — mirrors real behaviour
+        buildHistory: mock((records: DiscordMessage[]) =>
+            records.length > 0 ? [prevAiMessage] : [],
+        ),
         process: mock(async () => ({
             content: response,
             newMessages: [mockAiResponse],

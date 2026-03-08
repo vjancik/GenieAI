@@ -2,8 +2,8 @@ import { mkdir, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { IDiskAttachmentDownloader } from "../../application/ports/IDiskAttachmentDownloader.ts";
+import type { Logger } from "../../application/types/Logger.ts";
 import { AppError } from "../../domain/errors/AppError.ts";
-import type { Logger } from "../logging/logger.ts";
 
 /**
  * Downloads Discord attachments to disk by streaming the fetch response body
@@ -104,6 +104,7 @@ export class FetchDiskAttachmentDownloader
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
+                // TODO: respect backpressure signal, write returns a promise that resolves when the chunk is flushed to disk
                 writer.write(value);
             }
             await writer.end();

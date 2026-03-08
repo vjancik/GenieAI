@@ -13,9 +13,9 @@ import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
 import { AppError } from "../../../src/domain/errors/AppError.ts";
 import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
 import {
+    AgentOrchestrator,
     dbMessagesToLangchain,
-    Orchestrator,
-} from "../../../src/infrastructure/llm/orchestrator.ts";
+} from "../../../src/infrastructure/llm/agentOrchestrator.ts";
 
 const testLogger = pino({ level: "silent" });
 
@@ -355,7 +355,7 @@ describe("Orchestrator.process", () => {
         const websiteTool = makeTool("website content");
         const videoTool = makeTool("video transcript");
 
-        const orchestrator = new Orchestrator(
+        const orchestrator = new AgentOrchestrator(
             triageModel as never,
             generalModel as never,
             searchModel as never,
@@ -387,7 +387,7 @@ describe("Orchestrator.process", () => {
         const websiteTool = makeTool("website content");
         const videoTool = makeTool("video transcript");
 
-        const orchestrator = new Orchestrator(
+        const orchestrator = new AgentOrchestrator(
             triageModel as never,
             generalModel as never,
             searchModel as never,
@@ -423,7 +423,7 @@ describe("Orchestrator.process", () => {
         );
         const videoTool = makeTool("video transcript");
 
-        const orchestrator = new Orchestrator(
+        const orchestrator = new AgentOrchestrator(
             triageModel as never,
             generalModel as never,
             searchModel as never,
@@ -462,7 +462,7 @@ describe("Orchestrator.process", () => {
             "## https://youtube.com/watch?v=abc\n\nTranscript here",
         );
 
-        const orchestrator = new Orchestrator(
+        const orchestrator = new AgentOrchestrator(
             triageModel as never,
             generalModel as never,
             searchModel as never,
@@ -496,7 +496,7 @@ describe("Orchestrator.process", () => {
         const websiteTool = makeTool("website content");
         const videoTool = makeTool("video transcript");
 
-        const orchestrator = new Orchestrator(
+        const orchestrator = new AgentOrchestrator(
             triageModel as never,
             generalModel as never,
             searchModel as never,
@@ -526,7 +526,7 @@ describe("Orchestrator.process", () => {
         const websiteTool = makeTool("website content");
         const videoTool = makeTool("video transcript");
 
-        const orchestrator = new Orchestrator(
+        const orchestrator = new AgentOrchestrator(
             triageModel as never,
             generalModel as never,
             searchModel as never,
@@ -574,7 +574,7 @@ describe("Orchestrator.process", () => {
         const websiteTool = makeTool("website content");
         const videoTool = makeTool("video transcript");
 
-        const orchestrator = new Orchestrator(
+        const orchestrator = new AgentOrchestrator(
             triageModel as never,
             generalModel as never,
             searchModel as never,
@@ -606,7 +606,7 @@ describe("Orchestrator.process", () => {
         const websiteTool = makeTool("content");
         const videoTool = makeTool("transcript");
 
-        const orchestrator = new Orchestrator(
+        const orchestrator = new AgentOrchestrator(
             triageModel as never,
             generalModel as never,
             searchModel as never,
@@ -637,7 +637,7 @@ describe("Orchestrator.process", () => {
         const websiteTool = makeTool("content");
         const videoTool = makeTool("transcript");
 
-        const orchestrator = new Orchestrator(
+        const orchestrator = new AgentOrchestrator(
             triageModel as never,
             generalModel as never,
             searchModel as never,
@@ -672,7 +672,7 @@ describe("Orchestrator.process", () => {
         const websiteTool = makeTool("page content");
         const videoTool = makeTool("transcript");
 
-        const orchestrator = new Orchestrator(
+        const orchestrator = new AgentOrchestrator(
             triageModel as never,
             generalModel as never,
             searchModel as never,
@@ -706,7 +706,7 @@ describe("Orchestrator.process", () => {
         const websiteTool = makeTool("content");
         const videoTool = makeTool("transcript");
 
-        const orchestrator = new Orchestrator(
+        const orchestrator = new AgentOrchestrator(
             triageModel as never,
             generalModel as never,
             searchModel as never,

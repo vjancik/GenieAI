@@ -10,8 +10,8 @@ import {
     AgentStatusType,
     assertNever,
 } from "../../application/types/AgentStatus.ts";
+import type { Logger } from "../../application/types/Logger.ts";
 import { DiscordError } from "../../domain/errors/AppError.ts";
-import type { Logger } from "../logging/logger.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
 
 /**
@@ -204,6 +204,7 @@ export class DiscordGateway {
          */
         const channelId = message.channelId;
         const client = this.client;
+        // TODO: wouldn't this be cleaner as a lambda instead of a module? Unsure
         const attachmentRefetcher: IDiscordAttachmentRefetcher = {
             async fetchAttachment(
                 messageDiscordId: string,

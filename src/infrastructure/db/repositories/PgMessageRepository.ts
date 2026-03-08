@@ -1,8 +1,8 @@
 import { sql } from "drizzle-orm";
+import type { Logger } from "../../../application/types/Logger.ts";
 import { DatabaseError } from "../../../domain/errors/AppError.ts";
 import type { IMessageRepository } from "../../../domain/message/IMessageRepository.ts";
 import type { DiscordMessage } from "../../../domain/message/Message.ts";
-import type { Logger } from "../../logging/logger.ts";
 import type { Db } from "../connection.ts";
 import { messages } from "../schema.ts";
 
@@ -84,6 +84,8 @@ export class PgMessageRepository implements IMessageRepository {
                 "Fetched message chain",
             );
 
+            // TYPE COERCION: Drizzle's db.execute() returns Record<string, unknown>[] for raw SQL —
+            // column types cannot be inferred statically, so each field is asserted from the known schema.
             return rows.map((row) => ({
                 id: row.id as string,
                 discordMessageId: row.discord_message_id as string,
@@ -92,7 +94,10 @@ export class PgMessageRepository implements IMessageRepository {
                 channelId: row.channel_id as string,
                 guildId: (row.guild_id as string | null) ?? null,
                 role: row.role as DiscordMessage["role"],
-                // langchain_messages is a JSON column; handle both string (raw) and pre-parsed cases
+                // langchain_messages is a JSON column; Bun's SQL driver may return it as either a
+                // pre-parsed JS value or a raw JSON string — handle both cases defensively.
+                // TYPE COERCION: the parsed value's shape matches DiscordMessage["langchainMessages"]
+                // by construction (it was stored from BaseMessage.toJSON()), but TS cannot verify it.
                 langchainMessages: (typeof row.langchain_messages === "string"
                     ? JSON.parse(row.langchain_messages)
                     : row.langchain_messages) as DiscordMessage["langchainMessages"],

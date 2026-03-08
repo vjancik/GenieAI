@@ -1,8 +1,8 @@
 import { tool } from "@langchain/core/tools";
 import TurndownService from "turndown";
 import { z } from "zod/v4";
+import type { Logger } from "../../../application/types/Logger.ts";
 import { ToolError } from "../../../domain/errors/AppError.ts";
-import type { Logger } from "../../logging/logger.ts";
 
 /**
  * Creates a LangChain tool that fetches one or more URLs and returns their
@@ -42,7 +42,10 @@ export function createGetWebsiteTool(logger: Logger) {
                     if (result.status === "fulfilled") {
                         return result.value;
                     }
-                    const err = result.reason as Error;
+                    const err =
+                        result.reason instanceof Error
+                            ? result.reason
+                            : new Error(String(result.reason));
                     logger.warn(
                         { url: unique[i], error: err.message },
                         "Failed to fetch URL",

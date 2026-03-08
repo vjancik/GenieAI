@@ -20,6 +20,7 @@
 - don't install dotenv, .env is loaded automatically by bun
 - don't use the "any" type to resolve type errors, except where it actually makes sense logically
 - any type coercions must have a preceding comment explaining why they are necessary or acceptable in the format // TYPE COERCION: ..., this applies to project source code, tests are an exception
+- use type guards and type narrowing over type coercions where possible
 - prefer bind(this / instanceObj), when passing methods as callbacks, to lambda wrappers
 
 # Third-Party APIs & SDKs Rules

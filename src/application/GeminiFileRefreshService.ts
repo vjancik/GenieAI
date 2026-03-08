@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
-import type { BaseMessage } from "@langchain/core/messages";
+import type { BaseMessage, MessageContent } from "@langchain/core/messages";
 import { HumanMessage } from "@langchain/core/messages";
-import type { AppConfig } from "../infrastructure/config/config.ts";
-import type { Logger } from "../infrastructure/logging/logger.ts";
+import type { AppConfig } from "./config/AppConfig.ts";
 import type { IDiscordAttachmentRefetcher } from "./ports/IDiscordAttachmentRefetcher.ts";
 import type { IDiskAttachmentDownloader } from "./ports/IDiskAttachmentDownloader.ts";
 import type { IGeminiFileRepository } from "./ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploader } from "./ports/IGeminiFileUploader.ts";
+import type { Logger } from "./types/Logger.ts";
 
 /** URL prefix that identifies a Gemini Files API URI in a content block. */
 const GEMINI_URL_PREFIX = "https://generativelanguage.googleapis.com";
@@ -46,6 +46,10 @@ function isGeminiBlock(block: unknown): block is FileUriContentBlock {
 function extractGeminiUrls(message: BaseMessage): string[] {
     if (!(message instanceof HumanMessage)) return [];
     if (!Array.isArray(message.content)) return [];
+    // TYPE COERCION: after Array.isArray, message.content is MessageContentComplex[];
+    // widened to unknown[] so the isGeminiBlock type predicate (which takes unknown) can
+    // be used in filter — TypeScript requires S extends T in Array<T>.filter<S>, and
+    // FileUriContentBlock does not extend MessageContentComplex in its type system.
     return (message.content as unknown[])
         .filter(isGeminiBlock)
         .map((block) => block.fileUri);
@@ -241,6 +245,9 @@ export class GeminiFileRefreshService {
             let modified = false;
             const newBlocks: unknown[] = [];
 
+            // TYPE COERCION: after Array.isArray, msg.content is MessageContentComplex[];
+            // widened to unknown[] so isGeminiBlock (which takes unknown) can be used as a
+            // narrowing predicate without violating TypeScript's S extends T constraint on filter.
             for (const block of msg.content as unknown[]) {
                 if (!isGeminiBlock(block)) {
                     newBlocks.push(block);
@@ -263,9 +270,13 @@ export class GeminiFileRefreshService {
 
             if (!modified) return msg;
 
-            // Cast required: blocks are valid legacy media/text content at runtime
-            // but TypeScript cannot verify the shape against LangChain's strict union type.
-            return new HumanMessage({ content: newBlocks as never });
+            // TYPE COERCION: newBlocks is unknown[] (FileUriContentBlock elements at runtime) which
+            // TypeScript cannot verify against LangChain's strict MessageContent union type.
+            // The blocks are valid legacy media/text content and accepted by the @langchain/google
+            // converter at runtime. Double cast through unknown makes the intent explicit.
+            return new HumanMessage({
+                content: newBlocks as unknown as MessageContent,
+            });
         });
     }
 }

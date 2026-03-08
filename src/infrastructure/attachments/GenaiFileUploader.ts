@@ -3,8 +3,8 @@ import type {
     IGeminiFileUploader,
     UploadedGeminiFile,
 } from "../../application/ports/IGeminiFileUploader.ts";
+import type { Logger } from "../../application/types/Logger.ts";
 import { AppError } from "../../domain/errors/AppError.ts";
-import type { Logger } from "../logging/logger.ts";
 
 /** How long to wait between status polls when a file is in PROCESSING state (ms). */
 const POLL_INTERVAL_MS = 5_000;
@@ -66,7 +66,13 @@ export class GenaiFileUploader implements IGeminiFileUploader {
             await new Promise<void>((resolve) =>
                 setTimeout(resolve, POLL_INTERVAL_MS),
             );
-            file = await this.ai.files.get({ name: file.name as string });
+            if (!file.name) {
+                throw new AppError(
+                    "GEMINI_UPLOAD_FAILED",
+                    `Gemini file "${fileName}" has no name during polling`,
+                );
+            }
+            file = await this.ai.files.get({ name: file.name });
             this.logger.debug(
                 { geminiFileName: file.name, state: file.state },
                 "Polling Gemini file state",
@@ -94,13 +100,20 @@ export class GenaiFileUploader implements IGeminiFileUploader {
             );
         }
 
+        if (!file.name) {
+            throw new AppError(
+                "GEMINI_UPLOAD_FAILED",
+                `Gemini file "${fileName}" is ACTIVE but has no name`,
+            );
+        }
+
         this.logger.info(
             { geminiFileName: file.name, geminiUrl: file.uri },
             "Gemini file upload complete",
         );
 
         return {
-            geminiFileName: file.name as string,
+            geminiFileName: file.name,
             geminiUrl: file.uri,
         };
     }

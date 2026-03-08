@@ -1,4 +1,4 @@
-import type { Logger } from "../logging/logger.ts";
+import type { Logger } from "../../application/types/Logger.ts";
 
 /**
  * Async function that edits a Discord message to display the given content string.

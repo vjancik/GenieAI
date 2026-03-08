@@ -42,6 +42,8 @@ export function getInlineAttachmentBytes(messages: BaseMessage[]): number {
         // TODO: in the future AIMessages might have inline data too, so we may want to generalize this check beyond HumanMessage
         if (!(msg instanceof HumanMessage)) continue;
         if (!Array.isArray(msg.content)) continue;
+        // TYPE COERCION: after Array.isArray, msg.content is MessageContentComplex[] which
+        // TypeScript won't implicitly widen to ContentBlock[] (our Record-based local type).
         for (const block of msg.content as ContentBlock[]) {
             if (isAttachmentBlock(block)) {
                 total += attachmentBlockBytes(block);
@@ -90,6 +92,8 @@ export function filterHistoryForInlineSize(
         if (!(msg instanceof HumanMessage)) continue;
         if (!Array.isArray(msg.content)) continue;
 
+        // TYPE COERCION: after Array.isArray, msg.content is MessageContentComplex[] which
+        // TypeScript won't implicitly widen to ContentBlock[] (our Record-based local type).
         const blocks = msg.content as ContentBlock[];
         let modified = false;
         const newBlocks: ContentBlock[] = [];
@@ -108,6 +112,8 @@ export function filterHistoryForInlineSize(
         if (modified) {
             // Replace the message with a filtered copy; preserve any other kwargs
             // TODO: if extended to work on all message types, this class will need to be determined dynamically rather than hardcoding HumanMessage
+            // TYPE COERCION: ContentBlock[] (our local type) is not directly assignable to
+            // MessageContent (LangChain's union); the blocks are valid structured content at runtime.
             result[msgIdx] = new HumanMessage({
                 content: newBlocks as MessageContent,
             });

@@ -3,8 +3,8 @@ import type {
     DownloadedAttachment,
     IAttachmentDownloader,
 } from "../../application/ports/IAttachmentDownloader.ts";
+import type { Logger } from "../../application/types/Logger.ts";
 import { AppError } from "../../domain/errors/AppError.ts";
-import type { Logger } from "../logging/logger.ts";
 
 /**
  * Downloads Discord attachments via the native Fetch API.

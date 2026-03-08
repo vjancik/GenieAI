@@ -5,12 +5,9 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { HumanMessage } from "@langchain/core/messages";
 import type { GeminiFileUpload } from "../domain/message/GeminiFileUpload.ts";
 import type { IMessageRepository } from "../domain/message/IMessageRepository.ts";
-
-import type { AppConfig } from "../infrastructure/config/config.ts";
-import type { Orchestrator } from "../infrastructure/llm/orchestrator.ts";
-import { dbMessagesToLangchain } from "../infrastructure/llm/orchestrator.ts";
-import type { Logger } from "../infrastructure/logging/logger.ts";
+import type { AppConfig } from "./config/AppConfig.ts";
 import type { GeminiFileRefreshService } from "./GeminiFileRefreshService.ts";
+import type { IAgentOrchestrator } from "./ports/IAgentOrchestrator.ts";
 import type {
     DiscordAttachmentInfo,
     IAttachmentDownloader,
@@ -21,6 +18,7 @@ import type { IGeminiFileRepository } from "./ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploader } from "./ports/IGeminiFileUploader.ts";
 import type { OnStatusUpdate } from "./types/AgentStatus.ts";
 import { AgentStatusType } from "./types/AgentStatus.ts";
+import type { Logger } from "./types/Logger.ts";
 
 /** Temp directory for streaming attachments before Gemini upload. */
 const UPLOAD_TEMP_DIR = "/var/tmp/genie-attachments";
@@ -47,7 +45,7 @@ export class HandleDiscordMention {
 
     constructor(
         private readonly messageRepo: IMessageRepository,
-        private readonly orchestrator: Orchestrator,
+        private readonly orchestrator: IAgentOrchestrator,
         private readonly attachmentDownloader: IAttachmentDownloader,
         private readonly logger: Logger,
         config: Pick<AppConfig, "maxInlineAttachmentSizeMb" | "attachmentMode">,
@@ -117,7 +115,7 @@ export class HandleDiscordMention {
                 ? await this.messageRepo.fetchChain(params.referencedMessageId)
                 : [];
 
-        let history = dbMessagesToLangchain(dbHistory, this.logger);
+        let history = this.orchestrator.buildHistory(dbHistory);
 
         // In upload mode: refresh any stale Gemini file references before invoking the LLM
         if (
@@ -160,6 +158,9 @@ export class HandleDiscordMention {
             channelId: params.channelId,
             guildId: params.guildId,
             role: "human",
+            // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
+            // which is incompatible with our DB schema's Record<string, unknown>. Double cast
+            // through unknown bridges the gap — the serialized shape IS a plain JSON object.
             langchainMessages: [
                 humanMsg.toJSON() as unknown as Record<string, unknown>,
             ],
@@ -206,6 +207,9 @@ export class HandleDiscordMention {
             channelId: params.channelId,
             guildId: params.guildId,
             role: "assistant",
+            // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
+            // which is incompatible with our DB schema's Record<string, unknown>. Double cast
+            // through unknown bridges the gap — the serialized shape IS a plain JSON object.
             langchainMessages: params.newMessages.map(
                 (m) => m.toJSON() as unknown as Record<string, unknown>,
             ),

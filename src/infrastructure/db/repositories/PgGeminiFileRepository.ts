@@ -1,8 +1,8 @@
 import { eq, inArray } from "drizzle-orm";
 import type { IGeminiFileRepository } from "../../../application/ports/IGeminiFileRepository.ts";
+import type { Logger } from "../../../application/types/Logger.ts";
 import { DatabaseError } from "../../../domain/errors/AppError.ts";
 import type { GeminiFileUpload } from "../../../domain/message/GeminiFileUpload.ts";
-import type { Logger } from "../../logging/logger.ts";
 import type { Db } from "../connection.ts";
 import { geminiFileUploads } from "../schema.ts";
 

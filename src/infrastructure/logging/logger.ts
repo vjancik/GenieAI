@@ -1,11 +1,6 @@
 import path from "node:path";
 import pino from "pino";
-
-/**
- * Re-export pino's Logger type for use throughout the application.
- * Injecting this type enables easy mocking in tests.
- */
-export type Logger = pino.Logger;
+import type { Logger } from "../../application/types/Logger.ts";
 
 /**
  * Formats a Date as a filesystem-safe ISO-like timestamp string.

@@ -17,12 +17,13 @@ import {
     StateGraph,
 } from "@langchain/langgraph";
 import { z } from "zod/v4";
+import type { IAgentOrchestrator } from "../../application/ports/IAgentOrchestrator.ts";
 import type { OnStatusUpdate } from "../../application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../application/types/AgentStatus.ts";
+import type { Logger } from "../../application/types/Logger.ts";
 import { AppError } from "../../domain/errors/AppError.ts";
 import type { DiscordMessage } from "../../domain/message/Message.ts";
 import type { AppConfig } from "../config/config.ts";
-import type { Logger } from "../logging/logger.ts";
 import {
     GENERAL_SYSTEM_PROMPT,
     type GeneralModel,
@@ -62,13 +63,18 @@ type NodeConfig = { context?: OrchestratorContext };
 function stripThoughtChunks(
     json: Record<string, unknown>,
 ): Record<string, unknown> {
+    // TYPE COERCION: json.kwargs is unknown in the generic record; cast to the known LangChain
+    // serialization shape (kwargs is always a record of named constructor arguments).
     const kwargs = json.kwargs as Record<string, unknown> | undefined;
     if (!Array.isArray(kwargs?.content)) return json;
     return {
         ...json,
         kwargs: {
             ...kwargs,
+            // TYPE COERCION: kwargs.content is unknown after the Array.isArray check;
+            // each element is a structured content part (object with at least a type field).
             content: (kwargs.content as Record<string, unknown>[]).filter(
+                // TODO: this should be it's own predicate function somewhere else
                 (part) =>
                     !(
                         typeof part === "object" &&
@@ -94,7 +100,11 @@ function deserializeMessage(
     json: Record<string, unknown>,
     logger: Logger,
 ): BaseMessage {
+    // TYPE COERCION: json.id is unknown; per LangChain's serialization format it is a string[]
+    // representing the module path (e.g. ["langchain_core", "messages", "HumanMessage"]).
     const className = (json.id as string[]).at(-1);
+    // TYPE COERCION: json.kwargs is unknown; it is always a Record of named constructor
+    // arguments in LangChain's serialization format.
     const kwargs = json.kwargs as Record<string, unknown>;
 
     switch (className) {
@@ -103,6 +113,8 @@ function deserializeMessage(
         case "AIMessage":
             return new AIMessage(kwargs);
         case "ToolMessage":
+            // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
+            // ToolMessage's strict constructor union type; double cast through unknown is required.
             return new ToolMessage(
                 kwargs as unknown as ConstructorParameters<
                     typeof ToolMessage
@@ -113,6 +125,8 @@ function deserializeMessage(
                 { className },
                 "Unexpected message type in history chain",
             );
+            // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
+            // ChatMessage's strict constructor union type; double cast through unknown is required.
             return new ChatMessage(
                 kwargs as unknown as ConstructorParameters<
                     typeof ChatMessage
@@ -123,6 +137,8 @@ function deserializeMessage(
                 { className },
                 "Unexpected message type in history chain",
             );
+            // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
+            // FunctionMessage's strict constructor union type; double cast through unknown is required.
             return new FunctionMessage(
                 kwargs as unknown as ConstructorParameters<
                     typeof FunctionMessage
@@ -133,6 +149,8 @@ function deserializeMessage(
                 { className },
                 "Unexpected message type in history chain",
             );
+            // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
+            // RemoveMessage's strict constructor union type; double cast through unknown is required.
             return new RemoveMessage(
                 kwargs as unknown as ConstructorParameters<
                     typeof RemoveMessage
@@ -191,6 +209,25 @@ export function dbMessagesToLangchain(
     );
 }
 
+/** A structured content part that is a plain text segment. */
+type TextContentPart = { type: "text"; text: string };
+
+/**
+ * Type guard: returns true if a content array element is a visible text part.
+ *
+ * Excludes Gemini thought chunks (`thought: true`), which are internal reasoning
+ * that should be preserved in storage but never shown to users.
+ */
+function isVisibleTextPart(part: unknown): part is TextContentPart {
+    if (typeof part !== "object" || part === null) return false;
+    // TYPE COERCION: part is narrowed to object but object doesn't allow index access;
+    // cast to Record to read structured content fields by name.
+    const p = part as Record<string, unknown>;
+    if (p.type !== "text" || typeof p.text !== "string") return false;
+    // Exclude Gemini thought chunks (thought: true marks internal reasoning)
+    return p.thought !== true;
+}
+
 /**
  * Extracts the displayable text content from a model response, handling both
  * string and structured array formats. Filters out Gemini thought chunks
@@ -203,15 +240,8 @@ function extractContent(response: BaseMessage): string {
     }
     // For structured content arrays, join all non-thought text parts
     return response.content
-        .filter(
-            (part) =>
-                typeof part === "object" &&
-                "type" in part &&
-                part.type === "text" &&
-                // Exclude Gemini thought chunks (internal reasoning, not display content)
-                !("thought" in part && (part as { thought?: boolean }).thought),
-        )
-        .map((part) => (part as { type: "text"; text: string }).text)
+        .filter(isVisibleTextPart)
+        .map((part) => part.text)
         .join("");
 }
 
@@ -230,6 +260,8 @@ type GraphState = typeof MessagesAnnotation.State;
  */
 function unwrapRunnable(model: unknown): unknown {
     if (typeof model !== "object" || model === null) return model;
+    // TYPE COERCION: model is narrowed to object, but object doesn't support index access;
+    // cast to Record to read the .bound / .runnable wrapper properties by name.
     const m = model as Record<string, unknown>;
     if (typeof m.bound === "object" && m.bound !== null)
         return unwrapRunnable(m.bound);
@@ -252,7 +284,7 @@ function unwrapRunnable(model: unknown): unknown {
  * Real tool calls (get_website, get_video_transcription) DO add their triage
  * AIMessage to state because it is required for the ToolMessage to be valid context.
  */
-export class Orchestrator {
+export class AgentOrchestrator implements IAgentOrchestrator {
     // Type inferred from buildGraph() return — avoids complex LangGraph generic annotation
     // biome-ignore lint/suspicious/noExplicitAny: LangGraph compiled graph generic is impractical to annotate
     private readonly graph: ReturnType<() => any>;
@@ -291,6 +323,17 @@ export class Orchestrator {
     }
 
     /**
+     * Deserializes persisted {@link DiscordMessage} records into LangChain messages.
+     * Delegates to {@link dbMessagesToLangchain} — see that function for full documentation.
+     *
+     * Exposed here so the application layer can call it through {@link IAgentOrchestrator}
+     * without importing infrastructure utilities directly.
+     */
+    buildHistory(records: DiscordMessage[]): BaseMessage[] {
+        return dbMessagesToLangchain(records, this.logger);
+    }
+
+    /**
      * Process a user message with conversation history.
      *
      * Returns the display content string and all new LangChain messages generated
@@ -308,6 +351,8 @@ export class Orchestrator {
     ): Promise<{ content: string; newMessages: BaseMessage[] }> {
         const initialMessages = [...history, userMessage];
         // Always pass context so nodes receive a non-optional config; onStatusUpdate may be undefined
+        // TYPE COERCION: LangGraph's compiled graph is typed as any (see field declaration);
+        // annotate the known output shape — MessagesAnnotation always produces { messages: BaseMessage[] }.
         const result = (await this.graph.invoke(
             { messages: initialMessages },
             { context: { onStatusUpdate } },
@@ -415,13 +460,21 @@ export class Orchestrator {
 
         switch (toolCall.name) {
             case "get_website":
-            case "get_video_transcription":
+            case "get_video_transcription": {
                 // Real tool call: add triage AIMessage to state so the ToolMessage
-                // created in executeToolNode has a valid tool_call_id in history
+                // created in executeToolNode has a valid tool_call_id in history.
+                //
+                // Workaround for a bug in @langchain/google's legacy message converter:
+                // convertLegacyContentMessageToGeminiContent looks up the AIMessage by
+                // tool_call_id, then reads aiMessage.name (not the individual tool_call.name)
+                // when building functionResponse.name — so it always produces "unknown".
+                // Setting name on the AIMessage here makes the lookup return the correct name.
+                triageResponse.name = toolCall.name;
                 return new Command({
                     goto: "executeTool",
                     update: { messages: [triageResponse] },
                 });
+            }
 
             case "route_to_search":
                 // Routing sentinel: do NOT add triage message to state
@@ -465,6 +518,8 @@ export class Orchestrator {
         }
 
         let toolResult: string;
+        // TYPE COERCION: LangChain tool_calls args are typed as Record<string, unknown>;
+        // the Zod schema on each tool guarantees the urls: string[] shape at parse time.
         if (toolCall.name === "get_website") {
             toolResult = await this.getWebsiteTool.invoke(
                 toolCall.args as { urls: string[] },

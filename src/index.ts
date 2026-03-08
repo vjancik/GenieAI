@@ -15,10 +15,10 @@ import { PgGeminiFileRepository } from "./infrastructure/db/repositories/PgGemin
 import { PgMessageRepository } from "./infrastructure/db/repositories/PgMessageRepository.ts";
 import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
 import { StatusMessageUpdater } from "./infrastructure/discord/StatusMessageUpdater.ts";
+import { AgentOrchestrator } from "./infrastructure/llm/agentOrchestrator.ts";
 import { createGeneralModel } from "./infrastructure/llm/agents/generalAgent.ts";
 import { createSearchModel } from "./infrastructure/llm/agents/searchAgent.ts";
 import { createTriageModel } from "./infrastructure/llm/agents/triageAgent.ts";
-import { Orchestrator } from "./infrastructure/llm/orchestrator.ts";
 import { createGetVideoTranscriptionTool } from "./infrastructure/llm/tools/getVideoTranscriptionTool.ts";
 import { createGetWebsiteTool } from "./infrastructure/llm/tools/getWebsiteTool.ts";
 import { createLogger } from "./infrastructure/logging/logger.ts";
@@ -51,7 +51,7 @@ const generalModel = createGeneralModel(config);
 const searchModel = createSearchModel(config);
 
 // Orchestrator
-const orchestrator = new Orchestrator(
+const orchestrator = new AgentOrchestrator(
     triageModel,
     generalModel,
     searchModel,
