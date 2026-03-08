@@ -5,6 +5,7 @@
 **Companion:** `@langchain/core` `1.1.30`
 **Date discovered:** 2026-03-08
 **Affected function:** `convertLegacyContentMessageToGeminiContent` in `src/converters/messages.ts`
+**Filed as:** [GitHub Issue](https://github.com/langchain-ai/langchainjs/issues/10299)
 
 ---
 

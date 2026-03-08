@@ -287,9 +287,13 @@ export class HandleDiscordMention {
             "Downloaded attachments for inline embedding",
         );
 
-        // Use legacy LangChain media format — contentBlocks produces message.content = []
-        // which the @langchain/google converter drops, removing the user's message from
-        // the Gemini contents array entirely.
+        // Use legacy LangChain media format with type: "media" rather than specific
+        // block types (e.g. "image", "file") via the contentBlocks constructor.
+        // The v1/contentBlocks path's convertStandardContentBlockToGeminiPart only handles
+        // "image", "video", "audio" — not "file" or "text-plain" (both in KNOWN_BLOCK_TYPES).
+        // An attachment-only message (no text) using an unsupported type returns null for all
+        // blocks and is silently dropped from the Gemini contents array.
+        // The legacy path handles { type: "media" } correctly via isMessageContentMedia.
         const contentParts: Array<
             | { type: "text"; text: string }
             | { type: "media"; mimeType: string; data: string }
@@ -331,8 +335,8 @@ export class HandleDiscordMention {
         }
 
         // Legacy LangChain media format for file references — uses fileUri instead of data.
-        // contentBlocks produces message.content = [] which the @langchain/google converter
-        // drops, removing the user's message from the Gemini contents array entirely.
+        // See buildInlineModeMessage comment above for why we use type: "media" and
+        // content: rather than contentBlocks: with specific KNOWN_BLOCK_TYPES values.
         const uploadedParts: Array<{
             type: "media";
             mimeType: string;

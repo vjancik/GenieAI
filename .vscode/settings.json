@@ -11,6 +11,7 @@
         "langchain",
         "langgraph",
         "LANGSMITH",
+        "pino",
         "quicktime",
         "Refetcher",
         "WEBVTT"
