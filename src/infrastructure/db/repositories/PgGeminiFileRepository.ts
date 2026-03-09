@@ -1,12 +1,114 @@
 import * as Sentry from "@sentry/bun";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { IGeminiFileRepository } from "../../../application/ports/IGeminiFileRepository.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
 import { DatabaseError } from "../../../domain/errors/AppError.ts";
 import type { GeminiFile } from "../../../domain/message/GeminiFile.ts";
 import type { GeminiFileUpload } from "../../../domain/message/GeminiFileUpload.ts";
 import type { Db } from "../connection.ts";
+import { pgTextArray } from "../pgTextArray.ts";
 import { geminiFiles, geminiFileUploads } from "../schema.ts";
+
+/** Prepared statement: insert a gemini_files row, ignoring conflicts on originalGeminiUrl. */
+function buildInsertFileStmt(db: Db) {
+    return db
+        .insert(geminiFiles)
+        .values({
+            originalGeminiUrl: sql.placeholder("originalGeminiUrl"),
+            discordAttachmentId: sql.placeholder("discordAttachmentId"),
+            discordFilename: sql.placeholder("discordFilename"),
+            messageDiscordId: sql.placeholder("messageDiscordId"),
+        })
+        .onConflictDoNothing()
+        .returning()
+        .prepare("gemini_file_insert");
+}
+
+/** Prepared statement: fetch a gemini_files row by its unique originalGeminiUrl. */
+function buildFindFileByUrlStmt(db: Db) {
+    return db
+        .select()
+        .from(geminiFiles)
+        .where(
+            eq(
+                geminiFiles.originalGeminiUrl,
+                sql.placeholder("originalGeminiUrl"),
+            ),
+        )
+        .prepare("gemini_file_find_by_url");
+}
+
+/**
+ * Prepared statement: LEFT JOIN gemini_files with gemini_file_uploads for a given
+ * set of original URLs and a specific API key.
+ *
+ * Uses `= ANY($urls)` instead of `IN (...)` so the query structure is fixed regardless
+ * of how many URLs are looked up — a single `text[]` placeholder replaces the dynamic list.
+ * At execute time, `urls` receives a {@link pgTextArray} value.
+ */
+function buildFindWithUploadStateStmt(db: Db) {
+    return db
+        .select({
+            fileId: geminiFiles.id,
+            fileOriginalGeminiUrl: geminiFiles.originalGeminiUrl,
+            fileDiscordAttachmentId: geminiFiles.discordAttachmentId,
+            fileDiscordFilename: geminiFiles.discordFilename,
+            fileMessageDiscordId: geminiFiles.messageDiscordId,
+            uploadId: geminiFileUploads.id,
+            uploadGeminiFileId: geminiFileUploads.geminiFileId,
+            uploadApiKeyId: geminiFileUploads.apiKeyId,
+            uploadGeminiFileName: geminiFileUploads.geminiFileName,
+            uploadGeminiUrl: geminiFileUploads.geminiUrl,
+            uploadUploadedAt: geminiFileUploads.uploadedAt,
+        })
+        .from(geminiFiles)
+        .leftJoin(
+            geminiFileUploads,
+            and(
+                eq(geminiFileUploads.geminiFileId, geminiFiles.id),
+                eq(geminiFileUploads.apiKeyId, sql.placeholder("apiKeyId")),
+            ),
+        )
+        .where(
+            eq(
+                geminiFiles.originalGeminiUrl,
+                sql`ANY(${sql.placeholder("urls")})`,
+            ),
+        )
+        .prepare("gemini_file_find_with_upload_state");
+}
+
+/**
+ * Prepared statement: upsert a gemini_file_uploads row for a (geminiFileId, apiKeyId) pair.
+ *
+ * Uses EXCLUDED.<col> in the conflict set so the query structure is fully static
+ * and the prepared statement can be reused across all calls.
+ */
+function buildUpsertUploadStmt(db: Db) {
+    return db
+        .insert(geminiFileUploads)
+        .values({
+            geminiFileId: sql.placeholder("geminiFileId"),
+            apiKeyId: sql.placeholder("apiKeyId"),
+            geminiFileName: sql.placeholder("geminiFileName"),
+            geminiUrl: sql.placeholder("geminiUrl"),
+            uploadedAt: sql.placeholder("uploadedAt"),
+        })
+        .onConflictDoUpdate({
+            target: [
+                geminiFileUploads.geminiFileId,
+                geminiFileUploads.apiKeyId,
+            ],
+            set: {
+                // EXCLUDED refers to the row proposed for insertion — standard PostgreSQL upsert pattern.
+                geminiFileName: sql`EXCLUDED.gemini_file_name`,
+                geminiUrl: sql`EXCLUDED.gemini_url`,
+                uploadedAt: sql`EXCLUDED.uploaded_at`,
+            },
+        })
+        .returning()
+        .prepare("gemini_file_upload_upsert");
+}
 
 /**
  * PostgreSQL implementation of {@link IGeminiFileRepository} using Drizzle ORM.
@@ -20,12 +122,31 @@ import { geminiFiles, geminiFileUploads } from "../schema.ts";
  * The two-table design preserves Discord context (attachment ID, filename, message ID)
  * even after stale upload rows are trigger-cleaned, allowing re-upload without
  * scanning LangChain message JSON.
+ *
+ * All queries use prepared statements cached on construction, reducing per-call
+ * planning overhead. Dynamic array parameters use {@link pgTextArray} to produce
+ * a `text[]` value compatible with `= ANY($1)` / `!= ALL($1)` without expanding
+ * the parameter list.
  */
 export class PgGeminiFileRepository implements IGeminiFileRepository {
+    private readonly stmtInsertFile: ReturnType<typeof buildInsertFileStmt>;
+    private readonly stmtFindFileByUrl: ReturnType<
+        typeof buildFindFileByUrlStmt
+    >;
+    private readonly stmtFindWithUploadState: ReturnType<
+        typeof buildFindWithUploadStateStmt
+    >;
+    private readonly stmtUpsertUpload: ReturnType<typeof buildUpsertUploadStmt>;
+
     constructor(
-        private readonly db: Db,
+        db: Db,
         private readonly logger: Logger,
-    ) {}
+    ) {
+        this.stmtInsertFile = buildInsertFileStmt(db);
+        this.stmtFindFileByUrl = buildFindFileByUrlStmt(db);
+        this.stmtFindWithUploadState = buildFindWithUploadStateStmt(db);
+        this.stmtUpsertUpload = buildUpsertUploadStmt(db);
+    }
 
     /**
      * Idempotently saves a permanent file anchor.
@@ -43,16 +164,12 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
             },
             async () => {
                 try {
-                    const [inserted] = await this.db
-                        .insert(geminiFiles)
-                        .values({
-                            originalGeminiUrl: record.originalGeminiUrl,
-                            discordAttachmentId: record.discordAttachmentId,
-                            discordFilename: record.discordFilename,
-                            messageDiscordId: record.messageDiscordId,
-                        })
-                        .onConflictDoNothing()
-                        .returning();
+                    const [inserted] = await this.stmtInsertFile.execute({
+                        originalGeminiUrl: record.originalGeminiUrl,
+                        discordAttachmentId: record.discordAttachmentId,
+                        discordFilename: record.discordFilename,
+                        messageDiscordId: record.messageDiscordId,
+                    });
 
                     if (inserted) {
                         this.logger.debug(
@@ -69,15 +186,9 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                     }
 
                     // Conflict case: row already exists — fetch it by the unique URL
-                    const [existing] = await this.db
-                        .select()
-                        .from(geminiFiles)
-                        .where(
-                            eq(
-                                geminiFiles.originalGeminiUrl,
-                                record.originalGeminiUrl,
-                            ),
-                        );
+                    const [existing] = await this.stmtFindFileByUrl.execute({
+                        originalGeminiUrl: record.originalGeminiUrl,
+                    });
 
                     if (!existing) {
                         throw new DatabaseError(
@@ -144,42 +255,13 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
             },
             async (span) => {
                 try {
-                    const rows = await this.db
-                        .select({
-                            // gemini_files columns (always present)
-                            fileId: geminiFiles.id,
-                            fileOriginalGeminiUrl:
-                                geminiFiles.originalGeminiUrl,
-                            fileDiscordAttachmentId:
-                                geminiFiles.discordAttachmentId,
-                            fileDiscordFilename: geminiFiles.discordFilename,
-                            fileMessageDiscordId: geminiFiles.messageDiscordId,
-                            // gemini_file_uploads columns (null if no upload for this key)
-                            uploadId: geminiFileUploads.id,
-                            uploadGeminiFileId: geminiFileUploads.geminiFileId,
-                            uploadApiKeyId: geminiFileUploads.apiKeyId,
-                            uploadGeminiFileName:
-                                geminiFileUploads.geminiFileName,
-                            uploadGeminiUrl: geminiFileUploads.geminiUrl,
-                            uploadUploadedAt: geminiFileUploads.uploadedAt,
-                        })
-                        .from(geminiFiles)
-                        .leftJoin(
-                            geminiFileUploads,
-                            and(
-                                eq(
-                                    geminiFileUploads.geminiFileId,
-                                    geminiFiles.id,
-                                ),
-                                eq(geminiFileUploads.apiKeyId, apiKeyId),
-                            ),
-                        )
-                        .where(
-                            inArray(
-                                geminiFiles.originalGeminiUrl,
-                                originalUrls,
-                            ),
-                        );
+                    const rows = await this.stmtFindWithUploadState.execute({
+                        // pgTextArray produces a text[] literal accepted by = ANY($1) without
+                        // expanding the parameter count — the query shape stays fixed regardless
+                        // of how many URLs are passed.
+                        urls: pgTextArray(originalUrls),
+                        apiKeyId,
+                    });
 
                     span.setAttribute("db.result_count", rows.length);
 
@@ -249,27 +331,13 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
             },
             async () => {
                 try {
-                    const [result] = await this.db
-                        .insert(geminiFileUploads)
-                        .values({
-                            geminiFileId: record.geminiFileId,
-                            apiKeyId: record.apiKeyId,
-                            geminiFileName: record.geminiFileName,
-                            geminiUrl: record.geminiUrl,
-                            uploadedAt: record.uploadedAt,
-                        })
-                        .onConflictDoUpdate({
-                            target: [
-                                geminiFileUploads.geminiFileId,
-                                geminiFileUploads.apiKeyId,
-                            ],
-                            set: {
-                                geminiFileName: record.geminiFileName,
-                                geminiUrl: record.geminiUrl,
-                                uploadedAt: record.uploadedAt,
-                            },
-                        })
-                        .returning();
+                    const [result] = await this.stmtUpsertUpload.execute({
+                        geminiFileId: record.geminiFileId,
+                        apiKeyId: record.apiKeyId,
+                        geminiFileName: record.geminiFileName,
+                        geminiUrl: record.geminiUrl,
+                        uploadedAt: record.uploadedAt,
+                    });
 
                     if (!result) {
                         throw new DatabaseError(

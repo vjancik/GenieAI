@@ -37,7 +37,9 @@ export const messages = pgTable("messages", {
     langchainMessages: json("langchain_messages")
         .notNull()
         .$type<DiscordMessage["langchainMessages"]>(),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+        .defaultNow()
+        .notNull(),
 });
 
 /**
@@ -62,7 +64,9 @@ export const geminiApiKeys = pgTable("gemini_api_keys", {
      * when the key reappears in env at startup.
      */
     isActive: boolean("is_active").notNull().default(true),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+        .defaultNow()
+        .notNull(),
 });
 
 /**
@@ -138,7 +142,7 @@ export const geminiFileUploads = pgTable(
         /** Current Gemini download URI. Replaced on re-upload. */
         geminiUrl: text("gemini_url").notNull(),
         /** When the current Gemini file was uploaded. Used by the trigger and staleness checks. */
-        uploadedAt: timestamp("uploaded_at").notNull(),
+        uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull(),
     },
     (table) => [
         /** One upload record per (file, api_key) pair — supports upsert on conflict. */

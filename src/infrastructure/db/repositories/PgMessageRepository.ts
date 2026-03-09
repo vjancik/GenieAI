@@ -7,18 +7,43 @@ import type { DiscordMessage } from "../../../domain/message/Message.ts";
 import type { Db } from "../connection.ts";
 import { messages } from "../schema.ts";
 
+/** Prepared statement: insert a new message row and return it. */
+function buildInsertMessageStmt(db: Db) {
+    return db
+        .insert(messages)
+        .values({
+            discordMessageId: sql.placeholder("discordMessageId"),
+            repliesToDiscordId: sql.placeholder("repliesToDiscordId"),
+            channelId: sql.placeholder("channelId"),
+            guildId: sql.placeholder("guildId"),
+            role: sql.placeholder("role"),
+            langchainMessages: sql.placeholder("langchainMessages"),
+        })
+        .returning()
+        .prepare("message_insert");
+}
+
 /**
  * PostgreSQL implementation of IMessageRepository using Drizzle ORM.
  *
  * Message history is reconstructed on demand using a recursive CTE that
  * walks the repliesToDiscordId chain back to the chain root (null),
  * then orders results chronologically.
+ *
+ * Prepared statements are cached on construction for queries with stable structure,
+ * reducing per-call planning overhead.
  */
 export class PgMessageRepository implements IMessageRepository {
+    private readonly stmtInsertMessage: ReturnType<
+        typeof buildInsertMessageStmt
+    >;
+
     constructor(
         private readonly db: Db,
         private readonly logger: Logger,
-    ) {}
+    ) {
+        this.stmtInsertMessage = buildInsertMessageStmt(db);
+    }
 
     async save(
         msg: Omit<DiscordMessage, "id" | "createdAt">,
@@ -35,17 +60,14 @@ export class PgMessageRepository implements IMessageRepository {
             },
             async () => {
                 try {
-                    const [result] = await this.db
-                        .insert(messages)
-                        .values({
-                            discordMessageId: msg.discordMessageId,
-                            repliesToDiscordId: msg.repliesToDiscordId,
-                            channelId: msg.channelId,
-                            guildId: msg.guildId,
-                            role: msg.role,
-                            langchainMessages: msg.langchainMessages,
-                        })
-                        .returning();
+                    const [result] = await this.stmtInsertMessage.execute({
+                        discordMessageId: msg.discordMessageId,
+                        repliesToDiscordId: msg.repliesToDiscordId,
+                        channelId: msg.channelId,
+                        guildId: msg.guildId,
+                        role: msg.role,
+                        langchainMessages: msg.langchainMessages,
+                    });
 
                     if (!result) {
                         throw new DatabaseError("Insert returned no result");
@@ -94,6 +116,9 @@ export class PgMessageRepository implements IMessageRepository {
                  * langchain_messages is a JSON column; Bun's SQL driver may return it as either
                  * a pre-parsed JS value or as a raw JSON string depending on the query path.
                  * The row mapping below handles both cases defensively.
+                 *
+                 * Note: recursive CTEs cannot be expressed via the Drizzle query builder and
+                 * therefore cannot use a prepared statement — raw SQL is required here.
                  */
                 try {
                     const rows = await this.db.execute(sql`
