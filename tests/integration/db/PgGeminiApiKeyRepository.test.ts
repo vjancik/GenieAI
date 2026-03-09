@@ -10,7 +10,12 @@ import { sql } from "drizzle-orm";
 import pino from "pino";
 import { createDb } from "../../../src/infrastructure/db/connection.ts";
 import { PgGeminiApiKeyRepository } from "../../../src/infrastructure/db/repositories/PgGeminiApiKeyRepository.ts";
-import { geminiApiKeys } from "../../../src/infrastructure/db/schema.ts";
+import {
+    geminiApiKeys,
+    geminiFiles,
+    geminiFileUploads,
+    messages,
+} from "../../../src/infrastructure/db/schema.ts";
 
 /**
  * Integration tests for PgGeminiApiKeyRepository.
@@ -35,9 +40,8 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
-    // CASCADE also cleans gemini_file_uploads rows referencing these keys
     await db.execute(
-        sql`TRUNCATE TABLE gemini_api_keys RESTART IDENTITY CASCADE`,
+        sql`TRUNCATE TABLE gemini_api_keys, gemini_files, gemini_file_uploads, messages RESTART IDENTITY CASCADE`,
     );
 });
 
@@ -95,54 +99,132 @@ describe("PgGeminiApiKeyRepository.upsert", () => {
         const rows = await db.select().from(geminiApiKeys);
         expect(rows).toHaveLength(3);
     });
+
+    test("reactivates a previously deactivated key on upsert", async () => {
+        // Insert then deactivate
+        const original = await repo.upsert({
+            apiKey: "comeback-key",
+            isPaid: false,
+        });
+        await repo.deactivateNotIn(["some-other-key"]);
+
+        const [deactivated] = await db.select().from(geminiApiKeys);
+        expect(deactivated?.isActive).toBe(false);
+
+        // Upsert again — should reactivate
+        const reactivated = await repo.upsert({
+            apiKey: "comeback-key",
+            isPaid: false,
+        });
+        const [row] = await db.select().from(geminiApiKeys);
+
+        expect(reactivated.id).toBe(original.id); // same stable UUID
+        expect(row?.isActive).toBe(true);
+    });
 });
 
-describe("PgGeminiApiKeyRepository.deleteNotIn", () => {
-    test("deletes rows whose apiKey is not in the provided list", async () => {
+describe("PgGeminiApiKeyRepository.deactivateNotIn", () => {
+    test("sets isActive=false for rows whose apiKey is not in the provided list", async () => {
         const keep = await repo.upsert({ apiKey: "keep-this", isPaid: false });
-        await repo.upsert({ apiKey: "delete-this", isPaid: false });
+        await repo.upsert({ apiKey: "deactivate-this", isPaid: false });
 
-        await repo.deleteNotIn(["keep-this"]);
+        await repo.deactivateNotIn(["keep-this"]);
 
         const rows = await db.select().from(geminiApiKeys);
-        expect(rows).toHaveLength(1);
-        expect(rows[0]?.apiKey).toBe("keep-this");
-        // UUID of retained row is unchanged
-        expect(rows[0]?.id).toBe(keep.id);
+        // Both rows still exist — no hard-delete
+        expect(rows).toHaveLength(2);
+
+        const keepRow = rows.find((r) => r.apiKey === "keep-this");
+        const deactivatedRow = rows.find((r) => r.apiKey === "deactivate-this");
+
+        expect(keepRow?.isActive).toBe(true);
+        expect(keepRow?.id).toBe(keep.id);
+        expect(deactivatedRow?.isActive).toBe(false);
     });
 
-    test("does not delete any rows when called with an empty list", async () => {
-        const k1 = await repo.upsert({ apiKey: "alpha", isPaid: false });
-        const k2 = await repo.upsert({ apiKey: "beta", isPaid: true });
+    test("does not change any rows when called with an empty list", async () => {
+        await repo.upsert({ apiKey: "alpha", isPaid: false });
+        await repo.upsert({ apiKey: "beta", isPaid: true });
 
-        // Guard: empty list should be a no-op to prevent full-table deletion
-        await repo.deleteNotIn([]);
+        // Guard: empty list should be a no-op to prevent full-table deactivation
+        await repo.deactivateNotIn([]);
 
-        // Both rows must still exist with unchanged UUIDs
+        // Both rows must still exist and remain active
         const rows = await db.select().from(geminiApiKeys);
         expect(rows).toHaveLength(2);
-        const ids = rows.map((r) => r.id);
-        expect(ids).toContain(k1.id);
-        expect(ids).toContain(k2.id);
+        expect(rows.every((r) => r.isActive)).toBe(true);
     });
 
-    test("retains all rows when every key is listed in the keep-list", async () => {
+    test("leaves all rows active when every key is listed in the keep-list", async () => {
         await repo.upsert({ apiKey: "k1", isPaid: false });
         await repo.upsert({ apiKey: "k2", isPaid: false });
 
-        await repo.deleteNotIn(["k1", "k2"]);
+        await repo.deactivateNotIn(["k1", "k2"]);
 
         const rows = await db.select().from(geminiApiKeys);
         expect(rows).toHaveLength(2);
+        expect(rows.every((r) => r.isActive)).toBe(true);
     });
 
-    test("deletes all rows when none of their keys appear in the keep-list", async () => {
+    test("deactivates all rows when none of their keys appear in the keep-list", async () => {
         await repo.upsert({ apiKey: "gone-1", isPaid: false });
         await repo.upsert({ apiKey: "gone-2", isPaid: false });
 
-        await repo.deleteNotIn(["some-other-key"]);
+        await repo.deactivateNotIn(["some-other-key"]);
 
+        // Rows are preserved — only isActive toggled
         const rows = await db.select().from(geminiApiKeys);
-        expect(rows).toHaveLength(0);
+        expect(rows).toHaveLength(2);
+        expect(rows.every((r) => !r.isActive)).toBe(true);
+    });
+
+    test("preserves associated gemini_file_uploads rows when a key is deactivated", async () => {
+        // Minimal message → file anchor → upload chain
+        await db.insert(messages).values({
+            discordMessageId: "msg-deactivate-test",
+            repliesToDiscordId: null,
+            channelId: "ch-test",
+            guildId: null,
+            role: "human",
+            // TYPE COERCION: empty array satisfies the column type for test isolation
+            langchainMessages: [] as unknown as Record<string, unknown>[],
+        });
+        const [fileRow] = await db
+            .insert(geminiFiles)
+            .values({
+                originalGeminiUrl:
+                    "https://generativelanguage.googleapis.com/v1beta/files/deactivate-test",
+                discordAttachmentId: "att-deactivate",
+                discordFilename: "test.png",
+                messageDiscordId: "msg-deactivate-test",
+            })
+            .returning();
+        if (!fileRow) throw new Error("Failed to insert test gemini file");
+
+        const key = await repo.upsert({
+            apiKey: "key-to-deactivate",
+            isPaid: false,
+        });
+        await db.insert(geminiFileUploads).values({
+            geminiFileId: fileRow.id,
+            apiKeyId: key.id,
+            geminiFileName: "files/deactivate-test-uuid",
+            geminiUrl:
+                "https://generativelanguage.googleapis.com/v1beta/files/deactivate-test-uuid",
+            uploadedAt: new Date(),
+        });
+
+        // Deactivate the key
+        await repo.deactivateNotIn(["some-other-key"]);
+
+        // Key row preserved (not deleted)
+        const keyRows = await db.select().from(geminiApiKeys);
+        expect(keyRows).toHaveLength(1);
+        expect(keyRows[0]?.isActive).toBe(false);
+
+        // Upload record preserved — the whole point of this feature
+        const uploads = await db.select().from(geminiFileUploads);
+        expect(uploads).toHaveLength(1);
+        expect(uploads[0]?.geminiFileName).toBe("files/deactivate-test-uuid");
     });
 });

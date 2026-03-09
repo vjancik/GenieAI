@@ -6,10 +6,14 @@ import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
  * Keys are synced from environment variables at startup via
  * {@link GeminiApiKeySyncService}. The repository provides idempotent upsert
  * semantics so the same key can be re-registered across restarts without errors.
+ *
+ * Keys are never hard-deleted — they are deactivated so their associated
+ * `gemini_file_uploads` rows are preserved across key rotations.
  */
 export interface IGeminiApiKeyRepository {
     /**
-     * Inserts a new key record or updates `isPaid` if the key already exists.
+     * Inserts a new key record or updates `isPaid` and reactivates it if the
+     * key already exists (including previously deactivated keys).
      * Keyed by the raw `apiKey` string (unique column).
      *
      * @param key - The key data to persist
@@ -18,12 +22,14 @@ export interface IGeminiApiKeyRepository {
     upsert(key: Pick<GeminiApiKey, "apiKey" | "isPaid">): Promise<GeminiApiKey>;
 
     /**
-     * Deletes all key records whose `apiKey` is NOT in the provided list.
-     * Used at startup to remove keys that have been removed from the environment.
+     * Sets `isActive = false` for all key records whose `apiKey` is NOT in the
+     * provided list. Keys are never hard-deleted — deactivation preserves their
+     * associated `gemini_file_uploads` rows (upload records are project-scoped
+     * and re-uploading files is expensive).
      *
-     * Guards against an empty `apiKeys` array to prevent accidental full-table deletion.
+     * Guards against an empty `apiKeys` array to prevent accidental full-table deactivation.
      *
-     * @param apiKeys - The raw API key strings that should be retained
+     * @param apiKeys - The raw API key strings that should remain active
      */
-    deleteNotIn(apiKeys: string[]): Promise<void>;
+    deactivateNotIn(apiKeys: string[]): Promise<void>;
 }

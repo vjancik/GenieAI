@@ -9,9 +9,11 @@ import type { Logger } from "./types/Logger.ts";
  * Run once at startup before any LLM or file-upload operations. Ensures each
  * key has a stable UUID that can be used as a foreign key in `gemini_file_uploads`.
  *
- * Keys removed from env are deleted from the DB (their associated upload records
- * cascade-delete). Keys already in the DB are upserted idempotently so restarts
- * don't produce duplicate rows.
+ * Keys removed from env are deactivated (not deleted) so their associated
+ * upload records are preserved — Gemini files are project-scoped and re-uploading
+ * is expensive. If a key reappears in env it is automatically reactivated.
+ * Keys already in the DB are upserted idempotently so restarts don't produce
+ * duplicate rows.
  */
 export class GeminiApiKeySyncService {
     constructor(
@@ -20,7 +22,7 @@ export class GeminiApiKeySyncService {
     ) {}
 
     /**
-     * Upserts all configured API keys and removes any orphaned DB rows.
+     * Upserts all configured API keys and deactivates any orphaned DB rows.
      *
      * @param freeApiKeys - Raw free-tier key strings from `GOOGLE_FREE_API_KEYS`
      * @param paidApiKey - Raw paid key string from `GOOGLE_PAID_API_KEY`
@@ -44,8 +46,9 @@ export class GeminiApiKeySyncService {
             isPaid: true,
         });
 
-        // Remove any keys that were deleted from env (cascades to upload records)
-        await this.geminiApiKeyRepo.deleteNotIn(allKeyStrings);
+        // Deactivate keys removed from env. Rows are kept (not deleted) so their
+        // gemini_file_uploads rows survive, avoiding unnecessary re-uploads.
+        await this.geminiApiKeyRepo.deactivateNotIn(allKeyStrings);
 
         this.logger.info(
             {

@@ -53,6 +53,14 @@ export const geminiApiKeys = pgTable("gemini_api_keys", {
     apiKey: text("api_key").notNull().unique(),
     /** Whether this is a paid key (true) or free-tier key (false). No default — always set explicitly. */
     isPaid: boolean("is_paid").notNull(),
+    /**
+     * Whether this key is currently active (present in environment variables).
+     * Keys are never hard-deleted on removal — they are deactivated so that their
+     * associated gemini_file_uploads rows are preserved (upload records are
+     * project-scoped and re-uploading is expensive). Reactivated automatically
+     * when the key reappears in env at startup.
+     */
+    isActive: boolean("is_active").notNull().default(true),
     createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

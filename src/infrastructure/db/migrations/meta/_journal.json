@@ -15,6 +15,13 @@
             "when": 1773061189865,
             "tag": "0001_stale_cleanup_trigger",
             "breakpoints": true
+        },
+        {
+            "idx": 2,
+            "version": "7",
+            "when": 1773069824803,
+            "tag": "0002_lazy_changeling",
+            "breakpoints": true
         }
     ]
 }

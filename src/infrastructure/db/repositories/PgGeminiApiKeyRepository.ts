@@ -10,7 +10,8 @@ import { geminiApiKeys } from "../schema.ts";
  * PostgreSQL implementation of {@link IGeminiApiKeyRepository} using Drizzle ORM.
  *
  * Keys are upserted idempotently on startup via {@link GeminiApiKeySyncService}.
- * Orphaned rows (keys removed from env) are pruned via {@link deleteNotIn}.
+ * Keys removed from env are deactivated (not deleted) via {@link deactivateNotIn}
+ * so their associated gemini_file_uploads rows are preserved across key rotations.
  */
 export class PgGeminiApiKeyRepository implements IGeminiApiKeyRepository {
     constructor(
@@ -18,17 +19,27 @@ export class PgGeminiApiKeyRepository implements IGeminiApiKeyRepository {
         private readonly logger: Logger,
     ) {}
 
+    /**
+     * Inserts a new key or, on conflict, updates `isPaid` and sets `isActive = true`.
+     * The reactivation on conflict ensures a key that was previously deactivated
+     * (removed from env) is treated as active again when it reappears.
+     */
     async upsert(
         key: Pick<GeminiApiKey, "apiKey" | "isPaid">,
     ): Promise<GeminiApiKey> {
         try {
             const [result] = await this.db
                 .insert(geminiApiKeys)
-                .values({ apiKey: key.apiKey, isPaid: key.isPaid })
+                .values({
+                    apiKey: key.apiKey,
+                    isPaid: key.isPaid,
+                    isActive: true,
+                })
                 .onConflictDoUpdate({
                     target: geminiApiKeys.apiKey,
-                    // Update isPaid so a key's type can be corrected by changing env vars
-                    set: { isPaid: key.isPaid },
+                    // Update isPaid so a key's type can be corrected by changing env vars.
+                    // Always set isActive = true to reactivate a previously deactivated key.
+                    set: { isPaid: key.isPaid, isActive: true },
                 })
                 .returning();
 
@@ -54,27 +65,35 @@ export class PgGeminiApiKeyRepository implements IGeminiApiKeyRepository {
         }
     }
 
-    async deleteNotIn(apiKeys: string[]): Promise<void> {
-        // Guard against accidental full-table deletion when called with an empty array
+    /**
+     * Deactivates all key records whose `apiKey` is NOT in the provided list by
+     * setting `isActive = false`. Rows are never deleted — their associated
+     * gemini_file_uploads rows are preserved so re-upload costs are avoided if
+     * the key is re-added later.
+     *
+     * Guards against an empty `apiKeys` array to prevent accidental full-table deactivation.
+     */
+    async deactivateNotIn(apiKeys: string[]): Promise<void> {
         if (apiKeys.length === 0) {
             this.logger.error(
-                "deleteNotIn called with empty array — skipping to prevent full-table deletion",
+                "deactivateNotIn called with empty array — skipping to prevent full-table deactivation",
             );
             return;
         }
 
         try {
             await this.db
-                .delete(geminiApiKeys)
+                .update(geminiApiKeys)
+                .set({ isActive: false })
                 .where(notInArray(geminiApiKeys.apiKey, apiKeys));
 
             this.logger.debug(
-                { retainedKeyCount: apiKeys.length },
-                "Removed orphaned Gemini API key records",
+                { activeKeyCount: apiKeys.length },
+                "Deactivated orphaned Gemini API key records",
             );
         } catch (err) {
             throw new DatabaseError(
-                "Failed to delete orphaned Gemini API keys",
+                "Failed to deactivate orphaned Gemini API keys",
                 err,
             );
         }

@@ -13,7 +13,7 @@ function makeKey(apiKey: string, isPaid: boolean): GeminiApiKey {
 function makeRepo(): IGeminiApiKeyRepository {
     return {
         upsert: mock(async ({ apiKey, isPaid }) => makeKey(apiKey, isPaid)),
-        deleteNotIn: mock(async () => {}),
+        deactivateNotIn: mock(async () => {}),
     };
 }
 
@@ -57,18 +57,18 @@ describe("GeminiApiKeySyncService.sync", () => {
         expect(paidKey.isPaid).toBe(true);
     });
 
-    test("calls deleteNotIn with all key strings to purge orphaned rows", async () => {
+    test("calls deactivateNotIn with all key strings to deactivate orphaned rows", async () => {
         const repo = makeRepo();
         const service = new GeminiApiKeySyncService(repo, testLogger);
 
         await service.sync(["free-key-1", "free-key-2"], "paid-key");
 
-        expect(repo.deleteNotIn).toHaveBeenCalledWith([
+        expect(repo.deactivateNotIn).toHaveBeenCalledWith([
             "free-key-1",
             "free-key-2",
             "paid-key",
         ]);
-        expect(repo.deleteNotIn).toHaveBeenCalledTimes(1);
+        expect(repo.deactivateNotIn).toHaveBeenCalledTimes(1);
     });
 
     test("works with a single free key", async () => {
@@ -84,34 +84,34 @@ describe("GeminiApiKeySyncService.sync", () => {
         expect(freeKeys[0]?.apiKey).toBe("only-free");
         expect(paidKey.apiKey).toBe("paid-key");
         expect(repo.upsert).toHaveBeenCalledTimes(2);
-        expect(repo.deleteNotIn).toHaveBeenCalledWith([
+        expect(repo.deactivateNotIn).toHaveBeenCalledWith([
             "only-free",
             "paid-key",
         ]);
     });
 
-    test("upserts before deleting, ensuring keys are not orphaned prematurely", async () => {
+    test("upserts before deactivating, ensuring keys are not orphaned prematurely", async () => {
         const callOrder: string[] = [];
         const repo: IGeminiApiKeyRepository = {
             upsert: mock(async ({ apiKey }) => {
                 callOrder.push(`upsert:${apiKey}`);
                 return makeKey(apiKey, false);
             }),
-            deleteNotIn: mock(async () => {
-                callOrder.push("deleteNotIn");
+            deactivateNotIn: mock(async () => {
+                callOrder.push("deactivateNotIn");
             }),
         };
         const service = new GeminiApiKeySyncService(repo, testLogger);
 
         await service.sync(["free-key"], "paid-key");
 
-        // All upserts must precede deleteNotIn
-        const deleteIdx = callOrder.indexOf("deleteNotIn");
+        // All upserts must precede deactivateNotIn
+        const deactivateIdx = callOrder.indexOf("deactivateNotIn");
         const upsertIdxs = callOrder
             .map((e, i) => (e.startsWith("upsert:") ? i : -1))
             .filter((i) => i !== -1);
         for (const upsertIdx of upsertIdxs) {
-            expect(upsertIdx).toBeLessThan(deleteIdx);
+            expect(upsertIdx).toBeLessThan(deactivateIdx);
         }
     });
 });
