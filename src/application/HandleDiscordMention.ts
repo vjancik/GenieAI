@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { BaseMessage } from "@langchain/core/messages";
@@ -368,7 +367,7 @@ export class HandleDiscordMention {
         for (const attachment of attachments) {
             const tempPath = join(
                 UPLOAD_TEMP_DIR,
-                `${randomUUID()}-${attachment.name}`,
+                `${Bun.randomUUIDv7()}-${attachment.name}`,
             );
             try {
                 const mimeType = await this.diskDownloader.downloadToFile(
@@ -376,7 +375,7 @@ export class HandleDiscordMention {
                     tempPath,
                 );
 
-                const fileName = `files/${randomUUID()}`;
+                const fileName = `files/${Bun.randomUUIDv7()}`;
                 const uploaded = await this.geminiFileUploader.upload(
                     tempPath,
                     fileName,

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { BaseMessage, MessageContent } from "@langchain/core/messages";
@@ -213,7 +212,7 @@ export class GeminiFileRefreshService {
 
         const tempPath = join(
             TEMP_DIR,
-            `${randomUUID()}-${file.discordFilename}`,
+            `${Bun.randomUUIDv7()}-${file.discordFilename}`,
         );
         try {
             // Stream attachment to disk
@@ -224,7 +223,7 @@ export class GeminiFileRefreshService {
 
             // Upload to Gemini using the uploader for this specific API key
             const uploader = this.uploaderRegistry.get(apiKeyId);
-            const newFileName = `files/${randomUUID()}`;
+            const newFileName = `files/${Bun.randomUUIDv7()}`;
             const uploaded = await uploader.upload(
                 tempPath,
                 newFileName,

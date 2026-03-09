@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
     boolean,
     index,
@@ -24,7 +25,7 @@ import type { DiscordMessage } from "../../domain/message/Message.ts";
  * JSON (not JSONB) is used since we never perform key-level operations on this column.
  */
 export const messages = pgTable("messages", {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: uuid("id").primaryKey().default(sql`uuidv7()`),
     /** The Discord snowflake ID for this message */
     discordMessageId: text("discord_message_id").notNull().unique(),
     /** Discord snowflake of the parent message in the reply chain, null for chain root */
@@ -48,7 +49,7 @@ export const messages = pgTable("messages", {
  * environment variables at startup via GeminiApiKeySyncService.
  */
 export const geminiApiKeys = pgTable("gemini_api_keys", {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: uuid("id").primaryKey().default(sql`uuidv7()`),
     /** The raw Google API key string */
     apiKey: text("api_key").notNull().unique(),
     /** Whether this is a paid key (true) or free-tier key (false). No default — always set explicitly. */
@@ -76,7 +77,7 @@ export const geminiApiKeys = pgTable("gemini_api_keys", {
  * stored in LangChain content blocks as the stable lookup key. It never changes.
  */
 export const geminiFiles = pgTable("gemini_files", {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: uuid("id").primaryKey().default(sql`uuidv7()`),
     /**
      * The Gemini URI returned at first upload. Immutable — stored in LangChain
      * content blocks and used as the stable lookup key. Never updated after insert.
@@ -114,7 +115,7 @@ export const geminiFiles = pgTable("gemini_files", {
 export const geminiFileUploads = pgTable(
     "gemini_file_uploads",
     {
-        id: uuid("id").primaryKey().defaultRandom(),
+        id: uuid("id").primaryKey().default(sql`uuidv7()`),
         /**
          * FK → gemini_files.id. ON DELETE CASCADE: removing the permanent anchor
          * removes all per-key upload records for that file.
