@@ -1,5 +1,4 @@
 import { ChatGoogle } from "@langchain/google";
-import type { AppConfig } from "../../config/config.ts";
 
 /**
  * System prompt for the search agent.
@@ -20,15 +19,22 @@ export const SEARCH_SYSTEM_PROMPT =
  * Google Search grounding is bound as a built-in tool understood by the Gemini API,
  * not as a custom LangChain tool. The model uses it autonomously when the prompt
  * instructs it to search.
+ *
+ * @param params.apiKey - Google API key for this model instance (must be a paid key)
+ * @param params.modelName - Gemini model identifier (e.g. "gemini-2.0-flash")
+ * @param params.includeLLMThoughts - Whether to include thought tokens in responses
  */
-export function createSearchModel(config: AppConfig) {
+export function createSearchModel(params: {
+    apiKey: string;
+    modelName: string;
+    includeLLMThoughts: boolean;
+}) {
     const llm = new ChatGoogle({
-        // TODO: switch to gemini-3-flash-preview, lite for development suffices
-        model: "gemini-3.1-flash-lite-preview",
-        apiKey: config.googleApiKey,
+        model: params.modelName,
+        apiKey: params.apiKey,
         thinkingConfig: {
             thinkingLevel: "high",
-            includeThoughts: config.includeLLMThoughts,
+            includeThoughts: params.includeLLMThoughts,
         },
     });
 

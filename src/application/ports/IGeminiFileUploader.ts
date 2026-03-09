@@ -24,6 +24,13 @@ export interface UploadedGeminiFile {
 
 export interface IGeminiFileUploader {
     /**
+     * The database UUID of the API key used to construct this uploader.
+     * Needed when persisting upload records — the uploader is always paired
+     * with one specific API key's Gemini project.
+     */
+    readonly apiKeyId: string;
+
+    /**
      * Uploads a file from disk to the Gemini Files API and waits until it
      * reaches ACTIVE state before returning.
      *

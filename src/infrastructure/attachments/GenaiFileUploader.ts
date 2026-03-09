@@ -28,6 +28,7 @@ export class GenaiFileUploader implements IGeminiFileUploader {
 
     constructor(
         apiKey: string,
+        readonly apiKeyId: string,
         private readonly logger: Logger,
     ) {
         this.ai = new GoogleGenAI({ apiKey });

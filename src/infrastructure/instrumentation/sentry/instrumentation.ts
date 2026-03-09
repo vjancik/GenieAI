@@ -1,7 +1,7 @@
-import * as Sentry from '@sentry/bun';
+import * as Sentry from "@sentry/bun";
 
 if (!process.env.SENTRY_URL) {
-    throw new Error('SENTRY_URL environment variable is not set');
+    throw new Error("SENTRY_URL environment variable is not set");
 }
 
 Sentry.init({
@@ -10,12 +10,12 @@ Sentry.init({
     enableLogs: true,
     // Tracing
     tracesSampleRate: 1.0, // Capture 100% of the transactions
-    debug: process.env.SENTRY_DEBUG === 'true' || false,
+    debug: process.env.SENTRY_DEBUG === "true" || false,
     integrations: [
         // Sentry.googleGenAIIntegration(),
         // Sentry.langChainIntegration(),
         // Sentry.langGraphIntegration(),
-    ]
+    ],
 });
 
 // Sentry.logger.info("Sentry instrumentation initialized");

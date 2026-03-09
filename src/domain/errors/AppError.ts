@@ -40,3 +40,14 @@ export class DiscordError extends AppError {
         super("DISCORD_ERROR", message, cause);
     }
 }
+
+/** Thrown when all free-tier Gemini API keys have responded with HTTP 429. */
+export class AllFreeKeysExhaustedError extends AppError {
+    constructor(cause?: unknown) {
+        super(
+            "ALL_FREE_KEYS_EXHAUSTED",
+            "All free Gemini API keys are rate-limited",
+            cause,
+        );
+    }
+}

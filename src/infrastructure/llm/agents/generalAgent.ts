@@ -1,5 +1,4 @@
 import { ChatGoogle } from "@langchain/google";
-import type { AppConfig } from "../../config/config.ts";
 
 /**
  * System prompt for the general-purpose agent.
@@ -13,15 +12,22 @@ export const GENERAL_SYSTEM_PROMPT =
 /**
  * Creates the general-purpose model — the stronger Gemini model used for
  * all non-search routes, including evaluating web page and video tool results.
+ *
+ * @param params.apiKey - Google API key for this model instance
+ * @param params.modelName - Gemini model identifier (e.g. "gemini-2.0-flash")
+ * @param params.includeLLMThoughts - Whether to include thought tokens in responses
  */
-export function createGeneralModel(config: AppConfig) {
+export function createGeneralModel(params: {
+    apiKey: string;
+    modelName: string;
+    includeLLMThoughts: boolean;
+}) {
     return new ChatGoogle({
-        // TODO: switch to gemini-3-flash-preview, lite for development suffices
-        model: "gemini-3.1-flash-lite-preview",
-        apiKey: config.googleApiKey,
+        model: params.modelName,
+        apiKey: params.apiKey,
         thinkingConfig: {
             thinkingLevel: "high",
-            includeThoughts: config.includeLLMThoughts,
+            includeThoughts: params.includeLLMThoughts,
         },
     });
 }

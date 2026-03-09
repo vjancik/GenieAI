@@ -3,10 +3,9 @@ import { unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { BaseMessage } from "@langchain/core/messages";
 import { HumanMessage } from "@langchain/core/messages";
-import type { GeminiFileUpload } from "../domain/message/GeminiFileUpload.ts";
+import type { GeminiFile } from "../domain/message/GeminiFile.ts";
 import type { IMessageRepository } from "../domain/message/IMessageRepository.ts";
 import type { AppConfig } from "./config/AppConfig.ts";
-import type { GeminiFileRefreshService } from "./GeminiFileRefreshService.ts";
 import type { IAgentOrchestrator } from "./ports/IAgentOrchestrator.ts";
 import type {
     DiscordAttachmentInfo,
@@ -24,14 +23,32 @@ import type { Logger } from "./types/Logger.ts";
 const UPLOAD_TEMP_DIR = "/var/tmp/genie-attachments";
 
 /**
+ * Pending data for a single Gemini file upload that must be persisted after
+ * the user message row exists (satisfies the `gemini_files.message_discord_id`
+ * FK constraint).
+ *
+ * Split into two parts for the two-phase save:
+ * - `fileAnchor` → inserted into `gemini_files` (permanent, idempotent)
+ * - `uploadData` → upserted into `gemini_file_uploads` (ephemeral, per-key)
+ */
+type PendingGeminiRecord = {
+    fileAnchor: Omit<GeminiFile, "id">;
+    uploadData: {
+        geminiFileName: string;
+        geminiUrl: string;
+        uploadedAt: Date;
+    };
+};
+
+/**
  * Application use case: handle an incoming Discord @mention.
  *
  * Coordinates:
  * 1. Fetching prior conversation history from the reply chain
- * 2. (upload mode) Refreshing any stale Gemini file references in history
- * 3. Downloading and building a multimodal HumanMessage (inline or upload mode)
- * 4. Invoking the LLM orchestrator with history + current message
- * 5. Persisting the user's message to the database
+ * 2. Downloading and building a multimodal HumanMessage (inline or upload mode)
+ * 3. Invoking the LLM orchestrator with history + current message
+ *    (the orchestrator handles Gemini file refresh per key attempt internally)
+ * 4. Persisting the user's message to the database
  *
  * The bot's response message is persisted separately (via {@link saveBotResponse})
  * after it has been sent to Discord, because we need Discord's message ID.
@@ -53,7 +70,6 @@ export class HandleDiscordMention {
         private readonly diskDownloader?: IDiskAttachmentDownloader,
         private readonly geminiFileUploader?: IGeminiFileUploader,
         private readonly geminiFileRepo?: IGeminiFileRepository,
-        private readonly geminiFileRefreshService?: GeminiFileRefreshService,
     ) {
         this.maxInlineBytes = config.maxInlineAttachmentSizeMb * 1024 * 1024;
         this.attachmentMode = config.attachmentMode;
@@ -115,20 +131,7 @@ export class HandleDiscordMention {
                 ? await this.messageRepo.fetchChain(params.referencedMessageId)
                 : [];
 
-        let history = this.orchestrator.buildHistory(dbHistory);
-
-        // In upload mode: refresh any stale Gemini file references before invoking the LLM
-        if (
-            this.attachmentMode === "upload" &&
-            this.geminiFileRefreshService &&
-            params.attachmentRefetcher &&
-            history.length > 0
-        ) {
-            history = await this.geminiFileRefreshService.refreshHistory(
-                history,
-                params.attachmentRefetcher,
-            );
-        }
+        const history = this.orchestrator.buildHistory(dbHistory);
 
         this.logger.debug(
             {
@@ -144,14 +147,14 @@ export class HandleDiscordMention {
         // Build the human message — multimodal if attachments are present.
         // In upload mode this also returns pending gemini file records that must
         // be saved AFTER the user's message row exists (FK constraint).
-        const { humanMsg, pendingGeminiRecords } = await this.buildHumanMessage(
+        const { humanMsg, pendingRecords } = await this.buildHumanMessage(
             params.discordMessageId,
             params.userContent,
             params.attachments,
             params.onStatusUpdate,
         );
 
-        // Persist the user's message first so gemini_file_uploads FK is satisfied.
+        // Persist the user's message first so gemini_files FK is satisfied.
         await this.messageRepo.save({
             discordMessageId: params.discordMessageId,
             repliesToDiscordId: params.referencedMessageId,
@@ -166,16 +169,34 @@ export class HandleDiscordMention {
             ],
         });
 
-        // Save gemini file upload records after the message row exists.
-        for (const record of pendingGeminiRecords) {
-            await this.geminiFileRepo?.save(record);
+        // Two-phase save for each uploaded attachment:
+        // 1. saveFile — idempotent insert into gemini_files (permanent anchor)
+        // 2. upsertUpload — insert/update gemini_file_uploads (ephemeral per-key record)
+        if (pendingRecords.length > 0) {
+            if (!this.geminiFileRepo || !this.geminiFileUploader) {
+                throw new Error(
+                    "Upload mode repository dependencies not injected into HandleDiscordMention",
+                );
+            }
+            const { geminiFileRepo, geminiFileUploader } = this;
+            for (const { fileAnchor, uploadData } of pendingRecords) {
+                // TODO: we might have to delete these files in a catch clause if the handler fails as the originalUrl will never get persisted to langchainMessages and this record will never be selected
+                const savedFile = await geminiFileRepo.saveFile(fileAnchor);
+                await geminiFileRepo.upsertUpload({
+                    geminiFileId: savedFile.id,
+                    apiKeyId: geminiFileUploader.apiKeyId,
+                    ...uploadData,
+                });
+            }
         }
 
-        // Generate the AI response; collect all new messages for persistence
+        // Generate the AI response; the orchestrator handles Gemini file refresh internally
+        // per key attempt, threaded via attachmentRefetcher in context.
         const { content, newMessages } = await this.orchestrator.process(
             history,
             humanMsg,
             params.onStatusUpdate,
+            params.attachmentRefetcher,
         );
 
         return { response: content, newMessages };
@@ -230,9 +251,9 @@ export class HandleDiscordMention {
      *
      * If there are no attachments, always returns a simple string-content HumanMessage.
      *
-     * In upload mode, also returns `pendingGeminiRecords` — Gemini file upload rows
+     * In upload mode, also returns `pendingRecords` — split GeminiFile + upload data
      * that must be saved to the DB **after** the user message row exists (FK constraint).
-     * In all other modes `pendingGeminiRecords` is always an empty array.
+     * In all other modes `pendingRecords` is always an empty array.
      */
     private async buildHumanMessage(
         discordMessageId: string,
@@ -241,12 +262,12 @@ export class HandleDiscordMention {
         onStatusUpdate?: OnStatusUpdate,
     ): Promise<{
         humanMsg: HumanMessage;
-        pendingGeminiRecords: Omit<GeminiFileUpload, "id">[];
+        pendingRecords: PendingGeminiRecord[];
     }> {
         if (attachments.length === 0) {
             return {
                 humanMsg: new HumanMessage(userContent),
-                pendingGeminiRecords: [],
+                pendingRecords: [],
             };
         }
 
@@ -264,7 +285,7 @@ export class HandleDiscordMention {
             userContent,
             attachments,
         );
-        return { humanMsg, pendingGeminiRecords: [] };
+        return { humanMsg, pendingRecords: [] };
     }
 
     /**
@@ -316,9 +337,9 @@ export class HandleDiscordMention {
      * then builds a message with Gemini URL references.
      *
      * Temp files are deleted in a try/finally after each upload.
-     * Gemini file upload records are NOT saved here — they are returned as
-     * `pendingGeminiRecords` so that `handle()` can persist them after the user
-     * message row exists (required to satisfy the FK constraint).
+     * Gemini file records are NOT saved here — they are returned as `pendingRecords`
+     * so that `handle()` can persist them after the user message row exists
+     * (required to satisfy the `gemini_files.message_discord_id` FK constraint).
      */
     private async buildUploadModeMessage(
         discordMessageId: string,
@@ -326,7 +347,7 @@ export class HandleDiscordMention {
         attachments: DiscordAttachmentInfo[],
     ): Promise<{
         humanMsg: HumanMessage;
-        pendingGeminiRecords: Omit<GeminiFileUpload, "id">[];
+        pendingRecords: PendingGeminiRecord[];
     }> {
         if (!this.diskDownloader || !this.geminiFileUploader) {
             throw new Error(
@@ -342,7 +363,7 @@ export class HandleDiscordMention {
             mimeType: string;
             fileUri: string;
         }> = [];
-        const pendingGeminiRecords: Omit<GeminiFileUpload, "id">[] = [];
+        const pendingRecords: PendingGeminiRecord[] = [];
 
         for (const attachment of attachments) {
             const tempPath = join(
@@ -372,16 +393,21 @@ export class HandleDiscordMention {
                     "Uploaded attachment to Gemini Files API",
                 );
 
-                // Collect the record; it will be saved by handle() after the message row exists.
-                // originalGeminiUrl = geminiUrl on first upload — this is the immutable lookup key.
-                pendingGeminiRecords.push({
-                    originalGeminiUrl: uploaded.geminiUrl,
-                    geminiFileName: uploaded.geminiFileName,
-                    geminiUrl: uploaded.geminiUrl,
-                    uploadedAt: new Date(),
-                    discordAttachmentId: attachment.id,
-                    discordFilename: attachment.name,
-                    messageDiscordId: discordMessageId,
+                // Collect the split record; saved by handle() after the message row exists.
+                // originalGeminiUrl = geminiUrl on first upload — this is the immutable lookup key
+                // stored in LangChain content blocks and used by GeminiFileRefreshService.
+                pendingRecords.push({
+                    fileAnchor: {
+                        originalGeminiUrl: uploaded.geminiUrl,
+                        discordAttachmentId: attachment.id,
+                        discordFilename: attachment.name,
+                        messageDiscordId: discordMessageId,
+                    },
+                    uploadData: {
+                        geminiFileName: uploaded.geminiFileName,
+                        geminiUrl: uploaded.geminiUrl,
+                        uploadedAt: new Date(),
+                    },
                 });
 
                 uploadedParts.push({
@@ -411,7 +437,7 @@ export class HandleDiscordMention {
 
         return {
             humanMsg: new HumanMessage({ content: contentParts }),
-            pendingGeminiRecords,
+            pendingRecords,
         };
     }
 }

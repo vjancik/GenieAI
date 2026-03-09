@@ -9,7 +9,17 @@ export type AttachmentMode = "inline" | "upload";
  */
 export interface AppConfig {
     discordToken: string;
-    googleApiKey: string;
+    /**
+     * Free-tier Google API keys used for triage and general model rotation.
+     * At least one is required. Keys rotate round-robin on HTTP 429 responses.
+     * Sourced from GOOGLE_FREE_API_KEYS (comma-separated).
+     */
+    googleFreeApiKeys: string[];
+    /**
+     * Paid Google API key used exclusively for the search model (Google Search
+     * grounding is a paid-only feature). Sourced from GOOGLE_PAID_API_KEY.
+     */
+    googlePaidApiKey: string;
     databaseUrl: string;
     /** Gemini 3 Reasoning effort level */
     triageThinkingLevel: string;
@@ -27,7 +37,7 @@ export interface AppConfig {
      * How file attachments are passed to the LLM.
      * - "inline": base64-encoded directly in the message (cross-provider, high memory overhead)
      * - "upload": uploaded via Gemini Files API (Gemini only, streaming to disk)
-     * Default: "inline"
+     * Default: "upload"
      */
     attachmentMode: AttachmentMode;
     /**
@@ -60,17 +70,51 @@ function parseAttachmentMode(raw: string | undefined): AttachmentMode {
 }
 
 /**
+ * Parses and validates the GOOGLE_FREE_API_KEYS environment variable.
+ *
+ * Splits on commas, trims whitespace, and filters empty strings.
+ * Throws {@link ConfigError} if the result is empty.
+ */
+function parseFreeApiKeys(raw: string | undefined): string[] {
+    const keys = (raw ?? "")
+        .split(",")
+        .map((k) => k.trim())
+        .filter((k) => k.length > 0);
+    if (keys.length === 0) {
+        throw new ConfigError(
+            "GOOGLE_FREE_API_KEYS is required and must contain at least one API key",
+        );
+    }
+    return keys;
+}
+
+/**
+ * Parses and validates the GOOGLE_PAID_API_KEY environment variable.
+ *
+ * Throws {@link ConfigError} if missing or if multiple keys are provided
+ * (comma-separated paid keys are not supported — use GOOGLE_FREE_API_KEYS for rotation).
+ */
+function parsePaidApiKey(raw: string | undefined): string {
+    if (!raw?.trim()) {
+        throw new ConfigError(
+            "GOOGLE_PAID_API_KEY is required (paid key for Google Search grounding)",
+        );
+    }
+    if (raw.includes(",")) {
+        throw new ConfigError(
+            "GOOGLE_PAID_API_KEY must be a single key. For multiple keys use GOOGLE_FREE_API_KEYS.",
+        );
+    }
+    return raw.trim();
+}
+
+/**
  * Parses and validates all required environment variables.
  * Throws {@link ConfigError} immediately if any required variable is missing,
  * preventing the application from starting in a misconfigured state.
  */
 export function loadConfig(): AppConfig {
-    const requiredVars = [
-        "DISCORD_TOKEN",
-        // "DISCORD_CLIENT_ID",
-        "GOOGLE_API_KEY",
-        "DATABASE_URL",
-    ] as const;
+    const requiredVars = ["DISCORD_TOKEN", "DATABASE_URL"] as const;
 
     for (const key of requiredVars) {
         if (!process.env[key]) {
@@ -80,16 +124,13 @@ export function loadConfig(): AppConfig {
         }
     }
 
-    // All four vars are guaranteed non-empty by the guard loop above
     const discordToken = process.env.DISCORD_TOKEN ?? "";
-    // const discordClientId = process.env.DISCORD_CLIENT_ID ?? "";
-    const googleApiKey = process.env.GOOGLE_API_KEY ?? "";
     const databaseUrl = process.env.DATABASE_URL ?? "";
 
     return {
         discordToken,
-        // discordClientId,
-        googleApiKey,
+        googleFreeApiKeys: parseFreeApiKeys(process.env.GOOGLE_FREE_API_KEYS),
+        googlePaidApiKey: parsePaidApiKey(process.env.GOOGLE_PAID_API_KEY),
         databaseUrl,
         triageThinkingLevel: process.env.TRIAGE_THINKING_LEVEL ?? "minimal",
         includeLLMThoughts: process.env.INCLUDE_LLM_THOUGHTS === "true",

@@ -7,27 +7,31 @@ import type { IDiscordAttachmentRefetcher } from "../../../src/application/ports
 import type { IDiskAttachmentDownloader } from "../../../src/application/ports/IDiskAttachmentDownloader.ts";
 import type { IGeminiFileRepository } from "../../../src/application/ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploader } from "../../../src/application/ports/IGeminiFileUploader.ts";
+import type { IGeminiFileUploaderRegistry } from "../../../src/application/ports/IGeminiFileUploaderRegistry.ts";
+import type { GeminiFile } from "../../../src/domain/message/GeminiFile.ts";
 import type { GeminiFileUpload } from "../../../src/domain/message/GeminiFileUpload.ts";
 
 const testLogger = pino({ level: "silent" });
 
 const GEMINI_URL =
-    "https://generativelanguage.googleapis.com/v1beta/files/abc123/download";
+    "https://generativelanguage.googleapis.com/v1beta/files/abc123";
 const GEMINI_URL_NEW =
-    "https://generativelanguage.googleapis.com/v1beta/files/newfile/download";
+    "https://generativelanguage.googleapis.com/v1beta/files/newfile";
 
-/** 1-hour stale threshold: files become stale after 47 hours (48h TTL - 1h). */
+/** The API key ID used across all tests. */
+const TEST_API_KEY_ID = "test-key-uuid";
+
+/**
+ * 1-hour stale threshold: staleThresholdMs = 48h - 60min = 47h.
+ * A file is stale when `now - uploadedAt >= 47h`.
+ */
 const testConfig = { geminiFileStaleThresholdMinutes: 60 };
 
-function makeRecord(
-    overrides: Partial<GeminiFileUpload> = {},
-): GeminiFileUpload {
+/** Creates a GeminiFile permanent anchor for tests. */
+function makeFile(overrides: Partial<GeminiFile> = {}): GeminiFile {
     return {
-        id: "uuid-1",
+        id: "file-uuid-1",
         originalGeminiUrl: GEMINI_URL,
-        geminiFileName: "files/abc123",
-        geminiUrl: GEMINI_URL,
-        uploadedAt: new Date(),
         discordAttachmentId: "att-001",
         discordFilename: "image.png",
         messageDiscordId: "msg-001",
@@ -35,29 +39,74 @@ function makeRecord(
     };
 }
 
-function makeRepo(records: GeminiFileUpload[] = []): IGeminiFileRepository {
+/** Creates a GeminiFileUpload ephemeral per-key record for tests. */
+function makeUpload(
+    overrides: Partial<GeminiFileUpload> = {},
+): GeminiFileUpload {
     return {
-        save: mock(async () => records[0] as GeminiFileUpload),
-        updateAfterRefresh: mock(async () => {}),
-        findByOriginalUrls: mock(async (urls: string[]) => {
-            const result = new Map<string, GeminiFileUpload>();
-            for (const r of records) {
-                if (urls.includes(r.originalGeminiUrl)) {
-                    result.set(r.originalGeminiUrl, r);
-                }
-            }
-            return result;
-        }),
+        id: "upload-uuid-1",
+        geminiFileId: "file-uuid-1",
+        apiKeyId: TEST_API_KEY_ID,
+        geminiFileName: "files/abc123",
+        geminiUrl: GEMINI_URL,
+        uploadedAt: new Date(),
+        ...overrides,
     };
 }
 
+/** Entry type for makeRepo: a GeminiFile with its optional upload for the test key. */
+type RepoEntry = { file: GeminiFile; upload: GeminiFileUpload | null };
+
+/**
+ * Mock IGeminiFileRepository. findWithUploadStateForKey returns a Map built
+ * from the provided entries, filtered to those whose originalGeminiUrl appears
+ * in the requested URLs list.
+ */
+function makeRepo(entries: RepoEntry[] = []): IGeminiFileRepository {
+    return {
+        saveFile: mock(async (record) => ({ id: "file-uuid-1", ...record })),
+        findWithUploadStateForKey: mock(
+            async (urls: string[], _apiKeyId: string) => {
+                const result = new Map<
+                    string,
+                    { file: GeminiFile; upload: GeminiFileUpload | null }
+                >();
+                for (const entry of entries) {
+                    if (urls.includes(entry.file.originalGeminiUrl)) {
+                        result.set(entry.file.originalGeminiUrl, entry);
+                    }
+                }
+                return result;
+            },
+        ),
+        upsertUpload: mock(async (record) => ({
+            id: "upload-uuid-1",
+            ...record,
+        })),
+    };
+}
+
+/** Mock IGeminiFileUploader that returns a configurable new Gemini URL on upload. */
 function makeUploader(newUrl = GEMINI_URL_NEW): IGeminiFileUploader {
     return {
+        apiKeyId: TEST_API_KEY_ID,
         upload: mock(async () => ({
             geminiFileName: "files/newfile",
             geminiUrl: newUrl,
         })),
         deleteFile: mock(async () => {}),
+    };
+}
+
+/**
+ * Wraps an IGeminiFileUploader in a minimal IGeminiFileUploaderRegistry.
+ * `get()` always returns the same uploader regardless of apiKeyId.
+ */
+function makeRegistry(
+    uploader: IGeminiFileUploader,
+): IGeminiFileUploaderRegistry {
+    return {
+        get: mock((_apiKeyId: string) => uploader),
     };
 }
 
@@ -93,24 +142,30 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
     test("returns the same array reference when no Gemini URLs present", async () => {
         const service = new GeminiFileRefreshService(
             makeRepo(),
-            makeUploader(),
+            makeRegistry(makeUploader()),
             makeDiskDownloader(),
             testLogger,
             testConfig,
         );
         const messages = [new AIMessage("hello"), new HumanMessage("world")];
 
-        const result = await service.refreshHistory(messages, makeRefetcher());
+        const result = await service.refreshHistory(
+            messages,
+            makeRefetcher(),
+            TEST_API_KEY_ID,
+        );
 
         // No Gemini URLs → early return with same reference
         expect(result).toBe(messages);
     });
 
     test("returns the same array reference when all files are fresh", async () => {
-        const freshRecord = makeRecord({ uploadedAt: new Date() }); // just now
+        // Fresh upload: uploaded just now, geminiUrl === originalGeminiUrl → no substitution
+        const file = makeFile();
+        const upload = makeUpload({ uploadedAt: new Date() });
         const service = new GeminiFileRefreshService(
-            makeRepo([freshRecord]),
-            makeUploader(),
+            makeRepo([{ file, upload }]),
+            makeRegistry(makeUploader()),
             makeDiskDownloader(),
             testLogger,
             testConfig,
@@ -121,19 +176,24 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
             ],
         });
 
-        const result = await service.refreshHistory([msg], makeRefetcher());
+        const result = await service.refreshHistory(
+            [msg],
+            makeRefetcher(),
+            TEST_API_KEY_ID,
+        );
 
-        // No stale files → early return with same reference
-        expect(result).toBe(result);
+        // No stale files → no substitutions → same array reference
         expect(result[0]).toBe(msg);
     });
 
     test("substitutes stale URL with fresh URL from re-upload", async () => {
-        const record = makeRecord({ uploadedAt: hoursAgo(48) });
+        // Upload older than 47h (staleThresholdMs) is considered stale
+        const file = makeFile();
+        const upload = makeUpload({ uploadedAt: hoursAgo(48) });
         const uploader = makeUploader(GEMINI_URL_NEW);
         const service = new GeminiFileRefreshService(
-            makeRepo([record]),
-            uploader,
+            makeRepo([{ file, upload }]),
+            makeRegistry(uploader),
             makeDiskDownloader(),
             testLogger,
             testConfig,
@@ -144,7 +204,11 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
             ],
         });
 
-        const result = await service.refreshHistory([msg], makeRefetcher());
+        const result = await service.refreshHistory(
+            [msg],
+            makeRefetcher(),
+            TEST_API_KEY_ID,
+        );
 
         const updated = result[0] as HumanMessage;
         expect(updated).toBeInstanceOf(HumanMessage);
@@ -155,12 +219,13 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         expect(block.fileUri).toBe(GEMINI_URL_NEW);
     });
 
-    test("persists the refreshed file record after re-upload", async () => {
-        const record = makeRecord({ uploadedAt: hoursAgo(48) });
-        const repo = makeRepo([record]);
+    test("persists the refreshed upload record via upsertUpload after re-upload", async () => {
+        const file = makeFile();
+        const upload = makeUpload({ uploadedAt: hoursAgo(48) });
+        const repo = makeRepo([{ file, upload }]);
         const service = new GeminiFileRefreshService(
             repo,
-            makeUploader(),
+            makeRegistry(makeUploader()),
             makeDiskDownloader(),
             testLogger,
             testConfig,
@@ -171,23 +236,27 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
             ],
         });
 
-        await service.refreshHistory([msg], makeRefetcher());
+        await service.refreshHistory([msg], makeRefetcher(), TEST_API_KEY_ID);
 
-        expect(repo.updateAfterRefresh).toHaveBeenCalledWith(
-            GEMINI_URL,
-            expect.objectContaining({ geminiUrl: GEMINI_URL_NEW }),
+        expect(repo.upsertUpload).toHaveBeenCalledWith(
+            expect.objectContaining({
+                geminiUrl: GEMINI_URL_NEW,
+                apiKeyId: TEST_API_KEY_ID,
+                geminiFileId: file.id,
+            }),
         );
     });
 
     test("deletes old Gemini file during refresh", async () => {
-        const record = makeRecord({
+        const file = makeFile();
+        const upload = makeUpload({
             uploadedAt: hoursAgo(48),
             geminiFileName: "files/old-uuid",
         });
         const uploader = makeUploader();
         const service = new GeminiFileRefreshService(
-            makeRepo([record]),
-            uploader,
+            makeRepo([{ file, upload }]),
+            makeRegistry(uploader),
             makeDiskDownloader(),
             testLogger,
             testConfig,
@@ -198,16 +267,17 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
             ],
         });
 
-        await service.refreshHistory([msg], makeRefetcher());
+        await service.refreshHistory([msg], makeRefetcher(), TEST_API_KEY_ID);
 
         expect(uploader.deleteFile).toHaveBeenCalledWith("files/old-uuid");
     });
 
     test("removes Gemini block when Discord attachment no longer exists", async () => {
-        const record = makeRecord({ uploadedAt: hoursAgo(48) });
+        const file = makeFile();
+        const upload = makeUpload({ uploadedAt: hoursAgo(48) });
         const service = new GeminiFileRefreshService(
-            makeRepo([record]),
-            makeUploader(),
+            makeRepo([{ file, upload }]),
+            makeRegistry(makeUploader()),
             makeDiskDownloader(),
             testLogger,
             testConfig,
@@ -220,7 +290,11 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         });
 
         // null = attachment deleted from Discord
-        const result = await service.refreshHistory([msg], makeRefetcher(null));
+        const result = await service.refreshHistory(
+            [msg],
+            makeRefetcher(null),
+            TEST_API_KEY_ID,
+        );
 
         const updated = result[0] as HumanMessage;
         const blocks = updated.content as unknown[];
@@ -229,42 +303,14 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         expect((blocks[0] as Record<string, unknown>).type).toBe("text");
     });
 
-    test("non-HumanMessage messages pass through unchanged", async () => {
+    test("re-uploads file missing for current key (upload === null in LEFT JOIN)", async () => {
+        // upload: null simulates a key that has never uploaded this file (new key or trigger-cleaned)
+        const file = makeFile();
+        const repo = makeRepo([{ file, upload: null }]);
+        const uploader = makeUploader(GEMINI_URL_NEW);
         const service = new GeminiFileRefreshService(
-            makeRepo(),
-            makeUploader(),
-            makeDiskDownloader(),
-            testLogger,
-            testConfig,
-        );
-        const aiMsg = new AIMessage("some response");
-
-        const result = await service.refreshHistory([aiMsg], makeRefetcher());
-
-        expect(result[0]).toBe(aiMsg);
-    });
-
-    test("HumanMessage with plain string content passes through unchanged", async () => {
-        const service = new GeminiFileRefreshService(
-            makeRepo(),
-            makeUploader(),
-            makeDiskDownloader(),
-            testLogger,
-            testConfig,
-        );
-        const msg = new HumanMessage("plain text message");
-
-        const result = await service.refreshHistory([msg], makeRefetcher());
-
-        expect(result[0]).toBe(msg);
-    });
-
-    test("only refreshes URLs that exceed the stale threshold", async () => {
-        // 1h stale threshold → files stale after 47h; 46h old is still fresh
-        const freshRecord = makeRecord({ uploadedAt: hoursAgo(46) });
-        const service = new GeminiFileRefreshService(
-            makeRepo([freshRecord]),
-            makeUploader(),
+            repo,
+            makeRegistry(uploader),
             makeDiskDownloader(),
             testLogger,
             testConfig,
@@ -275,16 +321,102 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
             ],
         });
 
-        const result = await service.refreshHistory([msg], makeRefetcher());
+        const result = await service.refreshHistory(
+            [msg],
+            makeRefetcher(),
+            TEST_API_KEY_ID,
+        );
 
-        // Fresh file → returned as same reference
+        // URL should be replaced with the newly uploaded file's URL
+        const updated = result[0] as HumanMessage;
+        const block = (updated.content as unknown[])[0] as Record<
+            string,
+            unknown
+        >;
+        expect(block.fileUri).toBe(GEMINI_URL_NEW);
+
+        // Old file should NOT be deleted (there is no prior upload for this key)
+        expect(uploader.deleteFile).not.toHaveBeenCalled();
+
+        // New upload should be persisted
+        expect(repo.upsertUpload).toHaveBeenCalledWith(
+            expect.objectContaining({
+                geminiFileId: file.id,
+                apiKeyId: TEST_API_KEY_ID,
+                geminiUrl: GEMINI_URL_NEW,
+            }),
+        );
+    });
+
+    test("non-HumanMessage messages pass through unchanged", async () => {
+        const service = new GeminiFileRefreshService(
+            makeRepo(),
+            makeRegistry(makeUploader()),
+            makeDiskDownloader(),
+            testLogger,
+            testConfig,
+        );
+        const aiMsg = new AIMessage("some response");
+
+        const result = await service.refreshHistory(
+            [aiMsg],
+            makeRefetcher(),
+            TEST_API_KEY_ID,
+        );
+
+        expect(result[0]).toBe(aiMsg);
+    });
+
+    test("HumanMessage with plain string content passes through unchanged", async () => {
+        const service = new GeminiFileRefreshService(
+            makeRepo(),
+            makeRegistry(makeUploader()),
+            makeDiskDownloader(),
+            testLogger,
+            testConfig,
+        );
+        const msg = new HumanMessage("plain text message");
+
+        const result = await service.refreshHistory(
+            [msg],
+            makeRefetcher(),
+            TEST_API_KEY_ID,
+        );
+
+        expect(result[0]).toBe(msg);
+    });
+
+    test("only refreshes URLs that exceed the stale threshold", async () => {
+        // 46h old: 46h < 47h (staleThresholdMs) → still fresh, no refresh
+        const file = makeFile();
+        const upload = makeUpload({ uploadedAt: hoursAgo(46) });
+        const service = new GeminiFileRefreshService(
+            makeRepo([{ file, upload }]),
+            makeRegistry(makeUploader()),
+            makeDiskDownloader(),
+            testLogger,
+            testConfig,
+        );
+        const msg = new HumanMessage({
+            content: [
+                { type: "media", mimeType: "image/png", fileUri: GEMINI_URL },
+            ],
+        });
+
+        const result = await service.refreshHistory(
+            [msg],
+            makeRefetcher(),
+            TEST_API_KEY_ID,
+        );
+
+        // Fresh file → returned as same reference (no substitution)
         expect(result[0]).toBe(msg);
     });
 
     test("non-Gemini URL blocks are not modified", async () => {
         const service = new GeminiFileRefreshService(
             makeRepo(),
-            makeUploader(),
+            makeRegistry(makeUploader()),
             makeDiskDownloader(),
             testLogger,
             testConfig,
@@ -294,10 +426,13 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
             content: [{ type: "image", mimeType: "image/png", url: otherUrl }],
         });
 
-        const result = await service.refreshHistory([msg], makeRefetcher());
+        const result = await service.refreshHistory(
+            [msg],
+            makeRefetcher(),
+            TEST_API_KEY_ID,
+        );
 
         // No Gemini URLs found → same array reference
-        expect(result).toBe(result);
         expect(result[0]).toBe(msg);
     });
 });

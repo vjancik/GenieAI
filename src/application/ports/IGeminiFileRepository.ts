@@ -1,46 +1,60 @@
+import type { GeminiFile } from "../../domain/message/GeminiFile.ts";
 import type { GeminiFileUpload } from "../../domain/message/GeminiFileUpload.ts";
 
 /**
- * Port interface for persisting Gemini file upload records.
+ * Port interface for persisting Gemini file anchors and per-key upload records.
  *
- * Each record tracks one Discord attachment that was uploaded to the Gemini
- * Files API. The `originalGeminiUrl` is immutable and serves as the stable
- * lookup key used when scanning LangChain message content blocks.
+ * Manages two related tables:
+ * - `gemini_files`: permanent anchors with Discord context (never deleted)
+ * - `gemini_file_uploads`: ephemeral per-key upload tracking (cleaned by trigger)
+ *
+ * The two-table design ensures that Discord context (needed to re-download and
+ * re-upload) is never lost when stale upload rows are purged by the trigger.
  */
 export interface IGeminiFileRepository {
     /**
-     * Persists a new Gemini file upload record.
-     * On first upload `originalGeminiUrl` equals `geminiUrl`.
+     * Saves a permanent file anchor with Discord metadata.
+     *
+     * Idempotent on `originalGeminiUrl` — if a file with the same original URL
+     * already exists, returns the existing record without error. This handles
+     * rare race conditions where the same attachment is uploaded twice.
      *
      * @param record - All fields except `id` (assigned by the database)
+     * @returns The saved (or existing) GeminiFile record
      */
-    save(record: Omit<GeminiFileUpload, "id">): Promise<GeminiFileUpload>;
+    saveFile(record: Omit<GeminiFile, "id">): Promise<GeminiFile>;
 
     /**
-     * Updates the current Gemini file name, URL, and upload timestamp for an
-     * existing record after a refresh (re-upload with a new UUID file name).
+     * LEFT JOINs `gemini_files` with `gemini_file_uploads` for the given original
+     * URLs and API key. Always returns a GeminiFile entry (discord context); the
+     * upload field is null if no upload record exists for the specified API key
+     * (e.g. first use of this key, or trigger-cleaned stale rows).
      *
-     * Identified by `originalGeminiUrl` which never changes.
-     *
-     * @param originalGeminiUrl - The immutable lookup key
-     * @param update - The new file name, URL, and upload timestamp
+     * @param originalUrls - The stable lookup keys stored in LangChain content blocks
+     * @param apiKeyId - The API key whose upload records to join against
+     * @returns Map from originalGeminiUrl to { file, upload } pair
      */
-    updateAfterRefresh(
-        originalGeminiUrl: string,
-        update: Pick<
-            GeminiFileUpload,
-            "geminiFileName" | "geminiUrl" | "uploadedAt"
-        >,
-    ): Promise<void>;
+    findWithUploadStateForKey(
+        originalUrls: string[],
+        apiKeyId: string,
+    ): Promise<
+        Map<string, { file: GeminiFile; upload: GeminiFileUpload | null }>
+    >;
 
     /**
-     * Retrieves multiple records by their original Gemini URLs in a single query.
-     * URLs not found in the database are silently omitted from the result.
+     * Inserts or updates the upload record for a (geminiFileId, apiKeyId) pair.
      *
-     * @param originalGeminiUrls - The stable lookup keys to query
-     * @returns Map from originalGeminiUrl to the corresponding record
+     * ON CONFLICT (gemini_file_id, api_key_id) DO UPDATE SET:
+     *   gemini_file_name = EXCLUDED.gemini_file_name,
+     *   gemini_url       = EXCLUDED.gemini_url,
+     *   uploaded_at      = EXCLUDED.uploaded_at
+     *
+     * Used both for initial uploads and for refreshes (re-uploads with new URLs).
+     *
+     * @param record - All fields except `id` (assigned by the database)
+     * @returns The saved/updated record
      */
-    findByOriginalUrls(
-        originalGeminiUrls: string[],
-    ): Promise<Map<string, GeminiFileUpload>>;
+    upsertUpload(
+        record: Omit<GeminiFileUpload, "id">,
+    ): Promise<GeminiFileUpload>;
 }

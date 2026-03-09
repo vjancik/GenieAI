@@ -3,11 +3,13 @@ import { unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { BaseMessage, MessageContent } from "@langchain/core/messages";
 import { HumanMessage } from "@langchain/core/messages";
+import type { GeminiFile } from "../domain/message/GeminiFile.ts";
+import type { GeminiFileUpload } from "../domain/message/GeminiFileUpload.ts";
 import type { AppConfig } from "./config/AppConfig.ts";
 import type { IDiscordAttachmentRefetcher } from "./ports/IDiscordAttachmentRefetcher.ts";
 import type { IDiskAttachmentDownloader } from "./ports/IDiskAttachmentDownloader.ts";
 import type { IGeminiFileRepository } from "./ports/IGeminiFileRepository.ts";
-import type { IGeminiFileUploader } from "./ports/IGeminiFileUploader.ts";
+import type { IGeminiFileUploaderRegistry } from "./ports/IGeminiFileUploaderRegistry.ts";
 import type { Logger } from "./types/Logger.ts";
 
 /** URL prefix that identifies a Gemini Files API URI in a content block. */
@@ -57,20 +59,27 @@ function extractGeminiUrls(message: BaseMessage): string[] {
 
 /**
  * Pre-invocation service that ensures all Gemini file references in the
- * conversation history are fresh before the LLM is called.
+ * conversation history are fresh for the **current API key** before the LLM is called.
  *
- * Gemini files expire 48 hours after upload. This service scans HumanMessage
- * content blocks for Gemini URLs, checks their staleness against the configured
- * threshold, refreshes any stale files by re-downloading from Discord and
- * re-uploading to Gemini, and returns a new BaseMessage array with updated URLs.
+ * Gemini files are project-scoped — a file uploaded with key A is inaccessible
+ * from key B. This service therefore checks and refreshes files per (URL, apiKeyId)
+ * pair, not globally.
  *
- * The original `langchain_messages` DB column is never mutated — only the
- * `gemini_file_uploads` table is updated on refresh.
+ * Uses a two-table design:
+ * - `gemini_files` — permanent anchor with Discord metadata (never deleted)
+ * - `gemini_file_uploads` — ephemeral per-key upload tracking (trigger-cleaned after 48h)
  *
- * Behavior on attachment loss:
- * - If the Discord attachment no longer exists: silently remove the content
- *   block from history and continue.
- * - If a Gemini re-upload fails: throw an error (fail the whole request).
+ * The LEFT JOIN query (`findWithUploadStateForKey`) always returns a `file` record
+ * with Discord context, even when the `upload` record is null (first use of this key,
+ * or trigger-cleaned stale row). This allows re-upload without scanning message JSON.
+ *
+ * Behavior:
+ * - `upload === null` → file never uploaded for this key (or was trigger-cleaned); upload now.
+ * - `upload !== null` and stale → re-download from Discord and re-upload to Gemini.
+ * - `upload !== null` and fresh but `geminiUrl !== originalUrl` → substitute URL in history
+ *   (prior refresh updated DB but history still holds the original URL).
+ * - Discord attachment gone → remove content block silently and continue.
+ * - Gemini re-upload failure → throw (fail the whole request).
  */
 export class GeminiFileRefreshService {
     /** Gemini file TTL is 48 hours. Files older than (TTL - staleThresholdMs) are refreshed. */
@@ -78,7 +87,7 @@ export class GeminiFileRefreshService {
 
     constructor(
         private readonly geminiFileRepo: IGeminiFileRepository,
-        private readonly geminiFileUploader: IGeminiFileUploader,
+        private readonly uploaderRegistry: IGeminiFileUploaderRegistry,
         private readonly diskDownloader: IDiskAttachmentDownloader,
         private readonly logger: Logger,
         config: Pick<AppConfig, "geminiFileStaleThresholdMinutes">,
@@ -90,96 +99,122 @@ export class GeminiFileRefreshService {
     }
 
     /**
-     * Scans `messages` for Gemini file URL references, refreshes any that are
-     * stale or expiring soon, and returns a new message array with current URLs.
+     * Scans `messages` for Gemini file URL references, ensures each is uploaded and
+     * fresh for the given `apiKeyId`, and returns a new message array with current URLs.
      *
      * Messages with no Gemini URLs pass through unchanged.
      * Content blocks whose Discord attachment is no longer available are removed.
      *
      * @param messages - Conversation history (may contain Gemini URL blocks)
      * @param refetcher - Per-request Discord attachment fetcher for the current channel
+     * @param apiKeyId - The DB UUID of the API key currently being used for LLM invocation
      * @returns New message array with fresh Gemini URLs substituted
      */
     async refreshHistory(
         messages: BaseMessage[],
         refetcher: IDiscordAttachmentRefetcher,
+        apiKeyId: string,
     ): Promise<BaseMessage[]> {
         // Collect all Gemini URLs present in the history
         const allGeminiUrls = messages.flatMap(extractGeminiUrls);
         if (allGeminiUrls.length === 0) return messages;
 
-        // Batch-lookup DB records
-        const records =
-            await this.geminiFileRepo.findByOriginalUrls(allGeminiUrls);
-
-        // Determine which need refreshing (stale threshold exceeded)
-        const now = Date.now();
-        const staleUrls = new Set<string>();
-        for (const [url, record] of records) {
-            if (now - record.uploadedAt.getTime() >= this.staleThresholdMs) {
-                staleUrls.add(url);
-            }
-        }
-
-        if (staleUrls.size === 0) return messages;
-
-        this.logger.info(
-            { staleCount: staleUrls.size },
-            "Refreshing stale Gemini file uploads",
-        );
-
-        // Build a URL substitution map: original URL → current URL after refresh
-        // For deleted attachments, the URL maps to null (block should be removed)
-        const urlSubstitutions = new Map<string, string | null>();
-
-        for (const originalUrl of staleUrls) {
-            const record = records.get(originalUrl);
-            if (!record) continue;
-
-            const substitution = await this.refreshOne(
-                originalUrl,
-                record.geminiFileName,
-                record.discordAttachmentId,
-                record.discordFilename,
-                record.messageDiscordId,
-                refetcher,
+        // LEFT JOIN: always returns GeminiFile (discord context); upload is null if
+        // the file has never been uploaded for this key or was trigger-cleaned.
+        const fileStateMap =
+            await this.geminiFileRepo.findWithUploadStateForKey(
+                allGeminiUrls,
+                apiKeyId,
             );
-            urlSubstitutions.set(originalUrl, substitution);
+
+        // Build URL substitution map: originalUrl → new geminiUrl (or null if attachment deleted)
+        const urlSubstitutions = new Map<string, string | null>();
+        const now = Date.now();
+
+        for (const [originalUrl, { file, upload }] of fileStateMap) {
+            if (upload === null) {
+                // Never uploaded for this key (new key or trigger-cleaned row)
+                const newUrl = await this.refreshOne(
+                    originalUrl,
+                    file,
+                    null,
+                    apiKeyId,
+                    refetcher,
+                );
+                urlSubstitutions.set(originalUrl, newUrl);
+            } else if (
+                now - upload.uploadedAt.getTime() >=
+                this.staleThresholdMs
+            ) {
+                // Upload exists but is approaching or past expiry
+                this.logger.info(
+                    { originalUrl, apiKeyId, uploadedAt: upload.uploadedAt },
+                    "Gemini file upload is stale; refreshing",
+                );
+                const newUrl = await this.refreshOne(
+                    originalUrl,
+                    file,
+                    upload,
+                    apiKeyId,
+                    refetcher,
+                );
+                urlSubstitutions.set(originalUrl, newUrl);
+            } else if (upload.geminiUrl !== originalUrl) {
+                // Fresh upload exists but with a different URL (prior refresh updated the URL in DB
+                // but the LangChain history still holds the originalGeminiUrl). Substitute silently.
+                urlSubstitutions.set(originalUrl, upload.geminiUrl);
+            }
+            // else: fresh upload with unchanged URL — no substitution needed
         }
 
-        // Apply substitutions to produce updated messages
+        if (urlSubstitutions.size === 0) return messages;
+
         return this.applySubstitutions(messages, urlSubstitutions);
     }
 
     /**
-     * Re-downloads and re-uploads a single stale Gemini file.
+     * Re-downloads and re-uploads a single Gemini file for the given API key.
      *
+     * Handles both the "missing" case (no prior upload for this key) and the
+     * "stale" case (upload exists but is expiring). When stale, the old Gemini
+     * file is deleted best-effort after the new one is confirmed uploaded.
+     *
+     * @param originalUrl - The stable originalGeminiUrl stored in content blocks (lookup key)
+     * @param file - Permanent GeminiFile anchor with Discord metadata for re-downloading
+     * @param existingUpload - Existing upload record (for stale case) or null (for missing case)
+     * @param apiKeyId - The API key to use for this upload
+     * @param refetcher - Per-request Discord attachment fetcher
      * @returns The new Gemini URL, or `null` if the Discord attachment was deleted
-     * @throws If the Gemini re-upload fails (propagated to fail the whole request)
+     * @throws If the Gemini upload fails (propagated to fail the whole request)
      */
     private async refreshOne(
         originalUrl: string,
-        oldGeminiFileName: string,
-        discordAttachmentId: string,
-        discordFilename: string,
-        messageDiscordId: string,
+        file: GeminiFile,
+        existingUpload: GeminiFileUpload | null,
+        apiKeyId: string,
         refetcher: IDiscordAttachmentRefetcher,
     ): Promise<string | null> {
         // Re-fetch the Discord attachment to get a fresh CDN URL
         const attachment = await refetcher.fetchAttachment(
-            messageDiscordId,
-            discordAttachmentId,
+            file.messageDiscordId,
+            file.discordAttachmentId,
         );
 
         if (!attachment) {
             this.logger.warn(
-                { discordAttachmentId, messageDiscordId },
+                {
+                    discordAttachmentId: file.discordAttachmentId,
+                    messageDiscordId: file.messageDiscordId,
+                },
                 "Discord attachment no longer exists; removing block from history",
             );
             return null;
         }
 
-        const tempPath = join(TEMP_DIR, `${randomUUID()}-${discordFilename}`);
+        const tempPath = join(
+            TEMP_DIR,
+            `${randomUUID()}-${file.discordFilename}`,
+        );
         try {
             // Stream attachment to disk
             const mimeType = await this.diskDownloader.downloadToFile(
@@ -187,20 +222,26 @@ export class GeminiFileRefreshService {
                 tempPath,
             );
 
-            // Upload to Gemini with a fresh UUID file name
+            // Upload to Gemini using the uploader for this specific API key
+            const uploader = this.uploaderRegistry.get(apiKeyId);
             const newFileName = `files/${randomUUID()}`;
-            const uploaded = await this.geminiFileUploader.upload(
+            const uploaded = await uploader.upload(
                 tempPath,
                 newFileName,
                 mimeType,
-                discordFilename,
+                file.discordFilename,
             );
 
-            // Delete the old Gemini file (best-effort; may already be expired), not awaiting the promise to avoid delaying the response
-            void this.geminiFileUploader.deleteFile(oldGeminiFileName);
+            // Delete the old Gemini file best-effort (may already be expired).
+            // Not awaited so it doesn't delay the response.
+            if (existingUpload !== null) {
+                void uploader.deleteFile(existingUpload.geminiFileName);
+            }
 
-            // Persist the updated file record
-            await this.geminiFileRepo.updateAfterRefresh(originalUrl, {
+            // Persist the new upload record (upserts on conflict for (geminiFileId, apiKeyId))
+            await this.geminiFileRepo.upsertUpload({
+                geminiFileId: file.id,
+                apiKeyId,
                 geminiFileName: uploaded.geminiFileName,
                 geminiUrl: uploaded.geminiUrl,
                 uploadedAt: new Date(),
@@ -210,7 +251,8 @@ export class GeminiFileRefreshService {
                 {
                     originalUrl,
                     newGeminiUrl: uploaded.geminiUrl,
-                    discordAttachmentId,
+                    apiKeyId,
+                    discordAttachmentId: file.discordAttachmentId,
                 },
                 "Refreshed Gemini file upload",
             );
@@ -231,7 +273,7 @@ export class GeminiFileRefreshService {
      * Returns a new message array with Gemini URLs substituted according to the map.
      *
      * - `null` substitution: removes the content block entirely.
-     * - String substitution: replaces the `url` field with the new URL.
+     * - String substitution: replaces the `fileUri` field with the new URL.
      * - Unchanged messages are returned as-is (no new object created).
      */
     private applySubstitutions(

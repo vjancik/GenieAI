@@ -1,7 +1,7 @@
 name: genieaiv2-test
 services:
     db:
-        image: postgres:17
+        image: postgres:18.3-alpine
         environment:
             POSTGRES_USER: genie_test
             POSTGRES_PASSWORD: genie_test

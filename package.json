@@ -6,9 +6,8 @@
     "scripts": {
         "start": "bun src/index.ts",
         "start:instrumented": "bun --preload ./src/infrastructure/instrumentation/sentry/instrumentation.ts src/index.ts",
-        "sentry:test": "bun --preload ./src/infrastructure/instrumentation/sentry/instrumentation.ts scripts/dev/sentry-genai-test.ts",
-        "codecheck:fix": "biome check --fix",
         "typecheck": "tsc --noEmit",
+        "codecheck:fix": "biome check --fix",
         "test": "bun test",
         "db:studio": "drizzle-kit studio",
         "db:up": "docker compose up -d",
@@ -23,6 +22,7 @@
         "@biomejs/biome": "2.4.5",
         "@types/bun": "latest",
         "@types/turndown": "^5.0.6",
+        "cross-env": "^10.1.0",
         "drizzle-kit": "^0.31.9",
         "pg": "^8.19.0",
         "pino-pretty": "^13.1.3"

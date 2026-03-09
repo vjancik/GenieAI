@@ -1,7 +1,6 @@
 import { tool } from "@langchain/core/tools";
 import { ChatGoogle } from "@langchain/google";
 import { z } from "zod/v4";
-import type { AppConfig } from "../../config/config.ts";
 import type { GetVideoTranscriptionTool } from "../tools/getVideoTranscriptionTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
 
@@ -51,8 +50,16 @@ export const TRIAGE_SYSTEM_PROMPT =
     "- If the question needs current/live information or very niche topics: call route_to_search\n" +
     "- For everything else: call route_to_general";
 
+/** Dependencies for constructing a triage model instance. */
 export interface TriageAgentDeps {
-    config: AppConfig;
+    /** Google API key for this model instance. */
+    apiKey: string;
+    /** Gemini model identifier (e.g. "gemini-3-flash-preview"). */
+    modelName: string;
+    /** Gemini reasoning effort level (e.g. "minimal", "medium", "high"). */
+    triageThinkingLevel: string;
+    /** Whether to include thought tokens in the model response. */
+    includeLLMThoughts: boolean;
     getWebsiteTool: GetWebsiteTool;
     getVideoTranscriptionTool: GetVideoTranscriptionTool;
 }
@@ -66,16 +73,19 @@ export interface TriageAgentDeps {
  * Uses a low thinking budget to keep latency and cost minimal for classification.
  */
 export function createTriageModel({
-    config,
+    apiKey,
+    modelName,
+    triageThinkingLevel,
+    includeLLMThoughts,
     getWebsiteTool,
     getVideoTranscriptionTool,
 }: TriageAgentDeps) {
     const llm = new ChatGoogle({
-        model: "gemini-3.1-flash-lite-preview",
-        apiKey: config.googleApiKey,
+        model: modelName,
+        apiKey,
         thinkingConfig: {
-            thinkingLevel: config.triageThinkingLevel,
-            includeThoughts: config.includeLLMThoughts,
+            thinkingLevel: triageThinkingLevel,
+            includeThoughts: includeLLMThoughts,
         },
     });
 

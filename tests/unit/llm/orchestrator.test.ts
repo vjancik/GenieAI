@@ -10,7 +10,10 @@ import {
 import pino from "pino";
 import type { AgentStatusUpdate } from "../../../src/application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
-import { AppError } from "../../../src/domain/errors/AppError.ts";
+import {
+    AllFreeKeysExhaustedError,
+    AppError,
+} from "../../../src/domain/errors/AppError.ts";
 import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
 import {
     AgentOrchestrator,
@@ -67,6 +70,40 @@ function makeTriageWithNoToolCall() {
         ),
     };
 }
+
+/**
+ * Wraps a mock model in a minimal IModelProvider shell so it can be passed to
+ * AgentOrchestrator's provider constructor params. `get()` always returns the
+ * same model regardless of which key is passed, which is correct for tests
+ * that do not exercise key rotation.
+ */
+function asProvider<T>(model: T) {
+    return {
+        modelName: "gemini-test",
+        get(_key: unknown): T {
+            return model;
+        },
+    };
+}
+
+/** Minimal IFreeKeyProvider stub — single key, no rotation side-effects. */
+function makeFreeKeyProvider() {
+    const key = { id: "free-key-id", apiKey: "free-key", isPaid: false };
+    return {
+        get currentKey() {
+            return key;
+        },
+        nextKey() {
+            return key;
+        },
+        get keyCount() {
+            return 1;
+        },
+    };
+}
+
+/** Dummy paid GeminiApiKey for tests that don't exercise the paid path. */
+const testPaidKey = { id: "paid-key-id", apiKey: "paid-key", isPaid: true };
 
 describe("dbMessagesToLangchain", () => {
     const baseMsg: Omit<DiscordMessage, "role" | "langchainMessages"> = {
@@ -356,9 +393,11 @@ describe("Orchestrator.process", () => {
         const videoTool = makeTool("video transcript");
 
         const orchestrator = new AgentOrchestrator(
-            triageModel as never,
-            generalModel as never,
-            searchModel as never,
+            asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(searchModel) as never,
+            makeFreeKeyProvider() as never,
+            testPaidKey,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -388,9 +427,11 @@ describe("Orchestrator.process", () => {
         const videoTool = makeTool("video transcript");
 
         const orchestrator = new AgentOrchestrator(
-            triageModel as never,
-            generalModel as never,
-            searchModel as never,
+            asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(searchModel) as never,
+            makeFreeKeyProvider() as never,
+            testPaidKey,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -424,9 +465,11 @@ describe("Orchestrator.process", () => {
         const videoTool = makeTool("video transcript");
 
         const orchestrator = new AgentOrchestrator(
-            triageModel as never,
-            generalModel as never,
-            searchModel as never,
+            asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(searchModel) as never,
+            makeFreeKeyProvider() as never,
+            testPaidKey,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -463,9 +506,11 @@ describe("Orchestrator.process", () => {
         );
 
         const orchestrator = new AgentOrchestrator(
-            triageModel as never,
-            generalModel as never,
-            searchModel as never,
+            asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(searchModel) as never,
+            makeFreeKeyProvider() as never,
+            testPaidKey,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -497,9 +542,11 @@ describe("Orchestrator.process", () => {
         const videoTool = makeTool("video transcript");
 
         const orchestrator = new AgentOrchestrator(
-            triageModel as never,
-            generalModel as never,
-            searchModel as never,
+            asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(searchModel) as never,
+            makeFreeKeyProvider() as never,
+            testPaidKey,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -527,9 +574,11 @@ describe("Orchestrator.process", () => {
         const videoTool = makeTool("video transcript");
 
         const orchestrator = new AgentOrchestrator(
-            triageModel as never,
-            generalModel as never,
-            searchModel as never,
+            asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(searchModel) as never,
+            makeFreeKeyProvider() as never,
+            testPaidKey,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -575,9 +624,11 @@ describe("Orchestrator.process", () => {
         const videoTool = makeTool("video transcript");
 
         const orchestrator = new AgentOrchestrator(
-            triageModel as never,
-            generalModel as never,
-            searchModel as never,
+            asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(searchModel) as never,
+            makeFreeKeyProvider() as never,
+            testPaidKey,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -607,9 +658,11 @@ describe("Orchestrator.process", () => {
         const videoTool = makeTool("transcript");
 
         const orchestrator = new AgentOrchestrator(
-            triageModel as never,
-            generalModel as never,
-            searchModel as never,
+            asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(searchModel) as never,
+            makeFreeKeyProvider() as never,
+            testPaidKey,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -638,9 +691,11 @@ describe("Orchestrator.process", () => {
         const videoTool = makeTool("transcript");
 
         const orchestrator = new AgentOrchestrator(
-            triageModel as never,
-            generalModel as never,
-            searchModel as never,
+            asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(searchModel) as never,
+            makeFreeKeyProvider() as never,
+            testPaidKey,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -673,9 +728,11 @@ describe("Orchestrator.process", () => {
         const videoTool = makeTool("transcript");
 
         const orchestrator = new AgentOrchestrator(
-            triageModel as never,
-            generalModel as never,
-            searchModel as never,
+            asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(searchModel) as never,
+            makeFreeKeyProvider() as never,
+            testPaidKey,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -707,9 +764,11 @@ describe("Orchestrator.process", () => {
         const videoTool = makeTool("transcript");
 
         const orchestrator = new AgentOrchestrator(
-            triageModel as never,
-            generalModel as never,
-            searchModel as never,
+            asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(searchModel) as never,
+            makeFreeKeyProvider() as never,
+            testPaidKey,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -723,5 +782,139 @@ describe("Orchestrator.process", () => {
         expect(
             orchestrator.process([], new HumanMessage("Hello")),
         ).resolves.toBeDefined();
+    });
+});
+
+describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
+    /** An error shape that is429Error() recognises as a rate-limit. */
+    const make429Error = () => new Error("HTTP 429 Too Many Requests");
+
+    /**
+     * Creates an IFreeKeyProvider with `n` distinct keys backed by a shared
+     * index. `nextKey` is a bun mock so call counts are observable.
+     * `forceAdvance()` mutates the index directly, simulating a concurrent
+     * request advancing the cursor between an invoke and the catch handler.
+     */
+    function makeMultiKeyProvider(n: number) {
+        type Key = { id: string; apiKey: string; isPaid: false };
+        const keys: Key[] = Array.from({ length: n }, (_, i) => ({
+            id: `key-${i}`,
+            apiKey: `k${i}`,
+            isPaid: false as const,
+        }));
+        let idx = 0;
+        // idx is always in [0, n-1] via modulo, so keys[idx] is always defined.
+        const atIdx = (): Key => keys[idx] as Key;
+        const nextKeySpy = mock(() => {
+            idx = (idx + 1) % n;
+            return atIdx();
+        });
+        return {
+            get currentKey() {
+                return atIdx();
+            },
+            nextKey: nextKeySpy,
+            get keyCount() {
+                return n;
+            },
+            /** Simulates a concurrent request rotating the cursor. */
+            forceAdvance() {
+                idx = (idx + 1) % n;
+            },
+        };
+    }
+
+    /** Minimal orchestrator wired to a given triage + general model pair. */
+    function makeOrchestrator(
+        triageModel: ReturnType<typeof makeTriageWithNoToolCall>,
+        generalModel: { invoke: ReturnType<typeof mock> },
+        provider: ReturnType<typeof makeMultiKeyProvider>,
+    ) {
+        return new AgentOrchestrator(
+            asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(makeModel("search")) as never,
+            provider as never,
+            testPaidKey,
+            makeTool("w") as never,
+            makeTool("v") as never,
+            testLogger,
+            {
+                attachmentMode: "inline" as const,
+                maxInlineAttachmentSizeMb: 100,
+            },
+        );
+    }
+
+    test("calls nextKey() and retries with new key after 429 (normal rotation)", async () => {
+        const provider = makeMultiKeyProvider(2);
+        let generalCallCount = 0;
+        const generalModel = {
+            invoke: mock(async () => {
+                generalCallCount++;
+                if (generalCallCount === 1) throw make429Error();
+                return new AIMessage("success on second key");
+            }),
+        };
+
+        const result = await makeOrchestrator(
+            makeTriageWithNoToolCall(),
+            generalModel,
+            provider,
+        ).process([], new HumanMessage("hello"));
+
+        expect(result.content).toBe("success on second key");
+        expect(provider.nextKey).toHaveBeenCalledTimes(1);
+        expect(generalCallCount).toBe(2);
+    });
+
+    test("skips nextKey() when cursor was already advanced by a concurrent request", async () => {
+        const provider = makeMultiKeyProvider(2);
+        let generalCallCount = 0;
+        const generalModel = {
+            invoke: mock(async () => {
+                generalCallCount++;
+                if (generalCallCount === 1) {
+                    // Simulate another concurrent request advancing the cursor
+                    // before our catch handler runs.
+                    provider.forceAdvance();
+                    throw make429Error();
+                }
+                return new AIMessage("success on concurrent-advanced key");
+            }),
+        };
+
+        const result = await makeOrchestrator(
+            makeTriageWithNoToolCall(),
+            generalModel,
+            provider,
+        ).process([], new HumanMessage("hello"));
+
+        expect(result.content).toBe("success on concurrent-advanced key");
+        // Cursor was already moved by the concurrent advance — nextKey() must
+        // not be called again, otherwise the newly-current key would be skipped.
+        expect(provider.nextKey).not.toHaveBeenCalled();
+        expect(generalCallCount).toBe(2);
+    });
+
+    test("throws AllFreeKeysExhaustedError when all keys return 429", async () => {
+        const provider = makeMultiKeyProvider(2);
+        const generalModel = {
+            invoke: mock(async () => {
+                throw make429Error();
+            }),
+        };
+
+        let thrown: unknown;
+        try {
+            await makeOrchestrator(
+                makeTriageWithNoToolCall(),
+                generalModel,
+                provider,
+            ).process([], new HumanMessage("hello"));
+        } catch (err) {
+            thrown = err;
+        }
+        expect(thrown).toBeInstanceOf(AllFreeKeysExhaustedError);
     });
 });

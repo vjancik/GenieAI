@@ -8,7 +8,6 @@ import {
     SystemMessage,
     ToolMessage,
 } from "@langchain/core/messages";
-import { ChatGoogle } from "@langchain/google";
 import {
     Command,
     END,
@@ -17,11 +16,19 @@ import {
     StateGraph,
 } from "@langchain/langgraph";
 import { z } from "zod/v4";
+import type { GeminiFileRefreshService } from "../../application/GeminiFileRefreshService.ts";
 import type { IAgentOrchestrator } from "../../application/ports/IAgentOrchestrator.ts";
+import type { IDiscordAttachmentRefetcher } from "../../application/ports/IDiscordAttachmentRefetcher.ts";
+import type { IFreeKeyProvider } from "../../application/ports/IFreeKeyProvider.ts";
+import type { IModelProvider } from "../../application/ports/IModelProvider.ts";
 import type { OnStatusUpdate } from "../../application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";
-import { AppError } from "../../domain/errors/AppError.ts";
+import {
+    AllFreeKeysExhaustedError,
+    AppError,
+} from "../../domain/errors/AppError.ts";
+import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
 import type { DiscordMessage } from "../../domain/message/Message.ts";
 import type { AppConfig } from "../config/config.ts";
 import {
@@ -35,6 +42,7 @@ import {
 import type { TriageModel } from "./agents/triageAgent.ts";
 import { TRIAGE_SYSTEM_PROMPT } from "./agents/triageAgent.ts";
 import { filterHistoryForInlineSize } from "./inlineAttachmentFilter.ts";
+import { is429Error } from "./is429Error.ts";
 import type { GetVideoTranscriptionTool } from "./tools/getVideoTranscriptionTool.ts";
 import type { GetWebsiteTool } from "./tools/getWebsiteTool.ts";
 
@@ -44,6 +52,7 @@ import type { GetWebsiteTool } from "./tools/getWebsiteTool.ts";
  */
 const OrchestratorContextSchema = z.object({
     onStatusUpdate: z.custom<OnStatusUpdate>().optional(),
+    attachmentRefetcher: z.custom<IDiscordAttachmentRefetcher>().optional(),
 });
 
 type OrchestratorContext = z.infer<typeof OrchestratorContextSchema>;
@@ -249,28 +258,6 @@ function extractContent(response: BaseMessage): string {
 type GraphState = typeof MessagesAnnotation.State;
 
 /**
- * Recursively unwraps LangChain Runnable wrappers to reach the base model.
- *
- * LangChain wrapper types hold the underlying runnable under different property names:
- * - `RunnableBinding` (.bindTools(), .withConfig()) → `.bound`
- * - `RunnableRetry` (.withRetry()) → `.bound` (extends RunnableBinding)
- * - `RunnableWithFallbacks` (.withFallbacks()) → `.runnable`
- *
- * The recursion bottoms out when neither property exists, returning the value as-is.
- */
-function unwrapRunnable(model: unknown): unknown {
-    if (typeof model !== "object" || model === null) return model;
-    // TYPE COERCION: model is narrowed to object, but object doesn't support index access;
-    // cast to Record to read the .bound / .runnable wrapper properties by name.
-    const m = model as Record<string, unknown>;
-    if (typeof m.bound === "object" && m.bound !== null)
-        return unwrapRunnable(m.bound);
-    if (typeof m.runnable === "object" && m.runnable !== null)
-        return unwrapRunnable(m.runnable);
-    return model;
-}
-
-/**
  * Orchestrates the multi-agent triage routing pipeline as a LangGraph StateGraph.
  *
  * Graph topology:
@@ -283,6 +270,10 @@ function unwrapRunnable(model: unknown): unknown {
  * to the messages state, preventing context bloat in subsequent turns.
  * Real tool calls (get_website, get_video_transcription) DO add their triage
  * AIMessage to state because it is required for the ToolMessage to be valid context.
+ *
+ * Free-key rotation: triage and general nodes iterate over free API keys on HTTP 429,
+ * refreshing Gemini file upload state per key before each model invocation. The search
+ * node always uses the paid key with no rotation.
  */
 export class AgentOrchestrator implements IAgentOrchestrator {
     // Type inferred from buildGraph() return — avoids complex LangGraph generic annotation
@@ -293,25 +284,28 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     private readonly attachmentMode: AppConfig["attachmentMode"];
 
     constructor(
-        private readonly triageModel: TriageModel,
-        private readonly generalModel: GeneralModel,
-        private readonly searchModel: SearchModel,
+        private readonly triageProvider: IModelProvider<TriageModel>,
+        private readonly generalProvider: IModelProvider<GeneralModel>,
+        private readonly searchProvider: IModelProvider<SearchModel>,
+        private readonly freeKeyProvider: IFreeKeyProvider,
+        private readonly paidApiKey: GeminiApiKey,
         private readonly getWebsiteTool: GetWebsiteTool,
         private readonly getVideoTranscriptionTool: GetVideoTranscriptionTool,
         private readonly logger: Logger,
         config: Pick<AppConfig, "attachmentMode" | "maxInlineAttachmentSizeMb">,
+        private readonly geminiFileRefreshService?: GeminiFileRefreshService,
     ) {
-        // Upload mode uses the Gemini Files API, which is only supported by ChatGoogle.
-        // Guard here to catch wiring mistakes early — in production all models are ChatGoogle.
+        // Upload mode uses the Gemini Files API, which is only supported by Gemini models.
+        // Guard here using modelName to catch wiring mistakes early.
         if (config.attachmentMode === "upload") {
-            for (const [name, model] of [
-                ["triageModel", triageModel],
-                ["generalModel", generalModel],
-                ["searchModel", searchModel],
+            for (const [name, modelName] of [
+                ["triageProvider", triageProvider.modelName],
+                ["generalProvider", generalProvider.modelName],
+                ["searchProvider", searchProvider.modelName],
             ] as const) {
-                if (!(unwrapRunnable(model) instanceof ChatGoogle)) {
+                if (!modelName.startsWith("gemini")) {
                     throw new Error(
-                        `Orchestrator: upload attachment mode requires all models to be ChatGoogle, but "${name}" is not`,
+                        `Orchestrator: upload attachment mode requires Gemini models, but "${name}" uses model: ${modelName}`,
                     );
                 }
             }
@@ -343,19 +337,21 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * @param history - Prior messages in the reply chain, chronologically ordered
      * @param userMessage - The current user's HumanMessage (may contain multimodal content blocks)
      * @param onStatusUpdate - Optional callback invoked as the agent transitions between processing phases
+     * @param attachmentRefetcher - Optional Discord attachment fetcher for refreshing Gemini file uploads
      */
     async process(
         history: BaseMessage[],
         userMessage: HumanMessage,
         onStatusUpdate?: OnStatusUpdate,
+        attachmentRefetcher?: IDiscordAttachmentRefetcher,
     ): Promise<{ content: string; newMessages: BaseMessage[] }> {
         const initialMessages = [...history, userMessage];
-        // Always pass context so nodes receive a non-optional config; onStatusUpdate may be undefined
+        // Always pass context so nodes receive a non-optional config
         // TYPE COERCION: LangGraph's compiled graph is typed as any (see field declaration);
         // annotate the known output shape — MessagesAnnotation always produces { messages: BaseMessage[] }.
         const result = (await this.graph.invoke(
             { messages: initialMessages },
-            { context: { onStatusUpdate } },
+            { context: { onStatusUpdate, attachmentRefetcher } },
         )) as { messages: BaseMessage[] };
 
         // Everything after the initial seed is "new" — generated during this turn
@@ -372,32 +368,114 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     }
 
     /**
-     * Middleware helper: applies inline attachment size filtering before invoking a model.
+     * Invokes a model with free-key rotation on HTTP 429 (RESOURCE_EXHAUSTED).
      *
-     * In "inline" attachment mode, all attachment data is base64-encoded directly in
-     * message content. Long reply chains can accumulate large amounts of inline data,
-     * exceeding context limits. This method trims oldest attachment blocks from the
-     * ephemeral message copy until the total inline data is within the configured limit.
+     * Iterates over free keys via {@link IFreeKeyProvider}:
+     * - Attempt 0 uses the current key (shared cursor, no mutation).
+     * - Attempt 1+ calls nextKey(), advancing the shared cursor (state is shared across
+     *   concurrent requests — intentional for approximate load distribution).
      *
-     * The original messages array (graph state) is never mutated — filtering operates
-     * on a copy. This is the extension point for future per-invocation middleware.
+     * Before each attempt, Gemini file uploads in `messages` are refreshed for the
+     * current key via {@link GeminiFileRefreshService}. This ensures that files
+     * uploaded with key A are re-uploaded for key B when rotating on 429.
      *
-     * @param model - Any model with an `invoke(messages, options?)` method
-     * @param messages - The full message array to pass to the model
-     * @param options - Optional model invocation options
+     * Inline attachment size filtering is applied after the refresh, on the refreshed copy.
+     *
+     * @throws {@link AllFreeKeysExhaustedError} if all keys return 429
+     * @throws The original error immediately for non-429 failures
      */
-    private async invokeWithFilter<T extends BaseMessage>(
+    private async invokeWithFreeKeyRotation<T extends BaseMessage>(
+        getModel: (key: GeminiApiKey) => {
+            invoke(messages: BaseMessage[], options?: unknown): Promise<T>;
+        },
+        messages: BaseMessage[],
+        refetcher: IDiscordAttachmentRefetcher | undefined,
+    ): Promise<T> {
+        let lastErr: unknown;
+
+        for (
+            let attempt = 0;
+            attempt < this.freeKeyProvider.keyCount;
+            attempt++
+        ) {
+            // Capture the current key before invoking. Because multiple requests
+            // can run concurrently, the cursor may have already been advanced by
+            // another request between when we threw and when we check. Reading
+            // currentKey here ensures each attempt starts with the live cursor.
+            const key = this.freeKeyProvider.currentKey;
+
+            try {
+                // Refresh Gemini file uploads for this specific API key before invoking
+                const refreshed =
+                    this.geminiFileRefreshService && refetcher
+                        ? await this.geminiFileRefreshService.refreshHistory(
+                              messages,
+                              refetcher,
+                              key.id,
+                          )
+                        : messages;
+
+                const filtered =
+                    this.attachmentMode === "inline"
+                        ? filterHistoryForInlineSize(
+                              refreshed,
+                              this.maxInlineBytes,
+                          )
+                        : refreshed;
+
+                return await getModel(key).invoke(filtered);
+            } catch (err) {
+                if (is429Error(err)) {
+                    this.logger.warn(
+                        { attempt, apiKeyId: key.id },
+                        "Free API key rate-limited (429); trying next key",
+                    );
+                    lastErr = err;
+                    // Only advance the cursor if no concurrent request has already
+                    // done so. If currentKey has changed since we captured it, a
+                    // parallel invocation already rotated to the next key — we must
+                    // not skip it by calling nextKey() again.
+                    if (this.freeKeyProvider.currentKey.id === key.id) {
+                        this.freeKeyProvider.nextKey();
+                    }
+                    continue;
+                }
+                // Non-429 error: propagate immediately without trying other keys
+                throw err;
+            }
+        }
+
+        throw new AllFreeKeysExhaustedError(lastErr);
+    }
+
+    /**
+     * Invokes the paid search model with pre-invocation Gemini file refresh.
+     *
+     * Unlike the free-key variant, the search model uses a single paid key with no
+     * rotation. Inline attachment filtering is applied after the refresh.
+     */
+    private async invokePaidModelWithMiddleware<T extends BaseMessage>(
         model: {
             invoke(messages: BaseMessage[], options?: unknown): Promise<T>;
         },
         messages: BaseMessage[],
-        options?: unknown,
+        refetcher: IDiscordAttachmentRefetcher | undefined,
     ): Promise<T> {
+        const refreshed =
+            this.geminiFileRefreshService && refetcher
+                ? await this.geminiFileRefreshService.refreshHistory(
+                      messages,
+                      refetcher,
+                      this.paidApiKey.id,
+                  )
+                : messages;
+
         const filtered =
             this.attachmentMode === "inline"
-                ? filterHistoryForInlineSize(messages, this.maxInlineBytes)
-                : messages;
-        return model.invoke(filtered, options);
+                ? filterHistoryForInlineSize(refreshed, this.maxInlineBytes)
+                : refreshed;
+
+        return model.invoke(filtered);
     }
 
     /**
@@ -441,9 +519,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             ...state.messages,
         ];
 
-        const triageResponse = await this.invokeWithFilter(
-            this.triageModel,
+        const triageResponse = await this.invokeWithFreeKeyRotation(
+            this.triageProvider.get.bind(this.triageProvider),
             messages,
+            config.context?.attachmentRefetcher,
         );
 
         // TODO: we should check if there are more than 1 tool calls and add a log warning
@@ -569,25 +648,32 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             );
         }
 
-        const response = await this.invokeWithFilter(
-            this.generalModel,
+        const response = await this.invokeWithFreeKeyRotation(
+            this.generalProvider.get.bind(this.generalProvider),
             invokeMessages,
+            config.context?.attachmentRefetcher,
         );
         return { messages: [response] };
     }
 
     /**
      * Search agent node: generates an answer using the Google-Search-grounded model.
+     * Always uses the paid API key — Google Search grounding is a paid-only feature.
      */
     private async searchNode(
         state: GraphState,
         config: NodeConfig,
     ): Promise<{ messages: BaseMessage[] }> {
         config.context?.onStatusUpdate?.({ type: AgentStatusType.SEARCHING });
-        const response = await this.invokeWithFilter(this.searchModel, [
+        const messages: BaseMessage[] = [
             new SystemMessage(SEARCH_SYSTEM_PROMPT),
             ...state.messages,
-        ]);
+        ];
+        const response = await this.invokePaidModelWithMiddleware(
+            this.searchProvider.get(this.paidApiKey),
+            messages,
+            config.context?.attachmentRefetcher,
+        );
         return { messages: [response] };
     }
 }
