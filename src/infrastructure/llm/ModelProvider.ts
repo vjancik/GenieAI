@@ -3,13 +3,13 @@ import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
 import {
     createGeneralModel,
     type GeneralModel,
-} from "./agents/generalAgent.ts";
-import { createSearchModel, type SearchModel } from "./agents/searchAgent.ts";
+} from "./models/generalModel.ts";
+import { createSearchModel, type SearchModel } from "./models/searchModel.ts";
 import {
     createTriageModel,
     type TriageAgentDeps,
     type TriageModel,
-} from "./agents/triageAgent.ts";
+} from "./models/triageModel.ts";
 
 /**
  * Lazy-caching model provider for the triage model.

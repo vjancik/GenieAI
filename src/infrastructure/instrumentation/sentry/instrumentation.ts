@@ -18,4 +18,6 @@ Sentry.init({
     ],
 });
 
+process.env.SENTRY_INITIALIZED = "true";
+
 // Sentry.logger.info("Sentry instrumentation initialized");

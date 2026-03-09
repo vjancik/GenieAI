@@ -18,7 +18,7 @@ import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
 import {
     AgentOrchestrator,
     dbMessagesToLangchain,
-} from "../../../src/infrastructure/llm/agentOrchestrator.ts";
+} from "../../../src/infrastructure/llm/agents/geminiAgentOrchestrator.ts";
 
 const testLogger = pino({ level: "silent" });
 

@@ -15,36 +15,37 @@ import {
     START,
     StateGraph,
 } from "@langchain/langgraph";
+import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
-import type { GeminiFileRefreshService } from "../../application/GeminiFileRefreshService.ts";
-import type { IAgentOrchestrator } from "../../application/ports/IAgentOrchestrator.ts";
-import type { IDiscordAttachmentRefetcher } from "../../application/ports/IDiscordAttachmentRefetcher.ts";
-import type { IFreeKeyProvider } from "../../application/ports/IFreeKeyProvider.ts";
-import type { IModelProvider } from "../../application/ports/IModelProvider.ts";
-import type { OnStatusUpdate } from "../../application/types/AgentStatus.ts";
-import { AgentStatusType } from "../../application/types/AgentStatus.ts";
-import type { Logger } from "../../application/types/Logger.ts";
+import type { GeminiFileRefreshService } from "../../../application/GeminiFileRefreshService.ts";
+import type { IAgentOrchestrator } from "../../../application/ports/IAgentOrchestrator.ts";
+import type { IDiscordAttachmentRefetcher } from "../../../application/ports/IDiscordAttachmentRefetcher.ts";
+import type { IFreeKeyProvider } from "../../../application/ports/IFreeKeyProvider.ts";
+import type { IModelProvider } from "../../../application/ports/IModelProvider.ts";
+import type { OnStatusUpdate } from "../../../application/types/AgentStatus.ts";
+import { AgentStatusType } from "../../../application/types/AgentStatus.ts";
+import type { Logger } from "../../../application/types/Logger.ts";
 import {
     AllFreeKeysExhaustedError,
     AppError,
-} from "../../domain/errors/AppError.ts";
-import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
-import type { DiscordMessage } from "../../domain/message/Message.ts";
-import type { AppConfig } from "../config/config.ts";
+} from "../../../domain/errors/AppError.ts";
+import type { GeminiApiKey } from "../../../domain/message/GeminiApiKey.ts";
+import type { DiscordMessage } from "../../../domain/message/Message.ts";
+import type { AppConfig } from "../../config/config.ts";
+import { filterHistoryForInlineSize } from "../inlineAttachmentFilter.ts";
+import { is429Error } from "../is429Error.ts";
 import {
     GENERAL_SYSTEM_PROMPT,
     type GeneralModel,
-} from "./agents/generalAgent.ts";
+} from "../models/generalModel.ts";
 import {
     SEARCH_SYSTEM_PROMPT,
     type SearchModel,
-} from "./agents/searchAgent.ts";
-import type { TriageModel } from "./agents/triageAgent.ts";
-import { TRIAGE_SYSTEM_PROMPT } from "./agents/triageAgent.ts";
-import { filterHistoryForInlineSize } from "./inlineAttachmentFilter.ts";
-import { is429Error } from "./is429Error.ts";
-import type { GetVideoTranscriptionTool } from "./tools/getVideoTranscriptionTool.ts";
-import type { GetWebsiteTool } from "./tools/getWebsiteTool.ts";
+} from "../models/searchModel.ts";
+import type { TriageModel } from "../models/triageModel.ts";
+import { TRIAGE_SYSTEM_PROMPT } from "../models/triageModel.ts";
+import type { GetVideoTranscriptionTool } from "../tools/getVideoTranscriptionTool.ts";
+import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
 
 /**
  * Zod schema for the LangGraph runtime context passed to each node.
@@ -486,7 +487,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * without being added to graph state — they are invisible in persisted history.
      */
     private buildGraph() {
-        return new StateGraph(MessagesAnnotation, OrchestratorContextSchema)
+        let graph = new StateGraph(
+            MessagesAnnotation,
+            OrchestratorContextSchema,
+        )
             .addNode("triage", this.triageNode.bind(this), {
                 ends: ["executeTool", "general", "search"],
             })
@@ -496,8 +500,14 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             .addEdge(START, "triage")
             .addEdge("executeTool", "general")
             .addEdge("general", END)
-            .addEdge("search", END)
-            .compile();
+            .addEdge("search", END);
+
+        // automatic Sentry instrumentation doesn't work in Bun
+        if (process.versions.bun && process.env.SENTRY_INITIALIZED) {
+            graph = Sentry.instrumentLangGraph(graph);
+        }
+
+        return graph.compile();
     }
 
     /**

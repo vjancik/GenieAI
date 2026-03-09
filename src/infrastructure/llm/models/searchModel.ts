@@ -1,4 +1,5 @@
 import { ChatGoogle } from "@langchain/google";
+import * as Sentry from "@sentry/bun";
 
 /**
  * System prompt for the search agent.
@@ -29,6 +30,12 @@ export function createSearchModel(params: {
     modelName: string;
     includeLLMThoughts: boolean;
 }) {
+    // automatic Sentry instrumentation doesn't work in Bun
+    const sentryCallback =
+        process.versions.bun && process.env.SENTRY_INITIALIZED
+            ? [Sentry.createLangChainCallbackHandler()]
+            : undefined;
+
     const llm = new ChatGoogle({
         model: params.modelName,
         apiKey: params.apiKey,
@@ -36,6 +43,7 @@ export function createSearchModel(params: {
             thinkingLevel: "high",
             includeThoughts: params.includeLLMThoughts,
         },
+        callbacks: sentryCallback,
     });
 
     // Bind the native Google Search grounding tool — this uses Gemini's built-in

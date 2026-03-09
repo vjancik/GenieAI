@@ -1,34 +1,34 @@
 {
-  "version": "7",
-  "dialect": "postgresql",
-  "entries": [
-    {
-      "idx": 0,
-      "version": "7",
-      "when": 1773061176281,
-      "tag": "0000_rich_gravity",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1773061189865,
-      "tag": "0001_stale_cleanup_trigger",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1773069824803,
-      "tag": "0002_lazy_changeling",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1773071028854,
-      "tag": "0003_dizzy_robin_chapel",
-      "breakpoints": true
-    }
-  ]
+    "version": "7",
+    "dialect": "postgresql",
+    "entries": [
+        {
+            "idx": 0,
+            "version": "7",
+            "when": 1773061176281,
+            "tag": "0000_rich_gravity",
+            "breakpoints": true
+        },
+        {
+            "idx": 1,
+            "version": "7",
+            "when": 1773061189865,
+            "tag": "0001_stale_cleanup_trigger",
+            "breakpoints": true
+        },
+        {
+            "idx": 2,
+            "version": "7",
+            "when": 1773069824803,
+            "tag": "0002_lazy_changeling",
+            "breakpoints": true
+        },
+        {
+            "idx": 3,
+            "version": "7",
+            "when": 1773071028854,
+            "tag": "0003_dizzy_robin_chapel",
+            "breakpoints": true
+        }
+    ]
 }

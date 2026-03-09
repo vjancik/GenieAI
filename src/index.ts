@@ -25,7 +25,7 @@ import { PgGeminiFileRepository } from "./infrastructure/db/repositories/PgGemin
 import { PgMessageRepository } from "./infrastructure/db/repositories/PgMessageRepository.ts";
 import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
 import { StatusMessageUpdater } from "./infrastructure/discord/StatusMessageUpdater.ts";
-import { AgentOrchestrator } from "./infrastructure/llm/agentOrchestrator.ts";
+import { AgentOrchestrator } from "./infrastructure/llm/agents/geminiAgentOrchestrator.ts";
 import {
     GeneralModelProvider,
     SearchModelProvider,

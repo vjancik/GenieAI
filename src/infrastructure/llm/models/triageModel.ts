@@ -1,5 +1,6 @@
 import { tool } from "@langchain/core/tools";
 import { ChatGoogle } from "@langchain/google";
+import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
 import type { GetVideoTranscriptionTool } from "../tools/getVideoTranscriptionTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
@@ -80,6 +81,12 @@ export function createTriageModel({
     getWebsiteTool,
     getVideoTranscriptionTool,
 }: TriageAgentDeps) {
+    // automatic Sentry instrumentation doesn't work in Bun
+    const sentryCallback =
+        process.versions.bun && process.env.SENTRY_INITIALIZED
+            ? [Sentry.createLangChainCallbackHandler()]
+            : undefined;
+
     const llm = new ChatGoogle({
         model: modelName,
         apiKey,
@@ -87,6 +94,7 @@ export function createTriageModel({
             thinkingLevel: triageThinkingLevel,
             includeThoughts: includeLLMThoughts,
         },
+        callbacks: sentryCallback,
     });
 
     const tools = [
