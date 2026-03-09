@@ -1,4 +1,5 @@
 import type { BaseMessage } from "@langchain/core/messages";
+import * as Sentry from "@sentry/bun";
 import { Client, Events, GatewayIntentBits, type Message } from "discord.js";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { IDiscordAttachmentRefetcher } from "../../application/ports/IDiscordAttachmentRefetcher.ts";
@@ -156,6 +157,7 @@ export class DiscordGateway {
 
         this.client.on(Events.Error, (err) => {
             this.logger.error({ err }, "Discord client error");
+            Sentry.captureException(err);
         });
     }
 
@@ -196,104 +198,134 @@ export class DiscordGateway {
             "Processing bot mention",
         );
 
-        /**
-         * Per-request attachment refetcher: closes over the discord.js client and
-         * the current channelId. All messages in a reply chain share the same channel,
-         * so this is valid for refetching any historical message in the chain.
-         * Used by GeminiFileRefreshService in upload mode to get fresh CDN URLs.
-         */
-        const channelId = message.channelId;
-        const client = this.client;
-        // TODO: wouldn't this be cleaner as a lambda instead of a module? Unsure
-        const attachmentRefetcher: IDiscordAttachmentRefetcher = {
-            async fetchAttachment(
-                messageDiscordId: string,
-                attachmentId: string,
-            ): Promise<DiscordAttachmentInfo | null> {
+        await Sentry.startSpan(
+            {
+                name: "Handle Discord mention",
+                op: "discord.message.handle",
+                attributes: {
+                    "discord.message_id": message.id,
+                    "discord.channel_id": message.channelId,
+                    "discord.guild_id": message.guildId ?? undefined,
+                    "discord.attachment_count": attachments.length,
+                    "discord.has_reply":
+                        message.reference?.messageId !== undefined,
+                },
+            },
+            async (span) => {
+                /**
+                 * Per-request attachment refetcher: closes over the discord.js client and
+                 * the current channelId. All messages in a reply chain share the same channel,
+                 * so this is valid for refetching any historical message in the chain.
+                 * Used by GeminiFileRefreshService in upload mode to get fresh CDN URLs.
+                 */
+                const channelId = message.channelId;
+                const client = this.client;
+                // TODO: wouldn't this be cleaner as a lambda instead of a module? Unsure
+                const attachmentRefetcher: IDiscordAttachmentRefetcher = {
+                    async fetchAttachment(
+                        messageDiscordId: string,
+                        attachmentId: string,
+                    ): Promise<DiscordAttachmentInfo | null> {
+                        try {
+                            const channel =
+                                await client.channels.fetch(channelId);
+                            if (!channel?.isTextBased()) return null;
+                            const msg =
+                                await channel.messages.fetch(messageDiscordId);
+                            const att = msg.attachments.get(attachmentId);
+                            if (!att) return null;
+                            return {
+                                id: att.id,
+                                url: att.url,
+                                proxyURL: att.proxyURL,
+                                name: att.name ?? "attachment",
+                                size: att.size,
+                                contentType: att.contentType,
+                            };
+                        } catch {
+                            return null;
+                        }
+                    },
+                };
+
+                // Send the "Thinking" placeholder immediately so the user gets instant feedback
+                const thinkingMessage = await message.reply(
+                    `*Thinking since <t:${Math.round(Date.now() / 1000)}:R>*`,
+                );
+
+                const onStatusUpdate: OnStatusUpdate = (update) => {
+                    this.statusUpdater.scheduleUpdate(
+                        message.channelId,
+                        thinkingMessage.id,
+                        async (content) =>
+                            void (await thinkingMessage.edit(
+                                `*${content} <t:${Math.round(Date.now() / 1000)}:R>*`,
+                            )),
+                        statusUpdateContent(update),
+                    );
+                };
+
                 try {
-                    const channel = await client.channels.fetch(channelId);
-                    if (!channel?.isTextBased()) return null;
-                    const msg = await channel.messages.fetch(messageDiscordId);
-                    const att = msg.attachments.get(attachmentId);
-                    if (!att) return null;
-                    return {
-                        id: att.id,
-                        url: att.url,
-                        proxyURL: att.proxyURL,
-                        name: att.name ?? "attachment",
-                        size: att.size,
-                        contentType: att.contentType,
-                    };
-                } catch {
-                    return null;
+                    const { response, newMessages } = await this.mentionHandler(
+                        {
+                            discordMessageId: message.id,
+                            referencedMessageId:
+                                message.reference?.messageId ?? null,
+                            channelId: message.channelId,
+                            guildId: message.guildId,
+                            userContent,
+                            attachments,
+                            onStatusUpdate,
+                            attachmentRefetcher,
+                        },
+                    );
+
+                    // Cancel any pending status edit before writing the final response
+                    this.statusUpdater.cancel(thinkingMessage.id);
+
+                    // Truncate to Discord's 2000-character limit
+                    const truncated = response.length > 2000;
+                    const safeResponse = truncated
+                        ? `${response.slice(0, 1997)}...`
+                        : response;
+
+                    span.setAttributes({
+                        "discord.response_truncated": truncated,
+                        "discord.response_length": response.length,
+                    });
+
+                    // Replace the placeholder with the final response
+                    await thinkingMessage.edit(safeResponse);
+
+                    // Persist only after the final response is successfully displayed
+                    await this.botReplySaved({
+                        botDiscordMessageId: thinkingMessage.id,
+                        repliesToDiscordId: message.id,
+                        channelId: thinkingMessage.channelId,
+                        guildId: thinkingMessage.guildId,
+                        newMessages,
+                    });
+                } catch (err) {
+                    this.logger.error(
+                        { err, discordMessageId: message.id },
+                        "Failed to process mention",
+                    );
+
+                    Sentry.captureException(err);
+                    this.statusUpdater.cancel(thinkingMessage.id);
+
+                    try {
+                        await thinkingMessage.edit(
+                            "Sorry, I encountered an error processing your request.",
+                        );
+                    } catch (editErr) {
+                        throw new DiscordError(
+                            "Failed to send error reply",
+                            editErr,
+                        );
+                    }
                 }
             },
-        };
-
-        // Send the "Thinking" placeholder immediately so the user gets instant feedback
-        const thinkingMessage = await message.reply(
-            `*Thinking since <t:${Math.round(Date.now() / 1000)}:R>*`,
         );
-
-        const onStatusUpdate: OnStatusUpdate = (update) => {
-            this.statusUpdater.scheduleUpdate(
-                message.channelId,
-                thinkingMessage.id,
-                async (content) =>
-                    void (await thinkingMessage.edit(
-                        `*${content} <t:${Math.round(Date.now() / 1000)}:R>*`,
-                    )),
-                statusUpdateContent(update),
-            );
-        };
-
-        try {
-            const { response, newMessages } = await this.mentionHandler({
-                discordMessageId: message.id,
-                referencedMessageId: message.reference?.messageId ?? null,
-                channelId: message.channelId,
-                guildId: message.guildId,
-                userContent,
-                attachments,
-                onStatusUpdate,
-                attachmentRefetcher,
-            });
-
-            // Cancel any pending status edit before writing the final response
-            this.statusUpdater.cancel(thinkingMessage.id);
-
-            // Truncate to Discord's 2000-character limit
-            const safeResponse =
-                response.length > 2000
-                    ? `${response.slice(0, 1997)}...`
-                    : response;
-
-            // Replace the placeholder with the final response
-            await thinkingMessage.edit(safeResponse);
-
-            // Persist only after the final response is successfully displayed
-            await this.botReplySaved({
-                botDiscordMessageId: thinkingMessage.id,
-                repliesToDiscordId: message.id,
-                channelId: thinkingMessage.channelId,
-                guildId: thinkingMessage.guildId,
-                newMessages,
-            });
-        } catch (err) {
-            this.logger.error(
-                { err, discordMessageId: message.id },
-                "Failed to process mention",
-            );
-
-            this.statusUpdater.cancel(thinkingMessage.id);
-
-            try {
-                await thinkingMessage.edit(
-                    "Sorry, I encountered an error processing your request.",
-                );
-            } catch (editErr) {
-                throw new DiscordError("Failed to send error reply", editErr);
-            }
-        }
     }
 }

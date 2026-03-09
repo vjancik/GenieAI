@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/bun";
 import { and, eq, inArray } from "drizzle-orm";
 import type { IGeminiFileRepository } from "../../../application/ports/IGeminiFileRepository.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
@@ -34,65 +35,80 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
      * occurs so the caller always receives the persisted record with its UUID.
      */
     async saveFile(record: Omit<GeminiFile, "id">): Promise<GeminiFile> {
-        try {
-            const [inserted] = await this.db
-                .insert(geminiFiles)
-                .values({
-                    originalGeminiUrl: record.originalGeminiUrl,
-                    discordAttachmentId: record.discordAttachmentId,
-                    discordFilename: record.discordFilename,
-                    messageDiscordId: record.messageDiscordId,
-                })
-                .onConflictDoNothing()
-                .returning();
+        return Sentry.startSpan(
+            {
+                name: "Save Gemini file anchor",
+                op: "db.query",
+                attributes: { "db.table": "gemini_files" },
+            },
+            async () => {
+                try {
+                    const [inserted] = await this.db
+                        .insert(geminiFiles)
+                        .values({
+                            originalGeminiUrl: record.originalGeminiUrl,
+                            discordAttachmentId: record.discordAttachmentId,
+                            discordFilename: record.discordFilename,
+                            messageDiscordId: record.messageDiscordId,
+                        })
+                        .onConflictDoNothing()
+                        .returning();
 
-            if (inserted) {
-                this.logger.debug(
-                    { originalGeminiUrl: record.originalGeminiUrl },
-                    "Saved new Gemini file anchor record",
-                );
-                return {
-                    id: inserted.id,
-                    originalGeminiUrl: inserted.originalGeminiUrl,
-                    discordAttachmentId: inserted.discordAttachmentId,
-                    discordFilename: inserted.discordFilename,
-                    messageDiscordId: inserted.messageDiscordId,
-                };
-            }
+                    if (inserted) {
+                        this.logger.debug(
+                            { originalGeminiUrl: record.originalGeminiUrl },
+                            "Saved new Gemini file anchor record",
+                        );
+                        return {
+                            id: inserted.id,
+                            originalGeminiUrl: inserted.originalGeminiUrl,
+                            discordAttachmentId: inserted.discordAttachmentId,
+                            discordFilename: inserted.discordFilename,
+                            messageDiscordId: inserted.messageDiscordId,
+                        };
+                    }
 
-            // Conflict case: row already exists — fetch it by the unique URL
-            const [existing] = await this.db
-                .select()
-                .from(geminiFiles)
-                .where(
-                    eq(geminiFiles.originalGeminiUrl, record.originalGeminiUrl),
-                );
+                    // Conflict case: row already exists — fetch it by the unique URL
+                    const [existing] = await this.db
+                        .select()
+                        .from(geminiFiles)
+                        .where(
+                            eq(
+                                geminiFiles.originalGeminiUrl,
+                                record.originalGeminiUrl,
+                            ),
+                        );
 
-            if (!existing) {
-                throw new DatabaseError(
-                    "Failed to save or retrieve GeminiFile record after ON CONFLICT DO NOTHING",
-                );
-            }
+                    if (!existing) {
+                        throw new DatabaseError(
+                            "Failed to save or retrieve GeminiFile record after ON CONFLICT DO NOTHING",
+                        );
+                    }
 
-            this.logger.debug(
-                {
-                    originalGeminiUrl: record.originalGeminiUrl,
-                    existingId: existing.id,
-                },
-                "GeminiFile anchor already exists; using existing record",
-            );
+                    this.logger.debug(
+                        {
+                            originalGeminiUrl: record.originalGeminiUrl,
+                            existingId: existing.id,
+                        },
+                        "GeminiFile anchor already exists; using existing record",
+                    );
 
-            return {
-                id: existing.id,
-                originalGeminiUrl: existing.originalGeminiUrl,
-                discordAttachmentId: existing.discordAttachmentId,
-                discordFilename: existing.discordFilename,
-                messageDiscordId: existing.messageDiscordId,
-            };
-        } catch (err) {
-            if (err instanceof DatabaseError) throw err;
-            throw new DatabaseError("Failed to save Gemini file anchor", err);
-        }
+                    return {
+                        id: existing.id,
+                        originalGeminiUrl: existing.originalGeminiUrl,
+                        discordAttachmentId: existing.discordAttachmentId,
+                        discordFilename: existing.discordFilename,
+                        messageDiscordId: existing.messageDiscordId,
+                    };
+                } catch (err) {
+                    if (err instanceof DatabaseError) throw err;
+                    throw new DatabaseError(
+                        "Failed to save Gemini file anchor",
+                        err,
+                    );
+                }
+            },
+        );
     }
 
     /**
@@ -116,75 +132,101 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
             return new Map();
         }
 
-        try {
-            const rows = await this.db
-                .select({
-                    // gemini_files columns (always present)
-                    fileId: geminiFiles.id,
-                    fileOriginalGeminiUrl: geminiFiles.originalGeminiUrl,
-                    fileDiscordAttachmentId: geminiFiles.discordAttachmentId,
-                    fileDiscordFilename: geminiFiles.discordFilename,
-                    fileMessageDiscordId: geminiFiles.messageDiscordId,
-                    // gemini_file_uploads columns (null if no upload for this key)
-                    uploadId: geminiFileUploads.id,
-                    uploadGeminiFileId: geminiFileUploads.geminiFileId,
-                    uploadApiKeyId: geminiFileUploads.apiKeyId,
-                    uploadGeminiFileName: geminiFileUploads.geminiFileName,
-                    uploadGeminiUrl: geminiFileUploads.geminiUrl,
-                    uploadUploadedAt: geminiFileUploads.uploadedAt,
-                })
-                .from(geminiFiles)
-                .leftJoin(
-                    geminiFileUploads,
-                    and(
-                        eq(geminiFileUploads.geminiFileId, geminiFiles.id),
-                        eq(geminiFileUploads.apiKeyId, apiKeyId),
-                    ),
-                )
-                .where(inArray(geminiFiles.originalGeminiUrl, originalUrls));
+        return Sentry.startSpan(
+            {
+                name: "Find Gemini file upload state for key",
+                op: "db.query",
+                attributes: {
+                    "db.table": "gemini_files",
+                    "gemini.url_count": originalUrls.length,
+                    "llm.api_key_id": apiKeyId,
+                },
+            },
+            async (span) => {
+                try {
+                    const rows = await this.db
+                        .select({
+                            // gemini_files columns (always present)
+                            fileId: geminiFiles.id,
+                            fileOriginalGeminiUrl:
+                                geminiFiles.originalGeminiUrl,
+                            fileDiscordAttachmentId:
+                                geminiFiles.discordAttachmentId,
+                            fileDiscordFilename: geminiFiles.discordFilename,
+                            fileMessageDiscordId: geminiFiles.messageDiscordId,
+                            // gemini_file_uploads columns (null if no upload for this key)
+                            uploadId: geminiFileUploads.id,
+                            uploadGeminiFileId: geminiFileUploads.geminiFileId,
+                            uploadApiKeyId: geminiFileUploads.apiKeyId,
+                            uploadGeminiFileName:
+                                geminiFileUploads.geminiFileName,
+                            uploadGeminiUrl: geminiFileUploads.geminiUrl,
+                            uploadUploadedAt: geminiFileUploads.uploadedAt,
+                        })
+                        .from(geminiFiles)
+                        .leftJoin(
+                            geminiFileUploads,
+                            and(
+                                eq(
+                                    geminiFileUploads.geminiFileId,
+                                    geminiFiles.id,
+                                ),
+                                eq(geminiFileUploads.apiKeyId, apiKeyId),
+                            ),
+                        )
+                        .where(
+                            inArray(
+                                geminiFiles.originalGeminiUrl,
+                                originalUrls,
+                            ),
+                        );
 
-            const result = new Map<
-                string,
-                { file: GeminiFile; upload: GeminiFileUpload | null }
-            >();
+                    span.setAttribute("db.result_count", rows.length);
 
-            for (const row of rows) {
-                const file: GeminiFile = {
-                    id: row.fileId,
-                    originalGeminiUrl: row.fileOriginalGeminiUrl,
-                    discordAttachmentId: row.fileDiscordAttachmentId,
-                    discordFilename: row.fileDiscordFilename,
-                    messageDiscordId: row.fileMessageDiscordId,
-                };
+                    const result = new Map<
+                        string,
+                        { file: GeminiFile; upload: GeminiFileUpload | null }
+                    >();
 
-                // Presence of uploadId indicates a matching upload row was found
-                const upload: GeminiFileUpload | null =
-                    row.uploadId !== null &&
-                    row.uploadGeminiFileId !== null &&
-                    row.uploadApiKeyId !== null &&
-                    row.uploadGeminiFileName !== null &&
-                    row.uploadGeminiUrl !== null &&
-                    row.uploadUploadedAt !== null
-                        ? {
-                              id: row.uploadId,
-                              geminiFileId: row.uploadGeminiFileId,
-                              apiKeyId: row.uploadApiKeyId,
-                              geminiFileName: row.uploadGeminiFileName,
-                              geminiUrl: row.uploadGeminiUrl,
-                              uploadedAt: row.uploadUploadedAt,
-                          }
-                        : null;
+                    for (const row of rows) {
+                        const file: GeminiFile = {
+                            id: row.fileId,
+                            originalGeminiUrl: row.fileOriginalGeminiUrl,
+                            discordAttachmentId: row.fileDiscordAttachmentId,
+                            discordFilename: row.fileDiscordFilename,
+                            messageDiscordId: row.fileMessageDiscordId,
+                        };
 
-                result.set(file.originalGeminiUrl, { file, upload });
-            }
+                        // Presence of uploadId indicates a matching upload row was found
+                        const upload: GeminiFileUpload | null =
+                            row.uploadId !== null &&
+                            row.uploadGeminiFileId !== null &&
+                            row.uploadApiKeyId !== null &&
+                            row.uploadGeminiFileName !== null &&
+                            row.uploadGeminiUrl !== null &&
+                            row.uploadUploadedAt !== null
+                                ? {
+                                      id: row.uploadId,
+                                      geminiFileId: row.uploadGeminiFileId,
+                                      apiKeyId: row.uploadApiKeyId,
+                                      geminiFileName: row.uploadGeminiFileName,
+                                      geminiUrl: row.uploadGeminiUrl,
+                                      uploadedAt: row.uploadUploadedAt,
+                                  }
+                                : null;
 
-            return result;
-        } catch (err) {
-            throw new DatabaseError(
-                "Failed to look up Gemini file upload state for key",
-                err,
-            );
-        }
+                        result.set(file.originalGeminiUrl, { file, upload });
+                    }
+
+                    return result;
+                } catch (err) {
+                    throw new DatabaseError(
+                        "Failed to look up Gemini file upload state for key",
+                        err,
+                    );
+                }
+            },
+        );
     }
 
     /**
@@ -196,58 +238,70 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
     async upsertUpload(
         record: Omit<GeminiFileUpload, "id">,
     ): Promise<GeminiFileUpload> {
-        try {
-            const [result] = await this.db
-                .insert(geminiFileUploads)
-                .values({
-                    geminiFileId: record.geminiFileId,
-                    apiKeyId: record.apiKeyId,
-                    geminiFileName: record.geminiFileName,
-                    geminiUrl: record.geminiUrl,
-                    uploadedAt: record.uploadedAt,
-                })
-                .onConflictDoUpdate({
-                    target: [
-                        geminiFileUploads.geminiFileId,
-                        geminiFileUploads.apiKeyId,
-                    ],
-                    set: {
-                        geminiFileName: record.geminiFileName,
-                        geminiUrl: record.geminiUrl,
-                        uploadedAt: record.uploadedAt,
-                    },
-                })
-                .returning();
-
-            if (!result) {
-                throw new DatabaseError(
-                    "Gemini file upload upsert returned no result",
-                );
-            }
-
-            this.logger.debug(
-                {
-                    geminiFileId: record.geminiFileId,
-                    apiKeyId: record.apiKeyId,
-                    geminiFileName: record.geminiFileName,
+        return Sentry.startSpan(
+            {
+                name: "Upsert Gemini file upload record",
+                op: "db.query",
+                attributes: {
+                    "db.table": "gemini_file_uploads",
+                    "llm.api_key_id": record.apiKeyId,
                 },
-                "Upserted Gemini file upload record",
-            );
+            },
+            async () => {
+                try {
+                    const [result] = await this.db
+                        .insert(geminiFileUploads)
+                        .values({
+                            geminiFileId: record.geminiFileId,
+                            apiKeyId: record.apiKeyId,
+                            geminiFileName: record.geminiFileName,
+                            geminiUrl: record.geminiUrl,
+                            uploadedAt: record.uploadedAt,
+                        })
+                        .onConflictDoUpdate({
+                            target: [
+                                geminiFileUploads.geminiFileId,
+                                geminiFileUploads.apiKeyId,
+                            ],
+                            set: {
+                                geminiFileName: record.geminiFileName,
+                                geminiUrl: record.geminiUrl,
+                                uploadedAt: record.uploadedAt,
+                            },
+                        })
+                        .returning();
 
-            return {
-                id: result.id,
-                geminiFileId: result.geminiFileId,
-                apiKeyId: result.apiKeyId,
-                geminiFileName: result.geminiFileName,
-                geminiUrl: result.geminiUrl,
-                uploadedAt: result.uploadedAt,
-            };
-        } catch (err) {
-            if (err instanceof DatabaseError) throw err;
-            throw new DatabaseError(
-                "Failed to upsert Gemini file upload record",
-                err,
-            );
-        }
+                    if (!result) {
+                        throw new DatabaseError(
+                            "Gemini file upload upsert returned no result",
+                        );
+                    }
+
+                    this.logger.debug(
+                        {
+                            geminiFileId: record.geminiFileId,
+                            apiKeyId: record.apiKeyId,
+                            geminiFileName: record.geminiFileName,
+                        },
+                        "Upserted Gemini file upload record",
+                    );
+
+                    return {
+                        id: result.id,
+                        geminiFileId: result.geminiFileId,
+                        apiKeyId: result.apiKeyId,
+                        geminiFileName: result.geminiFileName,
+                        geminiUrl: result.geminiUrl,
+                        uploadedAt: result.uploadedAt,
+                    };
+                } catch (err) {
+                    if (err instanceof DatabaseError) throw err;
+                    throw new DatabaseError(
+                        "Failed to upsert Gemini file upload record",
+                        err,
+                    );
+                }
+            },
+        );
     }
 }

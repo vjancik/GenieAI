@@ -1,4 +1,5 @@
 import { FileState, GoogleGenAI } from "@google/genai";
+import * as Sentry from "@sentry/bun";
 import type {
     IGeminiFileUploader,
     UploadedGeminiFile,
@@ -40,83 +41,105 @@ export class GenaiFileUploader implements IGeminiFileUploader {
         mimeType: string,
         displayName: string,
     ): Promise<UploadedGeminiFile> {
-        this.logger.debug(
-            { filePath, fileName, mimeType, displayName },
-            "Uploading file to Gemini Files API",
-        );
-
-        let file = await this.ai.files.upload({
-            file: filePath,
-            config: { name: fileName, mimeType, displayName },
-        });
-
-        this.logger.debug(
-            { geminiFileName: file.name, state: file.state },
-            "File uploaded, checking state",
-        );
-
-        // Poll until ACTIVE or FAILED (or timeout)
-        const deadline = Date.now() + MAX_POLL_WAIT_MS;
-        while (file.state === FileState.PROCESSING) {
-            if (Date.now() >= deadline) {
-                throw new AppError(
-                    "GEMINI_UPLOAD_FAILED",
-                    `Timed out waiting for Gemini file "${fileName}" to become ACTIVE after ${MAX_POLL_WAIT_MS / 1000}s`,
+        return Sentry.startSpan(
+            {
+                name: "Upload file to Gemini Files API",
+                op: "gemini.files.upload",
+                attributes: {
+                    "gemini.file_name": fileName,
+                    "gemini.mime_type": mimeType,
+                    "gemini.display_name": displayName,
+                },
+            },
+            async (span) => {
+                this.logger.debug(
+                    { filePath, fileName, mimeType, displayName },
+                    "Uploading file to Gemini Files API",
                 );
-            }
-            await new Promise<void>((resolve) =>
-                setTimeout(resolve, POLL_INTERVAL_MS),
-            );
-            if (!file.name) {
-                throw new AppError(
-                    "GEMINI_UPLOAD_FAILED",
-                    `Gemini file "${fileName}" has no name during polling`,
+
+                let file = await this.ai.files.upload({
+                    file: filePath,
+                    config: { name: fileName, mimeType, displayName },
+                });
+
+                this.logger.debug(
+                    { geminiFileName: file.name, state: file.state },
+                    "File uploaded, checking state",
                 );
-            }
-            file = await this.ai.files.get({ name: file.name });
-            this.logger.debug(
-                { geminiFileName: file.name, state: file.state },
-                "Polling Gemini file state",
-            );
-        }
 
-        if (file.state === FileState.FAILED) {
-            throw new AppError(
-                "GEMINI_UPLOAD_FAILED",
-                `Gemini file "${fileName}" reached FAILED state`,
-            );
-        }
+                // Poll until ACTIVE or FAILED (or timeout)
+                const deadline = Date.now() + MAX_POLL_WAIT_MS;
+                let pollCount = 0;
+                while (file.state === FileState.PROCESSING) {
+                    if (Date.now() >= deadline) {
+                        throw new AppError(
+                            "GEMINI_UPLOAD_FAILED",
+                            `Timed out waiting for Gemini file "${fileName}" to become ACTIVE after ${MAX_POLL_WAIT_MS / 1000}s`,
+                        );
+                    }
+                    await new Promise<void>((resolve) =>
+                        setTimeout(resolve, POLL_INTERVAL_MS),
+                    );
+                    if (!file.name) {
+                        throw new AppError(
+                            "GEMINI_UPLOAD_FAILED",
+                            `Gemini file "${fileName}" has no name during polling`,
+                        );
+                    }
+                    file = await this.ai.files.get({ name: file.name });
+                    pollCount++;
+                    this.logger.debug(
+                        { geminiFileName: file.name, state: file.state },
+                        "Polling Gemini file state",
+                    );
+                }
 
-        if (file.state !== FileState.ACTIVE) {
-            throw new AppError(
-                "GEMINI_UPLOAD_FAILED",
-                `Gemini file "${fileName}" reached unexpected state: ${file.state}`,
-            );
-        }
+                span.setAttributes({
+                    "gemini.poll_count": pollCount,
+                    "gemini.final_state": file.state ?? "unknown",
+                });
 
-        if (!file.uri) {
-            throw new AppError(
-                "GEMINI_UPLOAD_FAILED",
-                `Gemini file "${fileName}" is ACTIVE but has no URI`,
-            );
-        }
+                if (file.state === FileState.FAILED) {
+                    const err = new AppError(
+                        "GEMINI_UPLOAD_FAILED",
+                        `Gemini file "${fileName}" reached FAILED state`,
+                    );
+                    Sentry.captureException(err);
+                    throw err;
+                }
 
-        if (!file.name) {
-            throw new AppError(
-                "GEMINI_UPLOAD_FAILED",
-                `Gemini file "${fileName}" is ACTIVE but has no name`,
-            );
-        }
+                if (file.state !== FileState.ACTIVE) {
+                    throw new AppError(
+                        "GEMINI_UPLOAD_FAILED",
+                        `Gemini file "${fileName}" reached unexpected state: ${file.state}`,
+                    );
+                }
 
-        this.logger.info(
-            { geminiFileName: file.name, geminiUrl: file.uri },
-            "Gemini file upload complete",
+                if (!file.uri) {
+                    throw new AppError(
+                        "GEMINI_UPLOAD_FAILED",
+                        `Gemini file "${fileName}" is ACTIVE but has no URI`,
+                    );
+                }
+
+                if (!file.name) {
+                    throw new AppError(
+                        "GEMINI_UPLOAD_FAILED",
+                        `Gemini file "${fileName}" is ACTIVE but has no name`,
+                    );
+                }
+
+                this.logger.info(
+                    { geminiFileName: file.name, geminiUrl: file.uri },
+                    "Gemini file upload complete",
+                );
+
+                return {
+                    geminiFileName: file.name,
+                    geminiUrl: file.uri,
+                };
+            },
         );
-
-        return {
-            geminiFileName: file.name,
-            geminiUrl: file.uri,
-        };
     }
 
     async deleteFile(geminiFileName: string): Promise<void> {

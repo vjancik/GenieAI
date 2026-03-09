@@ -2,6 +2,7 @@ import { unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { BaseMessage, MessageContent } from "@langchain/core/messages";
 import { HumanMessage } from "@langchain/core/messages";
+import * as Sentry from "@sentry/bun";
 import type { GeminiFile } from "../domain/message/GeminiFile.ts";
 import type { GeminiFileUpload } from "../domain/message/GeminiFileUpload.ts";
 import type { AppConfig } from "./config/AppConfig.ts";
@@ -114,61 +115,83 @@ export class GeminiFileRefreshService {
         refetcher: IDiscordAttachmentRefetcher,
         apiKeyId: string,
     ): Promise<BaseMessage[]> {
-        // Collect all Gemini URLs present in the history
-        const allGeminiUrls = messages.flatMap(extractGeminiUrls);
-        if (allGeminiUrls.length === 0) return messages;
+        return Sentry.startSpan(
+            {
+                name: "Refresh Gemini file history",
+                op: "gemini.files.refresh_history",
+                attributes: {
+                    "gemini.file_url_count":
+                        messages.flatMap(extractGeminiUrls).length,
+                    "llm.api_key_id": apiKeyId,
+                },
+            },
+            async (span) => {
+                // Collect all Gemini URLs present in the history
+                const allGeminiUrls = messages.flatMap(extractGeminiUrls);
+                if (allGeminiUrls.length === 0) return messages;
 
-        // LEFT JOIN: always returns GeminiFile (discord context); upload is null if
-        // the file has never been uploaded for this key or was trigger-cleaned.
-        const fileStateMap =
-            await this.geminiFileRepo.findWithUploadStateForKey(
-                allGeminiUrls,
-                apiKeyId,
-            );
+                // LEFT JOIN: always returns GeminiFile (discord context); upload is null if
+                // the file has never been uploaded for this key or was trigger-cleaned.
+                const fileStateMap =
+                    await this.geminiFileRepo.findWithUploadStateForKey(
+                        allGeminiUrls,
+                        apiKeyId,
+                    );
 
-        // Build URL substitution map: originalUrl → new geminiUrl (or null if attachment deleted)
-        const urlSubstitutions = new Map<string, string | null>();
-        const now = Date.now();
+                // Build URL substitution map: originalUrl → new geminiUrl (or null if attachment deleted)
+                const urlSubstitutions = new Map<string, string | null>();
+                const now = Date.now();
 
-        for (const [originalUrl, { file, upload }] of fileStateMap) {
-            if (upload === null) {
-                // Never uploaded for this key (new key or trigger-cleaned row)
-                const newUrl = await this.refreshOne(
-                    originalUrl,
-                    file,
-                    null,
-                    apiKeyId,
-                    refetcher,
+                for (const [originalUrl, { file, upload }] of fileStateMap) {
+                    if (upload === null) {
+                        // Never uploaded for this key (new key or trigger-cleaned row)
+                        const newUrl = await this.refreshOne(
+                            originalUrl,
+                            file,
+                            null,
+                            apiKeyId,
+                            refetcher,
+                        );
+                        urlSubstitutions.set(originalUrl, newUrl);
+                    } else if (
+                        now - upload.uploadedAt.getTime() >=
+                        this.staleThresholdMs
+                    ) {
+                        // Upload exists but is approaching or past expiry
+                        this.logger.info(
+                            {
+                                originalUrl,
+                                apiKeyId,
+                                uploadedAt: upload.uploadedAt,
+                            },
+                            "Gemini file upload is stale; refreshing",
+                        );
+                        const newUrl = await this.refreshOne(
+                            originalUrl,
+                            file,
+                            upload,
+                            apiKeyId,
+                            refetcher,
+                        );
+                        urlSubstitutions.set(originalUrl, newUrl);
+                    } else if (upload.geminiUrl !== originalUrl) {
+                        // Fresh upload exists but with a different URL (prior refresh updated the URL in DB
+                        // but the LangChain history still holds the originalGeminiUrl). Substitute silently.
+                        urlSubstitutions.set(originalUrl, upload.geminiUrl);
+                    }
+                    // else: fresh upload with unchanged URL — no substitution needed
+                }
+
+                span.setAttribute(
+                    "gemini.substitutions_count",
+                    urlSubstitutions.size,
                 );
-                urlSubstitutions.set(originalUrl, newUrl);
-            } else if (
-                now - upload.uploadedAt.getTime() >=
-                this.staleThresholdMs
-            ) {
-                // Upload exists but is approaching or past expiry
-                this.logger.info(
-                    { originalUrl, apiKeyId, uploadedAt: upload.uploadedAt },
-                    "Gemini file upload is stale; refreshing",
-                );
-                const newUrl = await this.refreshOne(
-                    originalUrl,
-                    file,
-                    upload,
-                    apiKeyId,
-                    refetcher,
-                );
-                urlSubstitutions.set(originalUrl, newUrl);
-            } else if (upload.geminiUrl !== originalUrl) {
-                // Fresh upload exists but with a different URL (prior refresh updated the URL in DB
-                // but the LangChain history still holds the originalGeminiUrl). Substitute silently.
-                urlSubstitutions.set(originalUrl, upload.geminiUrl);
-            }
-            // else: fresh upload with unchanged URL — no substitution needed
-        }
 
-        if (urlSubstitutions.size === 0) return messages;
+                if (urlSubstitutions.size === 0) return messages;
 
-        return this.applySubstitutions(messages, urlSubstitutions);
+                return this.applySubstitutions(messages, urlSubstitutions);
+            },
+        );
     }
 
     /**
@@ -193,79 +216,91 @@ export class GeminiFileRefreshService {
         apiKeyId: string,
         refetcher: IDiscordAttachmentRefetcher,
     ): Promise<string | null> {
-        // Re-fetch the Discord attachment to get a fresh CDN URL
-        const attachment = await refetcher.fetchAttachment(
-            file.messageDiscordId,
-            file.discordAttachmentId,
-        );
-
-        if (!attachment) {
-            this.logger.warn(
-                {
-                    discordAttachmentId: file.discordAttachmentId,
-                    messageDiscordId: file.messageDiscordId,
+        return Sentry.startSpan(
+            {
+                name: "Refresh single Gemini file",
+                op: "gemini.files.refresh_one",
+                attributes: {
+                    "llm.api_key_id": apiKeyId,
+                    "gemini.is_stale_refresh": existingUpload !== null,
                 },
-                "Discord attachment no longer exists; removing block from history",
-            );
-            return null;
-        }
-
-        const tempPath = join(
-            TEMP_DIR,
-            `${Bun.randomUUIDv7()}-${file.discordFilename}`,
-        );
-        try {
-            // Stream attachment to disk
-            const mimeType = await this.diskDownloader.downloadToFile(
-                attachment,
-                tempPath,
-            );
-
-            // Upload to Gemini using the uploader for this specific API key
-            const uploader = this.uploaderRegistry.get(apiKeyId);
-            const newFileName = `files/${Bun.randomUUIDv7()}`;
-            const uploaded = await uploader.upload(
-                tempPath,
-                newFileName,
-                mimeType,
-                file.discordFilename,
-            );
-
-            // Delete the old Gemini file best-effort (may already be expired).
-            // Not awaited so it doesn't delay the response.
-            if (existingUpload !== null) {
-                void uploader.deleteFile(existingUpload.geminiFileName);
-            }
-
-            // Persist the new upload record (upserts on conflict for (geminiFileId, apiKeyId))
-            await this.geminiFileRepo.upsertUpload({
-                geminiFileId: file.id,
-                apiKeyId,
-                geminiFileName: uploaded.geminiFileName,
-                geminiUrl: uploaded.geminiUrl,
-                uploadedAt: new Date(),
-            });
-
-            this.logger.info(
-                {
-                    originalUrl,
-                    newGeminiUrl: uploaded.geminiUrl,
-                    apiKeyId,
-                    discordAttachmentId: file.discordAttachmentId,
-                },
-                "Refreshed Gemini file upload",
-            );
-
-            return uploaded.geminiUrl;
-        } finally {
-            // Always clean up the temp file
-            await unlink(tempPath).catch((err) => {
-                this.logger.warn(
-                    { tempPath, err },
-                    "Failed to delete temp file after Gemini upload",
+            },
+            async () => {
+                // Re-fetch the Discord attachment to get a fresh CDN URL
+                const attachment = await refetcher.fetchAttachment(
+                    file.messageDiscordId,
+                    file.discordAttachmentId,
                 );
-            });
-        }
+
+                if (!attachment) {
+                    this.logger.warn(
+                        {
+                            discordAttachmentId: file.discordAttachmentId,
+                            messageDiscordId: file.messageDiscordId,
+                        },
+                        "Discord attachment no longer exists; removing block from history",
+                    );
+                    return null;
+                }
+
+                const tempPath = join(
+                    TEMP_DIR,
+                    `${Bun.randomUUIDv7()}-${file.discordFilename}`,
+                );
+                try {
+                    // Stream attachment to disk
+                    const mimeType = await this.diskDownloader.downloadToFile(
+                        attachment,
+                        tempPath,
+                    );
+
+                    // Upload to Gemini using the uploader for this specific API key
+                    const uploader = this.uploaderRegistry.get(apiKeyId);
+                    const newFileName = `files/${Bun.randomUUIDv7()}`;
+                    const uploaded = await uploader.upload(
+                        tempPath,
+                        newFileName,
+                        mimeType,
+                        file.discordFilename,
+                    );
+
+                    // Delete the old Gemini file best-effort (may already be expired).
+                    // Not awaited so it doesn't delay the response.
+                    if (existingUpload !== null) {
+                        void uploader.deleteFile(existingUpload.geminiFileName);
+                    }
+
+                    // Persist the new upload record (upserts on conflict for (geminiFileId, apiKeyId))
+                    await this.geminiFileRepo.upsertUpload({
+                        geminiFileId: file.id,
+                        apiKeyId,
+                        geminiFileName: uploaded.geminiFileName,
+                        geminiUrl: uploaded.geminiUrl,
+                        uploadedAt: new Date(),
+                    });
+
+                    this.logger.info(
+                        {
+                            originalUrl,
+                            newGeminiUrl: uploaded.geminiUrl,
+                            apiKeyId,
+                            discordAttachmentId: file.discordAttachmentId,
+                        },
+                        "Refreshed Gemini file upload",
+                    );
+
+                    return uploaded.geminiUrl;
+                } finally {
+                    // Always clean up the temp file
+                    await unlink(tempPath).catch((err) => {
+                        this.logger.warn(
+                            { tempPath, err },
+                            "Failed to delete temp file after Gemini upload",
+                        );
+                    });
+                }
+            },
+        );
     }
 
     /**

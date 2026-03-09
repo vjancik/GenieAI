@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/bun";
 import type {
     DiscordAttachmentInfo,
     DownloadedAttachment,
@@ -23,20 +24,38 @@ export class FetchAttachmentDownloader implements IAttachmentDownloader {
     async download(
         attachment: DiscordAttachmentInfo,
     ): Promise<DownloadedAttachment> {
-        const buffer = await this.fetchWithFallback(attachment);
-        const mimeType =
-            buffer.mimeType ??
-            attachment.contentType ??
-            "application/octet-stream";
+        return Sentry.startSpan(
+            {
+                name: "Download Discord attachment (inline)",
+                op: "http.client.download",
+                attributes: {
+                    "attachment.name": attachment.name,
+                    "attachment.size": attachment.size,
+                },
+            },
+            async (span) => {
+                const buffer = await this.fetchWithFallback(attachment);
+                const mimeType =
+                    buffer.mimeType ??
+                    attachment.contentType ??
+                    "application/octet-stream";
 
-        const data = Buffer.from(buffer.bytes).toString("base64");
+                span.setAttribute("attachment.mime_type", mimeType);
 
-        this.logger.debug(
-            { name: attachment.name, mimeType, bytes: buffer.bytes.byteLength },
-            "Downloaded attachment",
+                const data = Buffer.from(buffer.bytes).toString("base64");
+
+                this.logger.debug(
+                    {
+                        name: attachment.name,
+                        mimeType,
+                        bytes: buffer.bytes.byteLength,
+                    },
+                    "Downloaded attachment",
+                );
+
+                return { data, mimeType, name: attachment.name };
+            },
         );
-
-        return { data, mimeType, name: attachment.name };
     }
 
     /**

@@ -1,5 +1,6 @@
 import { mkdir, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
+import * as Sentry from "@sentry/bun";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { IDiskAttachmentDownloader } from "../../application/ports/IDiskAttachmentDownloader.ts";
 import type { Logger } from "../../application/types/Logger.ts";
@@ -23,44 +24,65 @@ export class FetchDiskAttachmentDownloader
         attachment: DiscordAttachmentInfo,
         destPath: string,
     ): Promise<string> {
-        this.logger.debug(
-            { name: attachment.name, size: attachment.size, destPath },
-            "Downloading attachment to disk",
-        );
-
-        // Ensure the destination directory exists
-        await mkdir(dirname(destPath), { recursive: true });
-
-        let result: { mimeType: string | null };
-        try {
-            result = await this.streamToFile(attachment.url, destPath);
-        } catch (primaryErr) {
-            this.logger.warn(
-                { err: primaryErr, url: attachment.url, name: attachment.name },
-                "Primary attachment URL failed, trying proxy URL",
-            );
-            try {
-                result = await this.streamToFile(attachment.proxyURL, destPath);
-            } catch (proxyErr) {
-                throw new AppError(
-                    "ATTACHMENT_DOWNLOAD_FAILED",
-                    `Failed to download attachment "${attachment.name}" to disk from both primary and proxy URLs`,
-                    proxyErr,
+        return Sentry.startSpan(
+            {
+                name: "Download Discord attachment to disk",
+                op: "http.client.download",
+                attributes: {
+                    "attachment.name": attachment.name,
+                    "attachment.size": attachment.size,
+                },
+            },
+            async (span) => {
+                this.logger.debug(
+                    { name: attachment.name, size: attachment.size, destPath },
+                    "Downloading attachment to disk",
                 );
-            }
-        }
 
-        const mimeType =
-            result.mimeType ??
-            attachment.contentType ??
-            "application/octet-stream";
+                // Ensure the destination directory exists
+                await mkdir(dirname(destPath), { recursive: true });
 
-        this.logger.debug(
-            { name: attachment.name, destPath, mimeType },
-            "Downloaded attachment to disk",
+                let result: { mimeType: string | null };
+                try {
+                    result = await this.streamToFile(attachment.url, destPath);
+                } catch (primaryErr) {
+                    this.logger.warn(
+                        {
+                            err: primaryErr,
+                            url: attachment.url,
+                            name: attachment.name,
+                        },
+                        "Primary attachment URL failed, trying proxy URL",
+                    );
+                    try {
+                        result = await this.streamToFile(
+                            attachment.proxyURL,
+                            destPath,
+                        );
+                    } catch (proxyErr) {
+                        throw new AppError(
+                            "ATTACHMENT_DOWNLOAD_FAILED",
+                            `Failed to download attachment "${attachment.name}" to disk from both primary and proxy URLs`,
+                            proxyErr,
+                        );
+                    }
+                }
+
+                const mimeType =
+                    result.mimeType ??
+                    attachment.contentType ??
+                    "application/octet-stream";
+
+                span.setAttribute("attachment.mime_type", mimeType);
+
+                this.logger.debug(
+                    { name: attachment.name, destPath, mimeType },
+                    "Downloaded attachment to disk",
+                );
+
+                return mimeType;
+            },
         );
-
-        return mimeType;
     }
 
     /**

@@ -346,26 +346,41 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         onStatusUpdate?: OnStatusUpdate,
         attachmentRefetcher?: IDiscordAttachmentRefetcher,
     ): Promise<{ content: string; newMessages: BaseMessage[] }> {
-        const initialMessages = [...history, userMessage];
-        // Always pass context so nodes receive a non-optional config
-        // TYPE COERCION: LangGraph's compiled graph is typed as any (see field declaration);
-        // annotate the known output shape — MessagesAnnotation always produces { messages: BaseMessage[] }.
-        const result = (await this.graph.invoke(
-            { messages: initialMessages },
-            { context: { onStatusUpdate, attachmentRefetcher } },
-        )) as { messages: BaseMessage[] };
+        return Sentry.startSpan(
+            {
+                name: "Orchestrate agent pipeline",
+                op: "agent.process",
+                attributes: { "agent.history_length": history.length },
+            },
+            async (span) => {
+                const initialMessages = [...history, userMessage];
+                // Always pass context so nodes receive a non-optional config
+                // TYPE COERCION: LangGraph's compiled graph is typed as any (see field declaration);
+                // annotate the known output shape — MessagesAnnotation always produces { messages: BaseMessage[] }.
+                const result = (await this.graph.invoke(
+                    { messages: initialMessages },
+                    { context: { onStatusUpdate, attachmentRefetcher } },
+                )) as { messages: BaseMessage[] };
 
-        // Everything after the initial seed is "new" — generated during this turn
-        const newMessages = result.messages.slice(initialMessages.length);
-        const lastMessage = result.messages.at(-1);
-        if (!lastMessage) {
-            throw new AppError(
-                "ORCHESTRATOR_NO_RESPONSE",
-                "Graph produced no messages",
-            );
-        }
+                // Everything after the initial seed is "new" — generated during this turn
+                const newMessages = result.messages.slice(
+                    initialMessages.length,
+                );
+                const lastMessage = result.messages.at(-1);
+                if (!lastMessage) {
+                    throw new AppError(
+                        "ORCHESTRATOR_NO_RESPONSE",
+                        "Graph produced no messages",
+                    );
+                }
 
-        return { content: extractContent(lastMessage), newMessages };
+                span.setAttribute(
+                    "agent.new_messages_count",
+                    newMessages.length,
+                );
+                return { content: extractContent(lastMessage), newMessages };
+            },
+        );
     }
 
     /**
@@ -392,61 +407,74 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         messages: BaseMessage[],
         refetcher: IDiscordAttachmentRefetcher | undefined,
     ): Promise<T> {
-        let lastErr: unknown;
+        return Sentry.startSpan(
+            {
+                name: "Invoke model with free key rotation",
+                op: "llm.invoke.free_key",
+            },
+            async (span) => {
+                let lastErr: unknown;
 
-        for (
-            let attempt = 0;
-            attempt < this.freeKeyProvider.keyCount;
-            attempt++
-        ) {
-            // Capture the current key before invoking. Because multiple requests
-            // can run concurrently, the cursor may have already been advanced by
-            // another request between when we threw and when we check. Reading
-            // currentKey here ensures each attempt starts with the live cursor.
-            const key = this.freeKeyProvider.currentKey;
+                for (
+                    let attempt = 0;
+                    attempt < this.freeKeyProvider.keyCount;
+                    attempt++
+                ) {
+                    // Capture the current key before invoking. Because multiple requests
+                    // can run concurrently, the cursor may have already been advanced by
+                    // another request between when we threw and when we check. Reading
+                    // currentKey here ensures each attempt starts with the live cursor.
+                    const key = this.freeKeyProvider.currentKey;
 
-            try {
-                // Refresh Gemini file uploads for this specific API key before invoking
-                const refreshed =
-                    this.geminiFileRefreshService && refetcher
-                        ? await this.geminiFileRefreshService.refreshHistory(
-                              messages,
-                              refetcher,
-                              key.id,
-                          )
-                        : messages;
+                    try {
+                        // Refresh Gemini file uploads for this specific API key before invoking
+                        const refreshed =
+                            this.geminiFileRefreshService && refetcher
+                                ? await this.geminiFileRefreshService.refreshHistory(
+                                      messages,
+                                      refetcher,
+                                      key.id,
+                                  )
+                                : messages;
 
-                const filtered =
-                    this.attachmentMode === "inline"
-                        ? filterHistoryForInlineSize(
-                              refreshed,
-                              this.maxInlineBytes,
-                          )
-                        : refreshed;
+                        const filtered =
+                            this.attachmentMode === "inline"
+                                ? filterHistoryForInlineSize(
+                                      refreshed,
+                                      this.maxInlineBytes,
+                                  )
+                                : refreshed;
 
-                return await getModel(key).invoke(filtered);
-            } catch (err) {
-                if (is429Error(err)) {
-                    this.logger.warn(
-                        { attempt, apiKeyId: key.id },
-                        "Free API key rate-limited (429); trying next key",
-                    );
-                    lastErr = err;
-                    // Only advance the cursor if no concurrent request has already
-                    // done so. If currentKey has changed since we captured it, a
-                    // parallel invocation already rotated to the next key — we must
-                    // not skip it by calling nextKey() again.
-                    if (this.freeKeyProvider.currentKey.id === key.id) {
-                        this.freeKeyProvider.nextKey();
+                        const result = await getModel(key).invoke(filtered);
+                        span.setAttributes({
+                            "llm.attempt_count": attempt + 1,
+                            "llm.api_key_id": key.id,
+                        });
+                        return result;
+                    } catch (err) {
+                        if (is429Error(err)) {
+                            this.logger.warn(
+                                { attempt, apiKeyId: key.id },
+                                "Free API key rate-limited (429); trying next key",
+                            );
+                            lastErr = err;
+                            // Only advance the cursor if no concurrent request has already
+                            // done so. If currentKey has changed since we captured it, a
+                            // parallel invocation already rotated to the next key — we must
+                            // not skip it by calling nextKey() again.
+                            if (this.freeKeyProvider.currentKey.id === key.id) {
+                                this.freeKeyProvider.nextKey();
+                            }
+                            continue;
+                        }
+                        // Non-429 error: propagate immediately without trying other keys
+                        throw err;
                     }
-                    continue;
                 }
-                // Non-429 error: propagate immediately without trying other keys
-                throw err;
-            }
-        }
 
-        throw new AllFreeKeysExhaustedError(lastErr);
+                throw new AllFreeKeysExhaustedError(lastErr);
+            },
+        );
     }
 
     /**
@@ -462,21 +490,33 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         messages: BaseMessage[],
         refetcher: IDiscordAttachmentRefetcher | undefined,
     ): Promise<T> {
-        const refreshed =
-            this.geminiFileRefreshService && refetcher
-                ? await this.geminiFileRefreshService.refreshHistory(
-                      messages,
-                      refetcher,
-                      this.paidApiKey.id,
-                  )
-                : messages;
+        return Sentry.startSpan(
+            {
+                name: "Invoke paid model",
+                op: "llm.invoke.paid",
+                attributes: { "llm.api_key_id": this.paidApiKey.id },
+            },
+            async () => {
+                const refreshed =
+                    this.geminiFileRefreshService && refetcher
+                        ? await this.geminiFileRefreshService.refreshHistory(
+                              messages,
+                              refetcher,
+                              this.paidApiKey.id,
+                          )
+                        : messages;
 
-        const filtered =
-            this.attachmentMode === "inline"
-                ? filterHistoryForInlineSize(refreshed, this.maxInlineBytes)
-                : refreshed;
+                const filtered =
+                    this.attachmentMode === "inline"
+                        ? filterHistoryForInlineSize(
+                              refreshed,
+                              this.maxInlineBytes,
+                          )
+                        : refreshed;
 
-        return model.invoke(filtered);
+                return model.invoke(filtered);
+            },
+        );
     }
 
     /**
@@ -523,63 +563,75 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         state: GraphState,
         config: NodeConfig,
     ): Promise<Command> {
-        config.context?.onStatusUpdate?.({ type: AgentStatusType.TRIAGE });
-        const messages: BaseMessage[] = [
-            new SystemMessage(TRIAGE_SYSTEM_PROMPT),
-            ...state.messages,
-        ];
-
-        const triageResponse = await this.invokeWithFreeKeyRotation(
-            this.triageProvider.get.bind(this.triageProvider),
-            messages,
-            config.context?.attachmentRefetcher,
-        );
-
-        // TODO: we should check if there are more than 1 tool calls and add a log warning
-        const toolCall = triageResponse.tool_calls?.[0];
-
-        if (!toolCall) {
-            this.logger.info(
-                "Triage made no tool call, routing to general agent",
-            );
-            return new Command({ goto: "general" });
-        }
-
-        this.logger.info({ toolName: toolCall.name }, "Triage selected route");
-
-        switch (toolCall.name) {
-            case "get_website":
-            case "get_video_transcription": {
-                // Real tool call: add triage AIMessage to state so the ToolMessage
-                // created in executeToolNode has a valid tool_call_id in history.
-                //
-                // Workaround for a bug in @langchain/google's legacy message converter:
-                // convertLegacyContentMessageToGeminiContent looks up the AIMessage by
-                // tool_call_id, then reads aiMessage.name (not the individual tool_call.name)
-                // when building functionResponse.name — so it always produces "unknown".
-                // Setting name on the AIMessage here makes the lookup return the correct name.
-                triageResponse.name = toolCall.name;
-                return new Command({
-                    goto: "executeTool",
-                    update: { messages: [triageResponse] },
+        return Sentry.startSpan(
+            { name: "Triage node", op: "agent.node.triage" },
+            async (span) => {
+                config.context?.onStatusUpdate?.({
+                    type: AgentStatusType.TRIAGE,
                 });
-            }
+                const messages: BaseMessage[] = [
+                    new SystemMessage(TRIAGE_SYSTEM_PROMPT),
+                    ...state.messages,
+                ];
 
-            case "route_to_search":
-                // Routing sentinel: do NOT add triage message to state
-                return new Command({ goto: "search" });
-
-            case "route_to_general":
-                // Routing sentinel: do NOT add triage message to state
-                return new Command({ goto: "general" });
-
-            default:
-                this.logger.warn(
-                    { toolName: toolCall.name },
-                    "Unknown triage tool, falling back to general",
+                const triageResponse = await this.invokeWithFreeKeyRotation(
+                    this.triageProvider.get.bind(this.triageProvider),
+                    messages,
+                    config.context?.attachmentRefetcher,
                 );
-                return new Command({ goto: "general" });
-        }
+
+                // TODO: we should check if there are more than 1 tool calls and add a log warning
+                const toolCall = triageResponse.tool_calls?.[0];
+
+                if (!toolCall) {
+                    this.logger.info(
+                        "Triage made no tool call, routing to general agent",
+                    );
+                    span.setAttribute("agent.triage_route", "general");
+                    return new Command({ goto: "general" });
+                }
+
+                this.logger.info(
+                    { toolName: toolCall.name },
+                    "Triage selected route",
+                );
+                span.setAttribute("agent.triage_route", toolCall.name);
+
+                switch (toolCall.name) {
+                    case "get_website":
+                    case "get_video_transcription": {
+                        // Real tool call: add triage AIMessage to state so the ToolMessage
+                        // created in executeToolNode has a valid tool_call_id in history.
+                        //
+                        // Workaround for a bug in @langchain/google's legacy message converter:
+                        // convertLegacyContentMessageToGeminiContent looks up the AIMessage by
+                        // tool_call_id, then reads aiMessage.name (not the individual tool_call.name)
+                        // when building functionResponse.name — so it always produces "unknown".
+                        // Setting name on the AIMessage here makes the lookup return the correct name.
+                        triageResponse.name = toolCall.name;
+                        return new Command({
+                            goto: "executeTool",
+                            update: { messages: [triageResponse] },
+                        });
+                    }
+
+                    case "route_to_search":
+                        // Routing sentinel: do NOT add triage message to state
+                        return new Command({ goto: "search" });
+
+                    case "route_to_general":
+                        // Routing sentinel: do NOT add triage message to state
+                        return new Command({ goto: "general" });
+
+                    default:
+                        this.logger.warn(
+                            { toolName: toolCall.name },
+                            "Unknown triage tool, falling back to general",
+                        );
+                        return new Command({ goto: "general" });
+                }
+            },
+        );
     }
 
     /**
@@ -592,40 +644,49 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         state: GraphState,
         config: NodeConfig,
     ): Promise<{ messages: BaseMessage[] }> {
-        config.context?.onStatusUpdate?.({
-            type: AgentStatusType.FETCHING_CONTENT,
-        });
-        const lastMsg = state.messages.at(-1);
-        const toolCall =
-            lastMsg instanceof AIMessage ? lastMsg.tool_calls?.[0] : undefined;
+        return Sentry.startSpan(
+            { name: "Execute tool node", op: "agent.node.execute_tool" },
+            async (span) => {
+                config.context?.onStatusUpdate?.({
+                    type: AgentStatusType.FETCHING_CONTENT,
+                });
+                const lastMsg = state.messages.at(-1);
+                const toolCall =
+                    lastMsg instanceof AIMessage
+                        ? lastMsg.tool_calls?.[0]
+                        : undefined;
 
-        if (!toolCall) {
-            throw new AppError(
-                "ORCHESTRATOR_MISSING_TOOL_CALL",
-                "executeToolNode reached without a tool call in state",
-            );
-        }
+                if (!toolCall) {
+                    throw new AppError(
+                        "ORCHESTRATOR_MISSING_TOOL_CALL",
+                        "executeToolNode reached without a tool call in state",
+                    );
+                }
 
-        let toolResult: string;
-        // TYPE COERCION: LangChain tool_calls args are typed as Record<string, unknown>;
-        // the Zod schema on each tool guarantees the urls: string[] shape at parse time.
-        if (toolCall.name === "get_website") {
-            toolResult = await this.getWebsiteTool.invoke(
-                toolCall.args as { urls: string[] },
-            );
-        } else {
-            toolResult = await this.getVideoTranscriptionTool.invoke(
-                toolCall.args as { urls: string[] },
-            );
-        }
+                span.setAttribute("agent.tool_name", toolCall.name);
 
-        const toolMessage = new ToolMessage({
-            content: toolResult,
-            name: toolCall.name,
-            tool_call_id: toolCall.id ?? "",
-        });
+                let toolResult: string;
+                // TYPE COERCION: LangChain tool_calls args are typed as Record<string, unknown>;
+                // the Zod schema on each tool guarantees the urls: string[] shape at parse time.
+                if (toolCall.name === "get_website") {
+                    toolResult = await this.getWebsiteTool.invoke(
+                        toolCall.args as { urls: string[] },
+                    );
+                } else {
+                    toolResult = await this.getVideoTranscriptionTool.invoke(
+                        toolCall.args as { urls: string[] },
+                    );
+                }
 
-        return { messages: [toolMessage] };
+                const toolMessage = new ToolMessage({
+                    content: toolResult,
+                    name: toolCall.name,
+                    tool_call_id: toolCall.id ?? "",
+                });
+
+                return { messages: [toolMessage] };
+            },
+        );
     }
 
     /**
@@ -639,31 +700,40 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         state: GraphState,
         config: NodeConfig,
     ): Promise<{ messages: BaseMessage[] }> {
-        config.context?.onStatusUpdate?.({ type: AgentStatusType.GENERATING });
-        const lastMsg = state.messages.at(-1);
-        const hasToolResult = lastMsg instanceof ToolMessage;
+        return Sentry.startSpan(
+            { name: "General agent node", op: "agent.node.general" },
+            async (span) => {
+                config.context?.onStatusUpdate?.({
+                    type: AgentStatusType.GENERATING,
+                });
+                const lastMsg = state.messages.at(-1);
+                const hasToolResult = lastMsg instanceof ToolMessage;
 
-        const invokeMessages: BaseMessage[] = [
-            new SystemMessage(GENERAL_SYSTEM_PROMPT),
-            ...state.messages,
-        ];
+                span.setAttribute("agent.has_tool_result", hasToolResult);
 
-        if (hasToolResult) {
-            // Transient instruction: not added to state, only to the invoke call
-            invokeMessages.push(
-                new HumanMessage(
-                    "Based on the retrieved content above, please answer the original question. " +
-                        "Keep your response under 1500 characters.",
-                ),
-            );
-        }
+                const invokeMessages: BaseMessage[] = [
+                    new SystemMessage(GENERAL_SYSTEM_PROMPT),
+                    ...state.messages,
+                ];
 
-        const response = await this.invokeWithFreeKeyRotation(
-            this.generalProvider.get.bind(this.generalProvider),
-            invokeMessages,
-            config.context?.attachmentRefetcher,
+                if (hasToolResult) {
+                    // Transient instruction: not added to state, only to the invoke call
+                    invokeMessages.push(
+                        new HumanMessage(
+                            "Based on the retrieved content above, please answer the original question. " +
+                                "Keep your response under 1500 characters.",
+                        ),
+                    );
+                }
+
+                const response = await this.invokeWithFreeKeyRotation(
+                    this.generalProvider.get.bind(this.generalProvider),
+                    invokeMessages,
+                    config.context?.attachmentRefetcher,
+                );
+                return { messages: [response] };
+            },
         );
-        return { messages: [response] };
     }
 
     /**
@@ -674,16 +744,23 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         state: GraphState,
         config: NodeConfig,
     ): Promise<{ messages: BaseMessage[] }> {
-        config.context?.onStatusUpdate?.({ type: AgentStatusType.SEARCHING });
-        const messages: BaseMessage[] = [
-            new SystemMessage(SEARCH_SYSTEM_PROMPT),
-            ...state.messages,
-        ];
-        const response = await this.invokePaidModelWithMiddleware(
-            this.searchProvider.get(this.paidApiKey),
-            messages,
-            config.context?.attachmentRefetcher,
+        return Sentry.startSpan(
+            { name: "Search agent node", op: "agent.node.search" },
+            async () => {
+                config.context?.onStatusUpdate?.({
+                    type: AgentStatusType.SEARCHING,
+                });
+                const messages: BaseMessage[] = [
+                    new SystemMessage(SEARCH_SYSTEM_PROMPT),
+                    ...state.messages,
+                ];
+                const response = await this.invokePaidModelWithMiddleware(
+                    this.searchProvider.get(this.paidApiKey),
+                    messages,
+                    config.context?.attachmentRefetcher,
+                );
+                return { messages: [response] };
+            },
         );
-        return { messages: [response] };
     }
 }
