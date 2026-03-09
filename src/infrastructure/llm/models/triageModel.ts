@@ -1,5 +1,5 @@
 import { tool } from "@langchain/core/tools";
-import { ChatGoogle } from "@langchain/google";
+import { ChatGoogle } from "@langchain/google/node";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
 import type { GetVideoTranscriptionTool } from "../tools/getVideoTranscriptionTool.ts";

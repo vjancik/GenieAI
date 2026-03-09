@@ -11,10 +11,12 @@
         "langchain",
         "langgraph",
         "LANGSMITH",
+        "multistream",
         "pino",
         "quicktime",
         "Refetcher",
         "Upserted",
+        "upserts",
         "uuidv",
         "WEBVTT"
     ]

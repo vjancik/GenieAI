@@ -1,4 +1,4 @@
-import { ChatGoogle } from "@langchain/google";
+import { ChatGoogle } from "@langchain/google/node";
 import * as Sentry from "@sentry/bun";
 
 /**

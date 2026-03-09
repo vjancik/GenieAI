@@ -12,6 +12,7 @@
  * 5. Wire orchestrator and use case handler
  * 6. Start Discord gateway
  */
+import * as Sentry from "@sentry/bun";
 import { GeminiApiKeySyncService } from "./application/GeminiApiKeySyncService.ts";
 import { GeminiFileRefreshService } from "./application/GeminiFileRefreshService.ts";
 import { HandleDiscordMention } from "./application/HandleDiscordMention.ts";
@@ -37,8 +38,8 @@ import { createGetWebsiteTool } from "./infrastructure/llm/tools/getWebsiteTool.
 import { createLogger } from "./infrastructure/logging/logger.ts";
 
 // All current models use this Gemini variant
-const TRIAGE_MODEL_NAME = "gemini-3-flash-preview";
-const GENERAL_MODEL_NAME = "gemini-3-flash-preview";
+const TRIAGE_MODEL_NAME = "gemini-3.1-flash-lite-preview";
+const GENERAL_MODEL_NAME = "gemini-3.1-flash-lite-preview";
 
 const logger = createLogger(config.logLevel, config.fileLog);
 logger.info("Starting GenieAI bot...");
@@ -160,16 +161,14 @@ const gateway = new DiscordGateway(
 );
 
 // Graceful shutdown
-process.on("SIGINT", async () => {
+async function shutdown() {
     logger.info("Shutting down...");
     await gateway.stop();
+    await Sentry.flush(2000);
     process.exit(0);
-});
+}
 
-process.on("SIGTERM", async () => {
-    logger.info("Shutting down...");
-    await gateway.stop();
-    process.exit(0);
-});
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 await gateway.start();

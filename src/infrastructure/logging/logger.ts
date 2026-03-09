@@ -1,6 +1,7 @@
 import path from "node:path";
 import pino from "pino";
 import type { Logger } from "../../application/types/Logger.ts";
+import { withSentryLogging } from "./withSentryLogging.ts";
 
 /**
  * Formats a Date as a filesystem-safe ISO-like timestamp string.
@@ -18,6 +19,11 @@ function formatTimestamp(date: Date): string {
  * When fileLog is true, also writes structured JSON logs to
  * `./logs/<process-start-timestamp>-pino.log` in parallel with the console transport.
  *
+ * When Sentry has been initialized (SENTRY_INITIALIZED=true) and running under
+ * Bun, the returned logger is wrapped with {@link withSentryLogging}, which
+ * forwards every log call to `Sentry.logger.*` without any JSON serialization
+ * overhead.
+ *
  * @param logLevel - The minimum log level to output (e.g. "info", "debug")
  * @param fileLog  - Whether to additionally write logs to a file (default: false)
  */
@@ -26,7 +32,7 @@ export function createLogger(logLevel: string, fileLog = false): Logger {
 
     if (!fileLog) {
         // No file transport — original behavior.
-        return pino({
+        const logger = pino({
             level: logLevel,
             transport: isProduction
                 ? undefined
@@ -35,6 +41,7 @@ export function createLogger(logLevel: string, fileLog = false): Logger {
                       options: { colorize: true },
                   },
         });
+        return maybeWrapWithSentry(logger);
     }
 
     // Build the log file path: <project-root>/logs/<timestamp>-pino.log
@@ -42,44 +49,51 @@ export function createLogger(logLevel: string, fileLog = false): Logger {
     const logDir = path.resolve(import.meta.dir, "../../../logs");
     const logFile = path.join(logDir, `${timestamp}-pino.log`);
 
-    if (isProduction) {
-        // Production: structured JSON to stdout + file in parallel.
-        return pino(
-            { level: logLevel },
-            pino.transport({
-                targets: [
-                    // fd 1 = stdout — keeps the existing JSON-to-stdout behaviour
-                    {
-                        target: "pino/file",
-                        options: { destination: 1 },
-                        level: logLevel,
-                    },
-                    {
-                        target: "pino/file",
-                        options: { destination: logFile, mkdir: true },
-                        level: logLevel,
-                    },
-                ],
-            }),
-        );
-    }
-
-    // Development: pino-pretty to stdout + structured JSON to file.
-    return pino(
+    // TYPE COERCION: the targets array holds heterogeneous options shapes
+    // (destination: string vs number, colorize, mkdir) that don't unify under
+    // pino's generic TransportTargetOptions<T>. Casting via unknown to the
+    // multi-target overload is safe — pino.transport serializes options as-is.
+    const logger = pino(
         { level: logLevel },
         pino.transport({
-            targets: [
-                {
-                    target: "pino-pretty",
-                    options: { colorize: true },
-                    level: logLevel,
-                },
-                {
-                    target: "pino/file",
-                    options: { destination: logFile, mkdir: true },
-                    level: logLevel,
-                },
-            ],
-        }),
+            targets: isProduction
+                ? [
+                      {
+                          target: "pino/file",
+                          options: { destination: 1 },
+                          level: logLevel,
+                      },
+                      {
+                          target: "pino/file",
+                          options: { destination: logFile, mkdir: true },
+                          level: logLevel,
+                      },
+                  ]
+                : [
+                      {
+                          target: "pino-pretty",
+                          options: { colorize: true },
+                          level: logLevel,
+                      },
+                      {
+                          target: "pino/file",
+                          options: { destination: logFile, mkdir: true },
+                          level: logLevel,
+                      },
+                  ],
+        } as unknown as pino.TransportMultiOptions),
     );
+
+    return maybeWrapWithSentry(logger);
+}
+
+/**
+ * Wraps the logger with Sentry forwarding when conditions are met:
+ * running under Bun and Sentry has been initialized before the logger was created.
+ */
+function maybeWrapWithSentry(logger: Logger): Logger {
+    if (process.versions.bun && process.env.SENTRY_INITIALIZED === "true") {
+        return withSentryLogging(logger);
+    }
+    return logger;
 }
