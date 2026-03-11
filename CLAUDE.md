@@ -2,6 +2,7 @@
 - use bun commands instead of npm and node commands
 - when using any bun command prepend it with `bunx cross-env AGENT=1` (for example: `bunx cross-env AGENT=1 bun run test`)
 - after implementing your task, run `bun typecheck && bun codecheck:fix && bun run test` and fix any errors until it passes all checks
+- use US English spelling over British English spelling
 
 # Code Architecture Rules
 - use Domain-Driven Design principles and adhere to Hexagonal Architecture

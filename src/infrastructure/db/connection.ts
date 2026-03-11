@@ -1,3 +1,4 @@
+// Driver note: bun-sql runs all applicable queries as prepared statements (caching them internally) but using drizzle's .prepare() method still reduces query times by avoiding dynamic query builder resolution on every query
 import { drizzle } from "drizzle-orm/bun-sql";
 import * as schema from "./schema.ts";
 
