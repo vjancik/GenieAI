@@ -19,9 +19,7 @@ const baseMessage: DiscordMessage = {
     channelId: "ch-456",
     guildId: "guild-789",
     role: "assistant",
-    langchainMessages: [
-        prevAiMessage.toJSON() as unknown as Record<string, unknown>,
-    ],
+    langchainMessages: [prevAiMessage.toJSON() as unknown as Record<string, unknown>],
     createdAt: new Date("2024-01-01T00:00:00Z"),
 };
 
@@ -41,9 +39,7 @@ function makeRepo(chainMessages: DiscordMessage[] = []): IMessageRepository {
 function makeOrchestrator(response = "AI response"): IAgentOrchestrator {
     return {
         // Return deserialized messages only when records are present — mirrors real behaviour
-        buildHistory: mock((records: DiscordMessage[]) =>
-            records.length > 0 ? [prevAiMessage] : [],
-        ),
+        buildHistory: mock((records: DiscordMessage[]) => (records.length > 0 ? [prevAiMessage] : [])),
         process: mock(async () => ({
             content: response,
             newMessages: [mockAiResponse],
@@ -70,13 +66,7 @@ describe("HandleDiscordMention.handle", () => {
     test("returns the orchestrator response", async () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator("Hello back!");
-        const handler = new HandleDiscordMention(
-            repo,
-            orchestrator as never,
-            makeDownloader(),
-            testLogger,
-            testConfig,
-        );
+        const handler = new HandleDiscordMention(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
 
         const result = await handler.handle({
             discordMessageId: "user-msg-1",
@@ -94,13 +84,7 @@ describe("HandleDiscordMention.handle", () => {
     test("does not fetch chain when referencedMessageId is null", async () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMention(
-            repo,
-            orchestrator as never,
-            makeDownloader(),
-            testLogger,
-            testConfig,
-        );
+        const handler = new HandleDiscordMention(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
 
         await handler.handle({
             discordMessageId: "user-msg-1",
@@ -117,13 +101,7 @@ describe("HandleDiscordMention.handle", () => {
     test("fetches chain when referencedMessageId is set", async () => {
         const repo = makeRepo([baseMessage]);
         const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMention(
-            repo,
-            orchestrator as never,
-            makeDownloader(),
-            testLogger,
-            testConfig,
-        );
+        const handler = new HandleDiscordMention(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
 
         await handler.handle({
             discordMessageId: "user-msg-2",
@@ -140,13 +118,7 @@ describe("HandleDiscordMention.handle", () => {
     test("passes fetched history to orchestrator as LangChain messages", async () => {
         const repo = makeRepo([baseMessage]);
         const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMention(
-            repo,
-            orchestrator as never,
-            makeDownloader(),
-            testLogger,
-            testConfig,
-        );
+        const handler = new HandleDiscordMention(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
 
         await handler.handle({
             discordMessageId: "user-msg-2",
@@ -157,8 +129,7 @@ describe("HandleDiscordMention.handle", () => {
             attachments: [],
         });
 
-        const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock
-            .calls[0];
+        const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock.calls[0];
         expect(firstCall).toBeDefined();
         const [history, userMessage] = firstCall as [unknown[], HumanMessage];
         // baseMessage has one serialized AIMessage → deserialized to 1 BaseMessage
@@ -170,13 +141,7 @@ describe("HandleDiscordMention.handle", () => {
     test("forwards onStatusUpdate to orchestrator.process as the third argument", async () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMention(
-            repo,
-            orchestrator as never,
-            makeDownloader(),
-            testLogger,
-            testConfig,
-        );
+        const handler = new HandleDiscordMention(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
 
         const onStatusUpdate: OnStatusUpdate = mock(() => {});
 
@@ -190,8 +155,7 @@ describe("HandleDiscordMention.handle", () => {
             onStatusUpdate,
         });
 
-        const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock
-            .calls[0];
+        const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock.calls[0];
         expect(firstCall).toBeDefined();
         // Third argument must be the exact callback passed in
         expect(firstCall?.[2]).toBe(onStatusUpdate);
@@ -200,13 +164,7 @@ describe("HandleDiscordMention.handle", () => {
     test("passes empty history to orchestrator when no reply chain", async () => {
         const repo = makeRepo([]);
         const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMention(
-            repo,
-            orchestrator as never,
-            makeDownloader(),
-            testLogger,
-            testConfig,
-        );
+        const handler = new HandleDiscordMention(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
 
         await handler.handle({
             discordMessageId: "user-msg-1",
@@ -217,8 +175,7 @@ describe("HandleDiscordMention.handle", () => {
             attachments: [],
         });
 
-        const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock
-            .calls[0];
+        const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock.calls[0];
         expect(firstCall).toBeDefined();
         const [history] = firstCall as [unknown[], HumanMessage];
         expect(history).toHaveLength(0);
@@ -227,13 +184,7 @@ describe("HandleDiscordMention.handle", () => {
     test("saves the user's message as a serialized HumanMessage", async () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMention(
-            repo,
-            orchestrator as never,
-            makeDownloader(),
-            testLogger,
-            testConfig,
-        );
+        const handler = new HandleDiscordMention(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
 
         await handler.handle({
             discordMessageId: "user-msg-1",
@@ -244,8 +195,7 @@ describe("HandleDiscordMention.handle", () => {
             attachments: [],
         });
 
-        const saveCall = (repo.save as ReturnType<typeof mock>).mock
-            .calls[0]?.[0] as DiscordMessage;
+        const saveCall = (repo.save as ReturnType<typeof mock>).mock.calls[0]?.[0] as DiscordMessage;
         expect(saveCall.discordMessageId).toBe("user-msg-1");
         expect(saveCall.repliesToDiscordId).toBe("prev-123");
         expect(saveCall.role).toBe("human");
@@ -292,22 +242,14 @@ describe("HandleDiscordMention.handle", () => {
         expect(result.response).toContain("exceeds");
         expect(result.newMessages).toHaveLength(0);
         // Orchestrator should NOT have been called
-        expect(
-            (orchestrator.process as ReturnType<typeof mock>).mock.calls,
-        ).toHaveLength(0);
+        expect((orchestrator.process as ReturnType<typeof mock>).mock.calls).toHaveLength(0);
     });
 
     test("downloads attachments and passes multimodal HumanMessage to orchestrator", async () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator();
         const downloader = makeDownloader();
-        const handler = new HandleDiscordMention(
-            repo,
-            orchestrator as never,
-            downloader,
-            testLogger,
-            testConfig,
-        );
+        const handler = new HandleDiscordMention(repo, orchestrator as never, downloader, testLogger, testConfig);
 
         await handler.handle({
             discordMessageId: "user-msg-1",
@@ -329,8 +271,7 @@ describe("HandleDiscordMention.handle", () => {
 
         expect(downloader.download).toHaveBeenCalledTimes(1);
 
-        const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock
-            .calls[0];
+        const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock.calls[0];
         const userMessage = firstCall?.[1] as HumanMessage;
         expect(userMessage).toBeInstanceOf(HumanMessage);
         // Should have structured content (array), not a plain string
@@ -342,13 +283,7 @@ describe("HandleDiscordMention.saveBotResponse", () => {
     test("saves bot response with assistant role and serialized messages", async () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMention(
-            repo,
-            orchestrator as never,
-            makeDownloader(),
-            testLogger,
-            testConfig,
-        );
+        const handler = new HandleDiscordMention(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
 
         const aiMsg = new AIMessage("The answer is 4");
         await handler.saveBotResponse({
@@ -359,8 +294,7 @@ describe("HandleDiscordMention.saveBotResponse", () => {
             newMessages: [aiMsg],
         });
 
-        const saveCall = (repo.save as ReturnType<typeof mock>).mock
-            .calls[0]?.[0] as DiscordMessage;
+        const saveCall = (repo.save as ReturnType<typeof mock>).mock.calls[0]?.[0] as DiscordMessage;
         expect(saveCall.discordMessageId).toBe("bot-msg-1");
         expect(saveCall.repliesToDiscordId).toBe("user-msg-1");
         expect(saveCall.role).toBe("assistant");
@@ -370,13 +304,7 @@ describe("HandleDiscordMention.saveBotResponse", () => {
     test("saves multiple newMessages (e.g. triage + tool + final)", async () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMention(
-            repo,
-            orchestrator as never,
-            makeDownloader(),
-            testLogger,
-            testConfig,
-        );
+        const handler = new HandleDiscordMention(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
 
         const messages = [
             new AIMessage("triage response"),
@@ -392,8 +320,7 @@ describe("HandleDiscordMention.saveBotResponse", () => {
             newMessages: messages,
         });
 
-        const saveCall = (repo.save as ReturnType<typeof mock>).mock
-            .calls[0]?.[0] as DiscordMessage;
+        const saveCall = (repo.save as ReturnType<typeof mock>).mock.calls[0]?.[0] as DiscordMessage;
         expect(saveCall.langchainMessages).toHaveLength(3);
     });
 });

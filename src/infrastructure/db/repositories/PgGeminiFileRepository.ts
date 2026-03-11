@@ -29,12 +29,7 @@ function buildFindFileByUrlStmt(db: Db) {
     return db
         .select()
         .from(geminiFiles)
-        .where(
-            eq(
-                geminiFiles.originalGeminiUrl,
-                sql.placeholder("originalGeminiUrl"),
-            ),
-        )
+        .where(eq(geminiFiles.originalGeminiUrl, sql.placeholder("originalGeminiUrl")))
         .prepare("gemini_file_find_by_url");
 }
 
@@ -69,12 +64,7 @@ function buildFindWithUploadStateStmt(db: Db) {
                 eq(geminiFileUploads.apiKeyId, sql.placeholder("apiKeyId")),
             ),
         )
-        .where(
-            eq(
-                geminiFiles.originalGeminiUrl,
-                sql`ANY(${sql.placeholder("urls")})`,
-            ),
-        )
+        .where(eq(geminiFiles.originalGeminiUrl, sql`ANY(${sql.placeholder("urls")})`))
         .prepare("gemini_file_find_with_upload_state");
 }
 
@@ -95,10 +85,7 @@ function buildUpsertUploadStmt(db: Db) {
             uploadedAt: sql.placeholder("uploadedAt"),
         })
         .onConflictDoUpdate({
-            target: [
-                geminiFileUploads.geminiFileId,
-                geminiFileUploads.apiKeyId,
-            ],
+            target: [geminiFileUploads.geminiFileId, geminiFileUploads.apiKeyId],
             set: {
                 // EXCLUDED refers to the row proposed for insertion — standard PostgreSQL upsert pattern.
                 geminiFileName: sql`EXCLUDED.gemini_file_name`,
@@ -130,12 +117,8 @@ function buildUpsertUploadStmt(db: Db) {
  */
 export class PgGeminiFileRepository implements IGeminiFileRepository {
     private readonly stmtInsertFile: ReturnType<typeof buildInsertFileStmt>;
-    private readonly stmtFindFileByUrl: ReturnType<
-        typeof buildFindFileByUrlStmt
-    >;
-    private readonly stmtFindWithUploadState: ReturnType<
-        typeof buildFindWithUploadStateStmt
-    >;
+    private readonly stmtFindFileByUrl: ReturnType<typeof buildFindFileByUrlStmt>;
+    private readonly stmtFindWithUploadState: ReturnType<typeof buildFindWithUploadStateStmt>;
     private readonly stmtUpsertUpload: ReturnType<typeof buildUpsertUploadStmt>;
 
     constructor(
@@ -213,10 +196,7 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                     };
                 } catch (err) {
                     if (err instanceof DatabaseError) throw err;
-                    throw new DatabaseError(
-                        "Failed to save Gemini file anchor",
-                        err,
-                    );
+                    throw new DatabaseError("Failed to save Gemini file anchor", err);
                 }
             },
         );
@@ -236,9 +216,7 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
     async findWithUploadStateForKey(
         originalUrls: string[],
         apiKeyId: string,
-    ): Promise<
-        Map<string, { file: GeminiFile; upload: GeminiFileUpload | null }>
-    > {
+    ): Promise<Map<string, { file: GeminiFile; upload: GeminiFileUpload | null }>> {
         if (originalUrls.length === 0) {
             return new Map();
         }
@@ -265,10 +243,7 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
 
                     span.setAttribute("db.result_count", rows.length);
 
-                    const result = new Map<
-                        string,
-                        { file: GeminiFile; upload: GeminiFileUpload | null }
-                    >();
+                    const result = new Map<string, { file: GeminiFile; upload: GeminiFileUpload | null }>();
 
                     for (const row of rows) {
                         const file: GeminiFile = {
@@ -302,10 +277,7 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
 
                     return result;
                 } catch (err) {
-                    throw new DatabaseError(
-                        "Failed to look up Gemini file upload state for key",
-                        err,
-                    );
+                    throw new DatabaseError("Failed to look up Gemini file upload state for key", err);
                 }
             },
         );
@@ -317,9 +289,7 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
      * The BEFORE INSERT trigger on `gemini_file_uploads` fires here, cleaning
      * any rows older than 48 hours before the new row is inserted.
      */
-    async upsertUpload(
-        record: Omit<GeminiFileUpload, "id">,
-    ): Promise<GeminiFileUpload> {
+    async upsertUpload(record: Omit<GeminiFileUpload, "id">): Promise<GeminiFileUpload> {
         return Sentry.startSpan(
             {
                 name: "Upsert Gemini file upload record",
@@ -340,9 +310,7 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                     });
 
                     if (!result) {
-                        throw new DatabaseError(
-                            "Gemini file upload upsert returned no result",
-                        );
+                        throw new DatabaseError("Gemini file upload upsert returned no result");
                     }
 
                     this.logger.debug(
@@ -364,10 +332,7 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                     };
                 } catch (err) {
                     if (err instanceof DatabaseError) throw err;
-                    throw new DatabaseError(
-                        "Failed to upsert Gemini file upload record",
-                        err,
-                    );
+                    throw new DatabaseError("Failed to upsert Gemini file upload record", err);
                 }
             },
         );

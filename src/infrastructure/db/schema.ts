@@ -1,14 +1,5 @@
 import { sql } from "drizzle-orm";
-import {
-    boolean,
-    index,
-    json,
-    pgTable,
-    text,
-    timestamp,
-    uniqueIndex,
-    uuid,
-} from "drizzle-orm/pg-core";
+import { boolean, index, json, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import type { DiscordMessage } from "../../domain/message/Message.ts";
 
 /**
@@ -34,12 +25,8 @@ export const messages = pgTable("messages", {
     guildId: text("guild_id"),
     role: text("role", { enum: ["human", "assistant"] }).notNull(),
     /** Serialized LangChain BaseMessage objects stored as JSON array */
-    langchainMessages: json("langchain_messages")
-        .notNull()
-        .$type<DiscordMessage["langchainMessages"]>(),
-    createdAt: timestamp("created_at", { withTimezone: true })
-        .defaultNow()
-        .notNull(),
+    langchainMessages: json("langchain_messages").notNull().$type<DiscordMessage["langchainMessages"]>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 /**
@@ -64,9 +51,7 @@ export const geminiApiKeys = pgTable("gemini_api_keys", {
      * when the key reappears in env at startup.
      */
     isActive: boolean("is_active").notNull().default(true),
-    createdAt: timestamp("created_at", { withTimezone: true })
-        .defaultNow()
-        .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 /**
@@ -146,10 +131,7 @@ export const geminiFileUploads = pgTable(
     },
     (table) => [
         /** One upload record per (file, api_key) pair — supports upsert on conflict. */
-        uniqueIndex("gemini_file_uploads_file_key_idx").on(
-            table.geminiFileId,
-            table.apiKeyId,
-        ),
+        uniqueIndex("gemini_file_uploads_file_key_idx").on(table.geminiFileId, table.apiKeyId),
         /** Index used by the BEFORE INSERT trigger to efficiently delete stale rows. */
         index("gemini_file_uploads_uploaded_at_idx").on(table.uploadedAt),
     ],

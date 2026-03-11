@@ -8,13 +8,7 @@ import {
     SystemMessage,
     ToolMessage,
 } from "@langchain/core/messages";
-import {
-    Command,
-    END,
-    MessagesAnnotation,
-    START,
-    StateGraph,
-} from "@langchain/langgraph";
+import { Command, END, MessagesAnnotation, START, StateGraph } from "@langchain/langgraph";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
 import type { GeminiFileRefreshService } from "../../../application/GeminiFileRefreshService.ts";
@@ -25,23 +19,14 @@ import type { IModelProvider } from "../../../application/ports/IModelProvider.t
 import type { OnStatusUpdate } from "../../../application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../../application/types/AgentStatus.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
-import {
-    AllFreeKeysExhaustedError,
-    AppError,
-} from "../../../domain/errors/AppError.ts";
+import { AllFreeKeysExhaustedError, AppError } from "../../../domain/errors/AppError.ts";
 import type { GeminiApiKey } from "../../../domain/message/GeminiApiKey.ts";
 import type { DiscordMessage } from "../../../domain/message/Message.ts";
 import type { AppConfig } from "../../config/config.ts";
 import { filterHistoryForInlineSize } from "../inlineAttachmentFilter.ts";
 import { is429Error } from "../is429Error.ts";
-import {
-    GENERAL_SYSTEM_PROMPT,
-    type GeneralModel,
-} from "../models/generalModel.ts";
-import {
-    SEARCH_SYSTEM_PROMPT,
-    type SearchModel,
-} from "../models/searchModel.ts";
+import { GENERAL_SYSTEM_PROMPT, type GeneralModel } from "../models/generalModel.ts";
+import { SEARCH_SYSTEM_PROMPT, type SearchModel } from "../models/searchModel.ts";
 import type { TriageModel } from "../models/triageModel.ts";
 import { TRIAGE_SYSTEM_PROMPT } from "../models/triageModel.ts";
 import type { GetVideoTranscriptionTool } from "../tools/getVideoTranscriptionTool.ts";
@@ -70,9 +55,7 @@ type NodeConfig = { context?: OrchestratorContext };
  * Only modifies messages whose kwargs.content is an array (structured content).
  * String content messages pass through unchanged.
  */
-function stripThoughtChunks(
-    json: Record<string, unknown>,
-): Record<string, unknown> {
+function stripThoughtChunks(json: Record<string, unknown>): Record<string, unknown> {
     // TYPE COERCION: json.kwargs is unknown in the generic record; cast to the known LangChain
     // serialization shape (kwargs is always a record of named constructor arguments).
     const kwargs = json.kwargs as Record<string, unknown> | undefined;
@@ -85,12 +68,7 @@ function stripThoughtChunks(
             // each element is a structured content part (object with at least a type field).
             content: (kwargs.content as Record<string, unknown>[]).filter(
                 // TODO: this should be it's own predicate function somewhere else
-                (part) =>
-                    !(
-                        typeof part === "object" &&
-                        part !== null &&
-                        part.thought === true
-                    ),
+                (part) => !(typeof part === "object" && part !== null && part.thought === true),
             ),
         },
     };
@@ -106,10 +84,7 @@ function stripThoughtChunks(
  *   valid — logged as warnings and reconstructed.
  * - Completely unknown types log a warning and throw an {@link AppError}.
  */
-function deserializeMessage(
-    json: Record<string, unknown>,
-    logger: Logger,
-): BaseMessage {
+function deserializeMessage(json: Record<string, unknown>, logger: Logger): BaseMessage {
     // TYPE COERCION: json.id is unknown; per LangChain's serialization format it is a string[]
     // representing the module path (e.g. ["langchain_core", "messages", "HumanMessage"]).
     const className = (json.id as string[]).at(-1);
@@ -125,47 +100,22 @@ function deserializeMessage(
         case "ToolMessage":
             // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
             // ToolMessage's strict constructor union type; double cast through unknown is required.
-            return new ToolMessage(
-                kwargs as unknown as ConstructorParameters<
-                    typeof ToolMessage
-                >[0],
-            );
+            return new ToolMessage(kwargs as unknown as ConstructorParameters<typeof ToolMessage>[0]);
         case "ChatMessage":
-            logger.warn(
-                { className },
-                "Unexpected message type in history chain",
-            );
+            logger.warn({ className }, "Unexpected message type in history chain");
             // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
             // ChatMessage's strict constructor union type; double cast through unknown is required.
-            return new ChatMessage(
-                kwargs as unknown as ConstructorParameters<
-                    typeof ChatMessage
-                >[0],
-            );
+            return new ChatMessage(kwargs as unknown as ConstructorParameters<typeof ChatMessage>[0]);
         case "FunctionMessage":
-            logger.warn(
-                { className },
-                "Unexpected message type in history chain",
-            );
+            logger.warn({ className }, "Unexpected message type in history chain");
             // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
             // FunctionMessage's strict constructor union type; double cast through unknown is required.
-            return new FunctionMessage(
-                kwargs as unknown as ConstructorParameters<
-                    typeof FunctionMessage
-                >[0],
-            );
+            return new FunctionMessage(kwargs as unknown as ConstructorParameters<typeof FunctionMessage>[0]);
         case "RemoveMessage":
-            logger.warn(
-                { className },
-                "Unexpected message type in history chain",
-            );
+            logger.warn({ className }, "Unexpected message type in history chain");
             // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
             // RemoveMessage's strict constructor union type; double cast through unknown is required.
-            return new RemoveMessage(
-                kwargs as unknown as ConstructorParameters<
-                    typeof RemoveMessage
-                >[0],
-            );
+            return new RemoveMessage(kwargs as unknown as ConstructorParameters<typeof RemoveMessage>[0]);
         case "SystemMessage": {
             logger.error(
                 { className },
@@ -181,10 +131,7 @@ function deserializeMessage(
         }
         default:
             logger.warn({ className }, "Unknown message type in history chain");
-            throw new AppError(
-                "UNKNOWN_MESSAGE_TYPE",
-                `Cannot deserialize unknown message type: ${className}`,
-            );
+            throw new AppError("UNKNOWN_MESSAGE_TYPE", `Cannot deserialize unknown message type: ${className}`);
     }
 }
 
@@ -211,9 +158,7 @@ export function dbMessagesToLangchain(
 ): BaseMessage[] {
     return records.flatMap((r) =>
         r.langchainMessages.map((json) => {
-            const prepared = filterThoughtChunks
-                ? stripThoughtChunks(json)
-                : json;
+            const prepared = filterThoughtChunks ? stripThoughtChunks(json) : json;
             return deserializeMessage(prepared, logger);
         }),
     );
@@ -363,21 +308,13 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 )) as { messages: BaseMessage[] };
 
                 // Everything after the initial seed is "new" — generated during this turn
-                const newMessages = result.messages.slice(
-                    initialMessages.length,
-                );
+                const newMessages = result.messages.slice(initialMessages.length);
                 const lastMessage = result.messages.at(-1);
                 if (!lastMessage) {
-                    throw new AppError(
-                        "ORCHESTRATOR_NO_RESPONSE",
-                        "Graph produced no messages",
-                    );
+                    throw new AppError("ORCHESTRATOR_NO_RESPONSE", "Graph produced no messages");
                 }
 
-                span.setAttribute(
-                    "agent.new_messages_count",
-                    newMessages.length,
-                );
+                span.setAttribute("agent.new_messages_count", newMessages.length);
                 return { content: extractContent(lastMessage), newMessages };
             },
         );
@@ -415,11 +352,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             async (span) => {
                 let lastErr: unknown;
 
-                for (
-                    let attempt = 0;
-                    attempt < this.freeKeyProvider.keyCount;
-                    attempt++
-                ) {
+                for (let attempt = 0; attempt < this.freeKeyProvider.keyCount; attempt++) {
                     // Capture the current key before invoking. Because multiple requests
                     // can run concurrently, the cursor may have already been advanced by
                     // another request between when we threw and when we check. Reading
@@ -430,19 +363,12 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                         // Refresh Gemini file uploads for this specific API key before invoking
                         const refreshed =
                             this.geminiFileRefreshService && refetcher
-                                ? await this.geminiFileRefreshService.refreshHistory(
-                                      messages,
-                                      refetcher,
-                                      key.id,
-                                  )
+                                ? await this.geminiFileRefreshService.refreshHistory(messages, refetcher, key.id)
                                 : messages;
 
                         const filtered =
                             this.attachmentMode === "inline"
-                                ? filterHistoryForInlineSize(
-                                      refreshed,
-                                      this.maxInlineBytes,
-                                  )
+                                ? filterHistoryForInlineSize(refreshed, this.maxInlineBytes)
                                 : refreshed;
 
                         const result = await getModel(key).invoke(filtered);
@@ -499,19 +425,12 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             async () => {
                 const refreshed =
                     this.geminiFileRefreshService && refetcher
-                        ? await this.geminiFileRefreshService.refreshHistory(
-                              messages,
-                              refetcher,
-                              this.paidApiKey.id,
-                          )
+                        ? await this.geminiFileRefreshService.refreshHistory(messages, refetcher, this.paidApiKey.id)
                         : messages;
 
                 const filtered =
                     this.attachmentMode === "inline"
-                        ? filterHistoryForInlineSize(
-                              refreshed,
-                              this.maxInlineBytes,
-                          )
+                        ? filterHistoryForInlineSize(refreshed, this.maxInlineBytes)
                         : refreshed;
 
                 return model.invoke(filtered);
@@ -527,10 +446,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * without being added to graph state — they are invisible in persisted history.
      */
     private buildGraph() {
-        let graph = new StateGraph(
-            MessagesAnnotation,
-            OrchestratorContextSchema,
-        )
+        let graph = new StateGraph(MessagesAnnotation, OrchestratorContextSchema)
             .addNode("triage", this.triageNode.bind(this), {
                 ends: ["executeTool", "general", "search"],
             })
@@ -559,79 +475,62 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * Routing sentinels (route_to_search / route_to_general) are intentionally NOT added
      * to messages state to prevent context bloat in future turns.
      */
-    private async triageNode(
-        state: GraphState,
-        config: NodeConfig,
-    ): Promise<Command> {
-        return Sentry.startSpan(
-            { name: "Triage node", op: "agent.node.triage" },
-            async (span) => {
-                config.context?.onStatusUpdate?.({
-                    type: AgentStatusType.TRIAGE,
-                });
-                const messages: BaseMessage[] = [
-                    new SystemMessage(TRIAGE_SYSTEM_PROMPT),
-                    ...state.messages,
-                ];
+    private async triageNode(state: GraphState, config: NodeConfig): Promise<Command> {
+        return Sentry.startSpan({ name: "Triage node", op: "agent.node.triage" }, async (span) => {
+            config.context?.onStatusUpdate?.({
+                type: AgentStatusType.TRIAGE,
+            });
+            const messages: BaseMessage[] = [new SystemMessage(TRIAGE_SYSTEM_PROMPT), ...state.messages];
 
-                const triageResponse = await this.invokeWithFreeKeyRotation(
-                    this.triageProvider.get.bind(this.triageProvider),
-                    messages,
-                    config.context?.attachmentRefetcher,
-                );
+            const triageResponse = await this.invokeWithFreeKeyRotation(
+                this.triageProvider.get.bind(this.triageProvider),
+                messages,
+                config.context?.attachmentRefetcher,
+            );
 
-                // TODO: we should check if there are more than 1 tool calls and add a log warning
-                const toolCall = triageResponse.tool_calls?.[0];
+            // TODO: we should check if there are more than 1 tool calls and add a log warning
+            const toolCall = triageResponse.tool_calls?.[0];
 
-                if (!toolCall) {
-                    this.logger.info(
-                        "Triage made no tool call, routing to general agent",
-                    );
-                    span.setAttribute("agent.triage_route", "general");
+            if (!toolCall) {
+                this.logger.info("Triage made no tool call, routing to general agent");
+                span.setAttribute("agent.triage_route", "general");
+                return new Command({ goto: "general" });
+            }
+
+            this.logger.info({ toolName: toolCall.name }, "Triage selected route");
+            span.setAttribute("agent.triage_route", toolCall.name);
+
+            switch (toolCall.name) {
+                case "get_website":
+                case "get_video_transcription": {
+                    // Real tool call: add triage AIMessage to state so the ToolMessage
+                    // created in executeToolNode has a valid tool_call_id in history.
+                    //
+                    // Workaround for a bug in @langchain/google's legacy message converter:
+                    // convertLegacyContentMessageToGeminiContent looks up the AIMessage by
+                    // tool_call_id, then reads aiMessage.name (not the individual tool_call.name)
+                    // when building functionResponse.name — so it always produces "unknown".
+                    // Setting name on the AIMessage here makes the lookup return the correct name.
+                    triageResponse.name = toolCall.name;
+                    return new Command({
+                        goto: "executeTool",
+                        update: { messages: [triageResponse] },
+                    });
+                }
+
+                case "route_to_search":
+                    // Routing sentinel: do NOT add triage message to state
+                    return new Command({ goto: "search" });
+
+                case "route_to_general":
+                    // Routing sentinel: do NOT add triage message to state
                     return new Command({ goto: "general" });
-                }
 
-                this.logger.info(
-                    { toolName: toolCall.name },
-                    "Triage selected route",
-                );
-                span.setAttribute("agent.triage_route", toolCall.name);
-
-                switch (toolCall.name) {
-                    case "get_website":
-                    case "get_video_transcription": {
-                        // Real tool call: add triage AIMessage to state so the ToolMessage
-                        // created in executeToolNode has a valid tool_call_id in history.
-                        //
-                        // Workaround for a bug in @langchain/google's legacy message converter:
-                        // convertLegacyContentMessageToGeminiContent looks up the AIMessage by
-                        // tool_call_id, then reads aiMessage.name (not the individual tool_call.name)
-                        // when building functionResponse.name — so it always produces "unknown".
-                        // Setting name on the AIMessage here makes the lookup return the correct name.
-                        triageResponse.name = toolCall.name;
-                        return new Command({
-                            goto: "executeTool",
-                            update: { messages: [triageResponse] },
-                        });
-                    }
-
-                    case "route_to_search":
-                        // Routing sentinel: do NOT add triage message to state
-                        return new Command({ goto: "search" });
-
-                    case "route_to_general":
-                        // Routing sentinel: do NOT add triage message to state
-                        return new Command({ goto: "general" });
-
-                    default:
-                        this.logger.warn(
-                            { toolName: toolCall.name },
-                            "Unknown triage tool, falling back to general",
-                        );
-                        return new Command({ goto: "general" });
-                }
-            },
-        );
+                default:
+                    this.logger.warn({ toolName: toolCall.name }, "Unknown triage tool, falling back to general");
+                    return new Command({ goto: "general" });
+            }
+        });
     }
 
     /**
@@ -640,53 +539,40 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * Reads the last message (the triage AIMessage with tool_calls) to determine which
      * tool to run and with what arguments. Always routes to the general node via static edge.
      */
-    private async executeToolNode(
-        state: GraphState,
-        config: NodeConfig,
-    ): Promise<{ messages: BaseMessage[] }> {
-        return Sentry.startSpan(
-            { name: "Execute tool node", op: "agent.node.execute_tool" },
-            async (span) => {
-                config.context?.onStatusUpdate?.({
-                    type: AgentStatusType.FETCHING_CONTENT,
-                });
-                const lastMsg = state.messages.at(-1);
-                const toolCall =
-                    lastMsg instanceof AIMessage
-                        ? lastMsg.tool_calls?.[0]
-                        : undefined;
+    private async executeToolNode(state: GraphState, config: NodeConfig): Promise<{ messages: BaseMessage[] }> {
+        return Sentry.startSpan({ name: "Execute tool node", op: "agent.node.execute_tool" }, async (span) => {
+            config.context?.onStatusUpdate?.({
+                type: AgentStatusType.FETCHING_CONTENT,
+            });
+            const lastMsg = state.messages.at(-1);
+            const toolCall = lastMsg instanceof AIMessage ? lastMsg.tool_calls?.[0] : undefined;
 
-                if (!toolCall) {
-                    throw new AppError(
-                        "ORCHESTRATOR_MISSING_TOOL_CALL",
-                        "executeToolNode reached without a tool call in state",
-                    );
-                }
+            if (!toolCall) {
+                throw new AppError(
+                    "ORCHESTRATOR_MISSING_TOOL_CALL",
+                    "executeToolNode reached without a tool call in state",
+                );
+            }
 
-                span.setAttribute("agent.tool_name", toolCall.name);
+            span.setAttribute("agent.tool_name", toolCall.name);
 
-                let toolResult: string;
-                // TYPE COERCION: LangChain tool_calls args are typed as Record<string, unknown>;
-                // the Zod schema on each tool guarantees the urls: string[] shape at parse time.
-                if (toolCall.name === "get_website") {
-                    toolResult = await this.getWebsiteTool.invoke(
-                        toolCall.args as { urls: string[] },
-                    );
-                } else {
-                    toolResult = await this.getVideoTranscriptionTool.invoke(
-                        toolCall.args as { urls: string[] },
-                    );
-                }
+            let toolResult: string;
+            // TYPE COERCION: LangChain tool_calls args are typed as Record<string, unknown>;
+            // the Zod schema on each tool guarantees the urls: string[] shape at parse time.
+            if (toolCall.name === "get_website") {
+                toolResult = await this.getWebsiteTool.invoke(toolCall.args as { urls: string[] });
+            } else {
+                toolResult = await this.getVideoTranscriptionTool.invoke(toolCall.args as { urls: string[] });
+            }
 
-                const toolMessage = new ToolMessage({
-                    content: toolResult,
-                    name: toolCall.name,
-                    tool_call_id: toolCall.id ?? "",
-                });
+            const toolMessage = new ToolMessage({
+                content: toolResult,
+                name: toolCall.name,
+                tool_call_id: toolCall.id ?? "",
+            });
 
-                return { messages: [toolMessage] };
-            },
-        );
+            return { messages: [toolMessage] };
+        });
     }
 
     /**
@@ -696,71 +582,53 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * instruction prompt to focus the model on the retrieved content. This extra
      * HumanMessage is passed transiently to the model and is NOT stored in state.
      */
-    private async generalNode(
-        state: GraphState,
-        config: NodeConfig,
-    ): Promise<{ messages: BaseMessage[] }> {
-        return Sentry.startSpan(
-            { name: "General agent node", op: "agent.node.general" },
-            async (span) => {
-                config.context?.onStatusUpdate?.({
-                    type: AgentStatusType.GENERATING,
-                });
-                const lastMsg = state.messages.at(-1);
-                const hasToolResult = lastMsg instanceof ToolMessage;
+    private async generalNode(state: GraphState, config: NodeConfig): Promise<{ messages: BaseMessage[] }> {
+        return Sentry.startSpan({ name: "General agent node", op: "agent.node.general" }, async (span) => {
+            config.context?.onStatusUpdate?.({
+                type: AgentStatusType.GENERATING,
+            });
+            const lastMsg = state.messages.at(-1);
+            const hasToolResult = lastMsg instanceof ToolMessage;
 
-                span.setAttribute("agent.has_tool_result", hasToolResult);
+            span.setAttribute("agent.has_tool_result", hasToolResult);
 
-                const invokeMessages: BaseMessage[] = [
-                    new SystemMessage(GENERAL_SYSTEM_PROMPT),
-                    ...state.messages,
-                ];
+            const invokeMessages: BaseMessage[] = [new SystemMessage(GENERAL_SYSTEM_PROMPT), ...state.messages];
 
-                if (hasToolResult) {
-                    // Transient instruction: not added to state, only to the invoke call
-                    invokeMessages.push(
-                        new HumanMessage(
-                            "Based on the retrieved content above, please answer the original question. " +
-                                "Keep your response under 1500 characters.",
-                        ),
-                    );
-                }
-
-                const response = await this.invokeWithFreeKeyRotation(
-                    this.generalProvider.get.bind(this.generalProvider),
-                    invokeMessages,
-                    config.context?.attachmentRefetcher,
+            if (hasToolResult) {
+                // Transient instruction: not added to state, only to the invoke call
+                invokeMessages.push(
+                    new HumanMessage(
+                        "Based on the retrieved content above, please answer the original question. " +
+                            "Keep your response under 1500 characters.",
+                    ),
                 );
-                return { messages: [response] };
-            },
-        );
+            }
+
+            const response = await this.invokeWithFreeKeyRotation(
+                this.generalProvider.get.bind(this.generalProvider),
+                invokeMessages,
+                config.context?.attachmentRefetcher,
+            );
+            return { messages: [response] };
+        });
     }
 
     /**
      * Search agent node: generates an answer using the Google-Search-grounded model.
      * Always uses the paid API key — Google Search grounding is a paid-only feature.
      */
-    private async searchNode(
-        state: GraphState,
-        config: NodeConfig,
-    ): Promise<{ messages: BaseMessage[] }> {
-        return Sentry.startSpan(
-            { name: "Search agent node", op: "agent.node.search" },
-            async () => {
-                config.context?.onStatusUpdate?.({
-                    type: AgentStatusType.SEARCHING,
-                });
-                const messages: BaseMessage[] = [
-                    new SystemMessage(SEARCH_SYSTEM_PROMPT),
-                    ...state.messages,
-                ];
-                const response = await this.invokePaidModelWithMiddleware(
-                    this.searchProvider.get(this.paidApiKey),
-                    messages,
-                    config.context?.attachmentRefetcher,
-                );
-                return { messages: [response] };
-            },
-        );
+    private async searchNode(state: GraphState, config: NodeConfig): Promise<{ messages: BaseMessage[] }> {
+        return Sentry.startSpan({ name: "Search agent node", op: "agent.node.search" }, async () => {
+            config.context?.onStatusUpdate?.({
+                type: AgentStatusType.SEARCHING,
+            });
+            const messages: BaseMessage[] = [new SystemMessage(SEARCH_SYSTEM_PROMPT), ...state.messages];
+            const response = await this.invokePaidModelWithMiddleware(
+                this.searchProvider.get(this.paidApiKey),
+                messages,
+                config.context?.attachmentRefetcher,
+            );
+            return { messages: [response] };
+        });
     }
 }

@@ -9,33 +9,27 @@ import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
  * Sentinel tool that signals routing to the search agent.
  * The triage model calls this when the user's question needs up-to-date information.
  */
-const routeToSearchTool = tool(
-    async () => JSON.stringify({ route: "search" }),
-    {
-        name: "route_to_search",
-        description:
-            "Route to a search-capable agent. Use this when the question requires " +
-            "up-to-date information, current events, recent news, live data, or " +
-            "niche topics where web search would significantly improve accuracy.",
-        schema: z.object({}),
-    },
-);
+const routeToSearchTool = tool(async () => JSON.stringify({ route: "search" }), {
+    name: "route_to_search",
+    description:
+        "Route to a search-capable agent. Use this when the question requires " +
+        "up-to-date information, current events, recent news, live data, or " +
+        "niche topics where web search would significantly improve accuracy.",
+    schema: z.object({}),
+});
 
 /**
  * Sentinel tool that signals routing to the general-purpose agent.
  * Used for everything that doesn't need websites, video transcriptions, or search.
  */
-const routeToGeneralTool = tool(
-    async () => JSON.stringify({ route: "general" }),
-    {
-        name: "route_to_general",
-        description:
-            "Route to the general-purpose agent for all other questions: " +
-            "creative writing, coding, math, general knowledge, explanations, " +
-            "and anything that doesn't require real-time data or external content.",
-        schema: z.object({}),
-    },
-);
+const routeToGeneralTool = tool(async () => JSON.stringify({ route: "general" }), {
+    name: "route_to_general",
+    description:
+        "Route to the general-purpose agent for all other questions: " +
+        "creative writing, coding, math, general knowledge, explanations, " +
+        "and anything that doesn't require real-time data or external content.",
+    schema: z.object({}),
+});
 
 /**
  * System prompt for the triage agent.
@@ -83,9 +77,7 @@ export function createTriageModel({
 }: TriageAgentDeps) {
     // automatic Sentry instrumentation doesn't work in Bun
     const sentryCallback =
-        process.versions.bun && process.env.SENTRY_INITIALIZED
-            ? [Sentry.createLangChainCallbackHandler()]
-            : undefined;
+        process.versions.bun && process.env.SENTRY_INITIALIZED ? [Sentry.createLangChainCallbackHandler()] : undefined;
 
     const llm = new ChatGoogle({
         model: modelName,
@@ -97,12 +89,7 @@ export function createTriageModel({
         callbacks: sentryCallback,
     });
 
-    const tools = [
-        getWebsiteTool,
-        getVideoTranscriptionTool,
-        routeToSearchTool,
-        routeToGeneralTool,
-    ];
+    const tools = [getWebsiteTool, getVideoTranscriptionTool, routeToSearchTool, routeToGeneralTool];
     return llm.bindTools(tools);
 }
 

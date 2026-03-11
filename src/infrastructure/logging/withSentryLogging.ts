@@ -2,14 +2,7 @@ import { logger as SentryLogger } from "@sentry/bun";
 import type { Logger } from "pino";
 
 /** Pino log-level method names that map 1-to-1 to Sentry logger methods. */
-const LOG_LEVELS = [
-    "trace",
-    "debug",
-    "info",
-    "warn",
-    "error",
-    "fatal",
-] as const;
+const LOG_LEVELS = ["trace", "debug", "info", "warn", "error", "fatal"] as const;
 type LogLevel = (typeof LOG_LEVELS)[number];
 
 /**
@@ -58,10 +51,7 @@ export function withSentryLogging(pinoLogger: Logger): Logger {
                         // TYPE COERCION: Pino accepts any object as bindings; Sentry
                         // expects Record<string, string | number | boolean>. The values
                         // in Pino bindings are typically primitives in our codebase.
-                        SentryLogger[level](
-                            msg,
-                            first as Record<string, string | number | boolean>,
-                        );
+                        SentryLogger[level](msg, first as Record<string, string | number | boolean>);
                     }
                 };
             }

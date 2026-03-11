@@ -1,20 +1,8 @@
-import {
-    afterAll,
-    afterEach,
-    beforeAll,
-    describe,
-    expect,
-    test,
-} from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { sql } from "drizzle-orm";
 import pino from "pino";
 import { createDb } from "../../../src/infrastructure/db/connection.ts";
-import {
-    geminiApiKeys,
-    geminiFiles,
-    geminiFileUploads,
-    messages,
-} from "../../../src/infrastructure/db/schema.ts";
+import { geminiApiKeys, geminiFiles, geminiFileUploads, messages } from "../../../src/infrastructure/db/schema.ts";
 
 /**
  * Integration tests for the `gemini_file_uploads_stale_cleanup` trigger.
@@ -35,9 +23,7 @@ import {
  *   - DATABASE_URL env var set to the test DB connection string
  */
 
-const TEST_DB_URL =
-    process.env.DATABASE_URL ??
-    "postgresql://genie_test:genie_test@localhost:5433/genie_test";
+const TEST_DB_URL = process.env.DATABASE_URL ?? "postgresql://genie_test:genie_test@localhost:5433/genie_test";
 
 const testLogger = pino({ level: "silent" });
 
@@ -55,17 +41,13 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-    await (
-        db as unknown as { $client: { end?: () => Promise<void> } }
-    ).$client?.end?.();
+    await (db as unknown as { $client: { end?: () => Promise<void> } }).$client?.end?.();
 });
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /** Inserts a messages row so gemini_files FK is satisfied. */
-async function insertTestMessage(
-    discordMessageId = "trigger-test-msg",
-): Promise<string> {
+async function insertTestMessage(discordMessageId = "trigger-test-msg"): Promise<string> {
     await db.insert(messages).values({
         discordMessageId,
         repliesToDiscordId: null,
@@ -80,10 +62,7 @@ async function insertTestMessage(
 
 /** Inserts a gemini_api_keys row and returns its UUID. */
 async function insertTestApiKey(apiKey = "trigger-test-key"): Promise<string> {
-    const [row] = await db
-        .insert(geminiApiKeys)
-        .values({ apiKey, isPaid: false })
-        .returning();
+    const [row] = await db.insert(geminiApiKeys).values({ apiKey, isPaid: false }).returning();
     if (!row) throw new Error("Failed to insert test API key");
     return row.id;
 }
@@ -92,10 +71,7 @@ async function insertTestApiKey(apiKey = "trigger-test-key"): Promise<string> {
  * Inserts a gemini_files row and returns its UUID.
  * `messageDiscordId` must already exist in the messages table.
  */
-async function insertTestFile(
-    originalGeminiUrl: string,
-    messageDiscordId = "trigger-test-msg",
-): Promise<string> {
+async function insertTestFile(originalGeminiUrl: string, messageDiscordId = "trigger-test-msg"): Promise<string> {
     const [row] = await db
         .insert(geminiFiles)
         .values({
@@ -133,8 +109,7 @@ describe("gemini_file_uploads_stale_cleanup trigger", () => {
             geminiFileId: staleFileId,
             apiKeyId,
             geminiFileName: "files/stale-uuid",
-            geminiUrl:
-                "https://generativelanguage.googleapis.com/v1beta/files/stale-uuid",
+            geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/stale-uuid",
             uploadedAt: staleUploadedAt,
         });
 
@@ -150,8 +125,7 @@ describe("gemini_file_uploads_stale_cleanup trigger", () => {
             geminiFileId: freshFileId,
             apiKeyId,
             geminiFileName: "files/fresh-uuid",
-            geminiUrl:
-                "https://generativelanguage.googleapis.com/v1beta/files/fresh-uuid",
+            geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/fresh-uuid",
             uploadedAt: new Date(),
         });
 
@@ -180,8 +154,7 @@ describe("gemini_file_uploads_stale_cleanup trigger", () => {
             geminiFileId: recentFileId,
             apiKeyId,
             geminiFileName: "files/recent-uuid",
-            geminiUrl:
-                "https://generativelanguage.googleapis.com/v1beta/files/recent-uuid",
+            geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/recent-uuid",
             uploadedAt: recentUploadedAt,
         });
 
@@ -190,8 +163,7 @@ describe("gemini_file_uploads_stale_cleanup trigger", () => {
             geminiFileId: freshFileId,
             apiKeyId,
             geminiFileName: "files/another-uuid",
-            geminiUrl:
-                "https://generativelanguage.googleapis.com/v1beta/files/another-uuid",
+            geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/another-uuid",
             uploadedAt: new Date(),
         });
 
@@ -232,16 +204,14 @@ describe("gemini_file_uploads_stale_cleanup trigger", () => {
                 geminiFileId: staleFile1Id,
                 apiKeyId: apiKeyId1,
                 geminiFileName: "files/stale-multi-1-uuid",
-                geminiUrl:
-                    "https://generativelanguage.googleapis.com/v1beta/files/stale-multi-1-uuid",
+                geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/stale-multi-1-uuid",
                 uploadedAt: staleTime,
             },
             {
                 geminiFileId: staleFile2Id,
                 apiKeyId: apiKeyId2,
                 geminiFileName: "files/stale-multi-2-uuid",
-                geminiUrl:
-                    "https://generativelanguage.googleapis.com/v1beta/files/stale-multi-2-uuid",
+                geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/stale-multi-2-uuid",
                 uploadedAt: staleTime,
             },
         ]);
@@ -255,8 +225,7 @@ describe("gemini_file_uploads_stale_cleanup trigger", () => {
             geminiFileId: freshFileId,
             apiKeyId: freshApiKeyId,
             geminiFileName: "files/fresh-multi-uuid",
-            geminiUrl:
-                "https://generativelanguage.googleapis.com/v1beta/files/fresh-multi-uuid",
+            geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/fresh-multi-uuid",
             uploadedAt: new Date(),
         });
 

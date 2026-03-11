@@ -21,9 +21,7 @@ import { AppError } from "../../domain/errors/AppError.ts";
 export class FetchAttachmentDownloader implements IAttachmentDownloader {
     constructor(private readonly logger: Logger) {}
 
-    async download(
-        attachment: DiscordAttachmentInfo,
-    ): Promise<DownloadedAttachment> {
+    async download(attachment: DiscordAttachmentInfo): Promise<DownloadedAttachment> {
         return Sentry.startSpan(
             {
                 name: "Download Discord attachment (inline)",
@@ -35,10 +33,7 @@ export class FetchAttachmentDownloader implements IAttachmentDownloader {
             },
             async (span) => {
                 const buffer = await this.fetchWithFallback(attachment);
-                const mimeType =
-                    buffer.mimeType ??
-                    attachment.contentType ??
-                    "application/octet-stream";
+                const mimeType = buffer.mimeType ?? attachment.contentType ?? "application/octet-stream";
 
                 span.setAttribute("attachment.mime_type", mimeType);
 
@@ -88,15 +83,10 @@ export class FetchAttachmentDownloader implements IAttachmentDownloader {
     }
 
     // TODO: needs AbortSignal to support timeouts with default timeout of 5 seconds, should only timeout on the fetch request (until ok) not the body reading, since large files may take a while to download but we don't want to wait indefinitely for a stalled response
-    private async fetchUrl(
-        url: string,
-    ): Promise<{ bytes: ArrayBuffer; mimeType: string | null }> {
+    private async fetchUrl(url: string): Promise<{ bytes: ArrayBuffer; mimeType: string | null }> {
         const response = await fetch(url);
         if (!response.ok) {
-            throw new AppError(
-                "ATTACHMENT_DOWNLOAD_FAILED",
-                `HTTP ${response.status} fetching attachment from ${url}`,
-            );
+            throw new AppError("ATTACHMENT_DOWNLOAD_FAILED", `HTTP ${response.status} fetching attachment from ${url}`);
         }
         const bytes = await response.arrayBuffer();
         // Strip parameters (e.g. "image/jpeg; charset=utf-8") to get the base type

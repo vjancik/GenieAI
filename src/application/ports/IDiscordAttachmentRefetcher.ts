@@ -22,8 +22,5 @@ export interface IDiscordAttachmentRefetcher {
      * @param messageDiscordId - Discord snowflake of the message to fetch
      * @param attachmentId - Discord snowflake of the specific attachment
      */
-    fetchAttachment(
-        messageDiscordId: string,
-        attachmentId: string,
-    ): Promise<DiscordAttachmentInfo | null>;
+    fetchAttachment(messageDiscordId: string, attachmentId: string): Promise<DiscordAttachmentInfo | null>;
 }

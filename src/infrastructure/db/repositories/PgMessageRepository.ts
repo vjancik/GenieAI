@@ -34,9 +34,7 @@ function buildInsertMessageStmt(db: Db) {
  * reducing per-call planning overhead.
  */
 export class PgMessageRepository implements IMessageRepository {
-    private readonly stmtInsertMessage: ReturnType<
-        typeof buildInsertMessageStmt
-    >;
+    private readonly stmtInsertMessage: ReturnType<typeof buildInsertMessageStmt>;
 
     constructor(
         private readonly db: Db,
@@ -45,9 +43,7 @@ export class PgMessageRepository implements IMessageRepository {
         this.stmtInsertMessage = buildInsertMessageStmt(db);
     }
 
-    async save(
-        msg: Omit<DiscordMessage, "id" | "createdAt">,
-    ): Promise<DiscordMessage> {
+    async save(msg: Omit<DiscordMessage, "id" | "createdAt">): Promise<DiscordMessage> {
         return Sentry.startSpan(
             {
                 name: "Save message to database",
@@ -134,19 +130,14 @@ export class PgMessageRepository implements IMessageRepository {
 
                     span.setAttribute("db.result_count", rows.length);
 
-                    this.logger.debug(
-                        { startDiscordMessageId, chainLength: rows.length },
-                        "Fetched message chain",
-                    );
+                    this.logger.debug({ startDiscordMessageId, chainLength: rows.length }, "Fetched message chain");
 
                     // TYPE COERCION: Drizzle's db.execute() returns Record<string, unknown>[] for raw SQL —
                     // column types cannot be inferred statically, so each field is asserted from the known schema.
                     return rows.map((row) => ({
                         id: row.id as string,
                         discordMessageId: row.discord_message_id as string,
-                        repliesToDiscordId:
-                            (row.replies_to_discord_id as string | null) ??
-                            null,
+                        repliesToDiscordId: (row.replies_to_discord_id as string | null) ?? null,
                         channelId: row.channel_id as string,
                         guildId: (row.guild_id as string | null) ?? null,
                         role: row.role as DiscordMessage["role"],
@@ -154,8 +145,7 @@ export class PgMessageRepository implements IMessageRepository {
                         // pre-parsed JS value or a raw JSON string — handle both cases defensively.
                         // TYPE COERCION: the parsed value's shape matches DiscordMessage["langchainMessages"]
                         // by construction (it was stored from BaseMessage.toJSON()), but TS cannot verify it.
-                        langchainMessages: (typeof row.langchain_messages ===
-                        "string"
+                        langchainMessages: (typeof row.langchain_messages === "string"
                             ? JSON.parse(row.langchain_messages)
                             : row.langchain_messages) as DiscordMessage["langchainMessages"],
                         createdAt: row.created_at as Date,
@@ -163,10 +153,7 @@ export class PgMessageRepository implements IMessageRepository {
                 } catch (err) {
                     if (err instanceof DatabaseError) throw err;
                     Sentry.captureException(err);
-                    throw new DatabaseError(
-                        "Failed to fetch message chain",
-                        err,
-                    );
+                    throw new DatabaseError("Failed to fetch message chain", err);
                 }
             },
         );

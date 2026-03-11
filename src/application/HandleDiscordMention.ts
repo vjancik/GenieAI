@@ -7,10 +7,7 @@ import type { GeminiFile } from "../domain/message/GeminiFile.ts";
 import type { IMessageRepository } from "../domain/message/IMessageRepository.ts";
 import type { AppConfig } from "./config/AppConfig.ts";
 import type { IAgentOrchestrator } from "./ports/IAgentOrchestrator.ts";
-import type {
-    DiscordAttachmentInfo,
-    IAttachmentDownloader,
-} from "./ports/IAttachmentDownloader.ts";
+import type { DiscordAttachmentInfo, IAttachmentDownloader } from "./ports/IAttachmentDownloader.ts";
 import type { IDiscordAttachmentRefetcher } from "./ports/IDiscordAttachmentRefetcher.ts";
 import type { IDiskAttachmentDownloader } from "./ports/IDiskAttachmentDownloader.ts";
 import type { IGeminiFileRepository } from "./ports/IGeminiFileRepository.ts";
@@ -108,31 +105,22 @@ export class HandleDiscordMention {
                         "discord.message_id": params.discordMessageId,
                         "app.attachment_count": params.attachments.length,
                         "app.attachment_mode": this.attachmentMode,
-                        "app.has_reply_chain":
-                            params.referencedMessageId !== null,
+                        "app.has_reply_chain": params.referencedMessageId !== null,
                     },
                 },
                 async (span) => {
                     if (this.attachmentMode === "inline") {
                         // Guard: reject if total attachment size exceeds the configured limit
                         if (params.attachments.length > 0) {
-                            const totalBytes = params.attachments.reduce(
-                                (sum, a) => sum + a.size,
-                                0,
-                            );
+                            const totalBytes = params.attachments.reduce((sum, a) => sum + a.size, 0);
                             if (totalBytes > this.maxInlineBytes) {
-                                const limitMb =
-                                    this.maxInlineBytes / (1024 * 1024);
-                                const actualMb = (
-                                    totalBytes /
-                                    (1024 * 1024)
-                                ).toFixed(1);
+                                const limitMb = this.maxInlineBytes / (1024 * 1024);
+                                const actualMb = (totalBytes / (1024 * 1024)).toFixed(1);
                                 this.logger.warn(
                                     {
                                         totalBytes,
                                         maxBytes: this.maxInlineBytes,
-                                        discordMessageId:
-                                            params.discordMessageId,
+                                        discordMessageId: params.discordMessageId,
                                     },
                                     "Attachment size exceeds limit — rejecting",
                                 );
@@ -147,9 +135,7 @@ export class HandleDiscordMention {
                     // Fetch existing reply chain if this message is a reply
                     const dbHistory =
                         params.referencedMessageId !== null
-                            ? await this.messageRepo.fetchChain(
-                                  params.referencedMessageId,
-                              )
+                            ? await this.messageRepo.fetchChain(params.referencedMessageId)
                             : [];
 
                     const history = this.orchestrator.buildHistory(dbHistory);
@@ -170,13 +156,12 @@ export class HandleDiscordMention {
                     // Build the human message — multimodal if attachments are present.
                     // In upload mode this also returns pending gemini file records that must
                     // be saved AFTER the user's message row exists (FK constraint).
-                    const { humanMsg, pendingRecords } =
-                        await this.buildHumanMessage(
-                            params.discordMessageId,
-                            params.userContent,
-                            params.attachments,
-                            params.onStatusUpdate,
-                        );
+                    const { humanMsg, pendingRecords } = await this.buildHumanMessage(
+                        params.discordMessageId,
+                        params.userContent,
+                        params.attachments,
+                        params.onStatusUpdate,
+                    );
 
                     // Persist the user's message first so gemini_files FK is satisfied.
                     await this.messageRepo.save({
@@ -188,12 +173,7 @@ export class HandleDiscordMention {
                         // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
                         // which is incompatible with our DB schema's Record<string, unknown>. Double cast
                         // through unknown bridges the gap — the serialized shape IS a plain JSON object.
-                        langchainMessages: [
-                            humanMsg.toJSON() as unknown as Record<
-                                string,
-                                unknown
-                            >,
-                        ],
+                        langchainMessages: [humanMsg.toJSON() as unknown as Record<string, unknown>],
                     });
 
                     // Two-phase save for each uploaded attachment:
@@ -206,13 +186,9 @@ export class HandleDiscordMention {
                             );
                         }
                         const { geminiFileRepo, geminiFileUploader } = this;
-                        for (const {
-                            fileAnchor,
-                            uploadData,
-                        } of pendingRecords) {
+                        for (const { fileAnchor, uploadData } of pendingRecords) {
                             // TODO: we might have to delete these files in a catch clause if the handler fails as the originalUrl will never get persisted to langchainMessages and this record will never be selected
-                            const savedFile =
-                                await geminiFileRepo.saveFile(fileAnchor);
+                            const savedFile = await geminiFileRepo.saveFile(fileAnchor);
                             await geminiFileRepo.upsertUpload({
                                 geminiFileId: savedFile.id,
                                 apiKeyId: geminiFileUploader.apiKeyId,
@@ -223,26 +199,21 @@ export class HandleDiscordMention {
 
                     // Generate the AI response; the orchestrator handles Gemini file refresh internally
                     // per key attempt, threaded via attachmentRefetcher in context.
-                    const { content, newMessages } =
-                        await this.orchestrator.process(
-                            history,
-                            humanMsg,
-                            params.onStatusUpdate,
-                            params.attachmentRefetcher,
-                        );
+                    const { content, newMessages } = await this.orchestrator.process(
+                        history,
+                        humanMsg,
+                        params.onStatusUpdate,
+                        params.attachmentRefetcher,
+                    );
 
                     return { response: content, newMessages };
                 },
             );
         } catch (err) {
-            this.logger.error(
-                { err, discordMessageId: params.discordMessageId },
-                "Failed to process mention",
-            );
+            this.logger.error({ err, discordMessageId: params.discordMessageId }, "Failed to process mention");
             Sentry.captureException(err);
             return {
-                response:
-                    "Sorry, I encountered an error processing your request.",
+                response: "Sorry, I encountered an error processing your request.",
                 newMessages: [],
             };
         }
@@ -287,9 +258,7 @@ export class HandleDiscordMention {
                     // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
                     // which is incompatible with our DB schema's Record<string, unknown>. Double cast
                     // through unknown bridges the gap — the serialized shape IS a plain JSON object.
-                    langchainMessages: params.newMessages.map(
-                        (m) => m.toJSON() as unknown as Record<string, unknown>,
-                    ),
+                    langchainMessages: params.newMessages.map((m) => m.toJSON() as unknown as Record<string, unknown>),
                 });
 
                 this.logger.debug(
@@ -332,17 +301,10 @@ export class HandleDiscordMention {
         onStatusUpdate?.({ type: AgentStatusType.DOWNLOADING_ATTACHMENTS });
 
         if (this.attachmentMode === "upload") {
-            return this.buildUploadModeMessage(
-                discordMessageId,
-                userContent,
-                attachments,
-            );
+            return this.buildUploadModeMessage(discordMessageId, userContent, attachments);
         }
 
-        const humanMsg = await this.buildInlineModeMessage(
-            userContent,
-            attachments,
-        );
+        const humanMsg = await this.buildInlineModeMessage(userContent, attachments);
         return { humanMsg, pendingRecords: [] };
     }
 
@@ -361,11 +323,7 @@ export class HandleDiscordMention {
             },
             async () => {
                 const downloaded = await Promise.all(
-                    attachments.map(
-                        this.attachmentDownloader.download.bind(
-                            this.attachmentDownloader,
-                        ),
-                    ),
+                    attachments.map(this.attachmentDownloader.download.bind(this.attachmentDownloader)),
                 );
 
                 this.logger.debug(
@@ -384,12 +342,9 @@ export class HandleDiscordMention {
                 // blocks and is silently dropped from the Gemini contents array.
                 // The legacy path handles { type: "media" } correctly via isMessageContentMedia.
                 const contentParts: Array<
-                    | { type: "text"; text: string }
-                    | { type: "media"; mimeType: string; data: string }
+                    { type: "text"; text: string } | { type: "media"; mimeType: string; data: string }
                 > = [
-                    ...(userContent
-                        ? [{ type: "text" as const, text: userContent }]
-                        : []),
+                    ...(userContent ? [{ type: "text" as const, text: userContent }] : []),
                     ...downloaded.map((d) => ({
                         type: "media" as const,
                         mimeType: d.mimeType,
@@ -427,9 +382,7 @@ export class HandleDiscordMention {
             },
             async () => {
                 if (!this.diskDownloader || !this.geminiFileUploader) {
-                    throw new Error(
-                        "Upload mode dependencies not injected into HandleDiscordMention",
-                    );
+                    throw new Error("Upload mode dependencies not injected into HandleDiscordMention");
                 }
 
                 // Legacy LangChain media format for file references — uses fileUri instead of data.
@@ -443,16 +396,9 @@ export class HandleDiscordMention {
                 const pendingRecords: PendingGeminiRecord[] = [];
 
                 for (const attachment of attachments) {
-                    const tempPath = join(
-                        UPLOAD_TEMP_DIR,
-                        `${Bun.randomUUIDv7()}-${attachment.name}`,
-                    );
+                    const tempPath = join(UPLOAD_TEMP_DIR, `${Bun.randomUUIDv7()}-${attachment.name}`);
                     try {
-                        const mimeType =
-                            await this.diskDownloader.downloadToFile(
-                                attachment,
-                                tempPath,
-                            );
+                        const mimeType = await this.diskDownloader.downloadToFile(attachment, tempPath);
 
                         const fileName = `files/${Bun.randomUUIDv7()}`;
                         const uploaded = await this.geminiFileUploader.upload(
@@ -495,23 +441,14 @@ export class HandleDiscordMention {
                         });
                     } finally {
                         await unlink(tempPath).catch((err) => {
-                            this.logger.warn(
-                                { tempPath, err },
-                                "Failed to delete temp file after Gemini upload",
-                            );
+                            this.logger.warn({ tempPath, err }, "Failed to delete temp file after Gemini upload");
                         });
                     }
                 }
 
                 const contentParts: Array<
-                    | { type: "text"; text: string }
-                    | { type: "media"; mimeType: string; fileUri: string }
-                > = [
-                    ...(userContent
-                        ? [{ type: "text" as const, text: userContent }]
-                        : []),
-                    ...uploadedParts,
-                ];
+                    { type: "text"; text: string } | { type: "media"; mimeType: string; fileUri: string }
+                > = [...(userContent ? [{ type: "text" as const, text: userContent }] : []), ...uploadedParts];
 
                 return {
                     humanMsg: new HumanMessage({ content: contentParts }),

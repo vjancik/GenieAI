@@ -20,21 +20,15 @@ describe("is429Error", () => {
         });
 
         test("detects '429' in error.message", () => {
-            expect(
-                is429Error(new Error("Request failed with status 429")),
-            ).toBe(true);
+            expect(is429Error(new Error("Request failed with status 429"))).toBe(true);
         });
 
         test("detects 'RESOURCE_EXHAUSTED' in error.message (case-insensitive)", () => {
-            expect(is429Error(new Error("resource_exhausted quota"))).toBe(
-                true,
-            );
+            expect(is429Error(new Error("resource_exhausted quota"))).toBe(true);
         });
 
         test("detects numeric 429 in error.status", () => {
-            expect(is429Error({ status: 429, message: "Rate limited" })).toBe(
-                true,
-            );
+            expect(is429Error({ status: 429, message: "Rate limited" })).toBe(true);
         });
 
         test("detects numeric 429 in error.statusCode", () => {

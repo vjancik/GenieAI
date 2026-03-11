@@ -13,8 +13,7 @@ export const AgentStatusType = {
     SEARCHING: "SEARCHING",
 } as const;
 
-export type AgentStatusType =
-    (typeof AgentStatusType)[keyof typeof AgentStatusType];
+export type AgentStatusType = (typeof AgentStatusType)[keyof typeof AgentStatusType];
 
 /**
  * Payload emitted when the agent transitions into a new processing phase.

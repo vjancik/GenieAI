@@ -43,10 +43,7 @@ describe("GeminiApiKeySyncService.sync", () => {
         const repo = makeRepo();
         const service = new GeminiApiKeySyncService(repo, testLogger);
 
-        const { freeKeys, paidKey } = await service.sync(
-            ["free-key-1", "free-key-2"],
-            "paid-key",
-        );
+        const { freeKeys, paidKey } = await service.sync(["free-key-1", "free-key-2"], "paid-key");
 
         expect(freeKeys).toHaveLength(2);
         expect(freeKeys[0]?.apiKey).toBe("free-key-1");
@@ -63,11 +60,7 @@ describe("GeminiApiKeySyncService.sync", () => {
 
         await service.sync(["free-key-1", "free-key-2"], "paid-key");
 
-        expect(repo.deactivateNotIn).toHaveBeenCalledWith([
-            "free-key-1",
-            "free-key-2",
-            "paid-key",
-        ]);
+        expect(repo.deactivateNotIn).toHaveBeenCalledWith(["free-key-1", "free-key-2", "paid-key"]);
         expect(repo.deactivateNotIn).toHaveBeenCalledTimes(1);
     });
 
@@ -75,19 +68,13 @@ describe("GeminiApiKeySyncService.sync", () => {
         const repo = makeRepo();
         const service = new GeminiApiKeySyncService(repo, testLogger);
 
-        const { freeKeys, paidKey } = await service.sync(
-            ["only-free"],
-            "paid-key",
-        );
+        const { freeKeys, paidKey } = await service.sync(["only-free"], "paid-key");
 
         expect(freeKeys).toHaveLength(1);
         expect(freeKeys[0]?.apiKey).toBe("only-free");
         expect(paidKey.apiKey).toBe("paid-key");
         expect(repo.upsert).toHaveBeenCalledTimes(2);
-        expect(repo.deactivateNotIn).toHaveBeenCalledWith([
-            "only-free",
-            "paid-key",
-        ]);
+        expect(repo.deactivateNotIn).toHaveBeenCalledWith(["only-free", "paid-key"]);
     });
 
     test("upserts before deactivating, ensuring keys are not orphaned prematurely", async () => {
@@ -107,9 +94,7 @@ describe("GeminiApiKeySyncService.sync", () => {
 
         // All upserts must precede deactivateNotIn
         const deactivateIdx = callOrder.indexOf("deactivateNotIn");
-        const upsertIdxs = callOrder
-            .map((e, i) => (e.startsWith("upsert:") ? i : -1))
-            .filter((i) => i !== -1);
+        const upsertIdxs = callOrder.map((e, i) => (e.startsWith("upsert:") ? i : -1)).filter((i) => i !== -1);
         for (const upsertIdx of upsertIdxs) {
             expect(upsertIdx).toBeLessThan(deactivateIdx);
         }

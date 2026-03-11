@@ -1,11 +1,4 @@
-import {
-    afterAll,
-    afterEach,
-    beforeAll,
-    describe,
-    expect,
-    test,
-} from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { load } from "@langchain/core/load";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { sql } from "drizzle-orm";
@@ -25,9 +18,7 @@ import { PgMessageRepository } from "../../../src/infrastructure/db/repositories
  * The test DATABASE_URL defaults to the test DB if not set externally.
  */
 
-const TEST_DB_URL =
-    process.env.DATABASE_URL ??
-    "postgresql://genie_test:genie_test@localhost:5433/genie_test";
+const TEST_DB_URL = process.env.DATABASE_URL ?? "postgresql://genie_test:genie_test@localhost:5433/genie_test";
 
 const testLogger = pino({ level: "silent" });
 
@@ -46,9 +37,7 @@ afterEach(async () => {
 
 afterAll(async () => {
     // Close the Bun SQL connection
-    await (
-        db as unknown as { $client: { end?: () => Promise<void> } }
-    ).$client?.end?.();
+    await (db as unknown as { $client: { end?: () => Promise<void> } }).$client?.end?.();
 });
 
 /** Helper: build a minimal save payload */
@@ -62,9 +51,7 @@ function messagePayload(
         channelId: "ch-001",
         guildId: "guild-001",
         role: "human",
-        langchainMessages: [
-            defaultMsg.toJSON() as unknown as Record<string, unknown>,
-        ],
+        langchainMessages: [defaultMsg.toJSON() as unknown as Record<string, unknown>],
         ...overrides,
     };
 }
@@ -73,9 +60,7 @@ describe("PgMessageRepository.save", () => {
     test("saves a message and returns it with id and createdAt", async () => {
         const humanMsg = new HumanMessage("Hello!");
         const payload = messagePayload({
-            langchainMessages: [
-                humanMsg.toJSON() as unknown as Record<string, unknown>,
-            ],
+            langchainMessages: [humanMsg.toJSON() as unknown as Record<string, unknown>],
         });
         const saved = await repo.save(payload);
 
@@ -101,9 +86,7 @@ describe("PgMessageRepository.save", () => {
     });
 
     test("saves message with a repliesToDiscordId reference", async () => {
-        const root = await repo.save(
-            messagePayload({ discordMessageId: "root-001" }),
-        );
+        const root = await repo.save(messagePayload({ discordMessageId: "root-001" }));
         const child = await repo.save(
             messagePayload({
                 discordMessageId: "child-001",
@@ -121,9 +104,7 @@ describe("PgMessageRepository.fetchChain", () => {
     });
 
     test("returns single message for chain with no parents", async () => {
-        const _saved = await repo.save(
-            messagePayload({ discordMessageId: "single-001" }),
-        );
+        const _saved = await repo.save(messagePayload({ discordMessageId: "single-001" }));
 
         const chain = await repo.fetchChain("single-001");
 
@@ -140,9 +121,7 @@ describe("PgMessageRepository.fetchChain", () => {
             messagePayload({
                 discordMessageId: "chain2-root",
                 role: "human",
-                langchainMessages: [
-                    humanMsg.toJSON() as unknown as Record<string, unknown>,
-                ],
+                langchainMessages: [humanMsg.toJSON() as unknown as Record<string, unknown>],
             }),
         );
 
@@ -154,9 +133,7 @@ describe("PgMessageRepository.fetchChain", () => {
                 discordMessageId: "chain2-child",
                 repliesToDiscordId: root.discordMessageId,
                 role: "assistant",
-                langchainMessages: [
-                    aiMsg.toJSON() as unknown as Record<string, unknown>,
-                ],
+                langchainMessages: [aiMsg.toJSON() as unknown as Record<string, unknown>],
             }),
         );
 
@@ -179,12 +156,12 @@ describe("PgMessageRepository.fetchChain", () => {
          * fetchChain(msg4) should walk: msg4 → msg3 → msg2 → msg1
          * and return them chronologically: msg1, msg2, msg3, msg4
          */
-        const [id1, id2, id3, id4] = [
-            "chain4-1",
-            "chain4-2",
-            "chain4-3",
-            "chain4-4",
-        ] as [string, string, string, string];
+        const [id1, id2, id3, id4] = ["chain4-1", "chain4-2", "chain4-3", "chain4-4"] as [
+            string,
+            string,
+            string,
+            string,
+        ];
         const ids = [id1, id2, id3, id4];
 
         await repo.save(
@@ -253,10 +230,7 @@ describe("PgMessageRepository.fetchChain", () => {
         const chain = await repo.fetchChain("sub-B");
 
         expect(chain).toHaveLength(2);
-        expect(chain.map((m) => m.discordMessageId)).toEqual([
-            "sub-A",
-            "sub-B",
-        ]);
+        expect(chain.map((m) => m.discordMessageId)).toEqual(["sub-A", "sub-B"]);
     });
 
     test("preserves langchainMessages JSON round-trip correctly for a single message", async () => {
@@ -264,9 +238,7 @@ describe("PgMessageRepository.fetchChain", () => {
         const saved = await repo.save(
             messagePayload({
                 discordMessageId: "json-001",
-                langchainMessages: [
-                    originalMsg.toJSON() as unknown as Record<string, unknown>,
-                ],
+                langchainMessages: [originalMsg.toJSON() as unknown as Record<string, unknown>],
             }),
         );
 
@@ -276,13 +248,9 @@ describe("PgMessageRepository.fetchChain", () => {
         expect(chain[0]?.langchainMessages).toHaveLength(1);
 
         // Verify the stored JSON reconstructs to the correct LangChain class
-        const reconstructed = await load(
-            JSON.stringify(chain[0]?.langchainMessages[0]),
-        );
+        const reconstructed = await load(JSON.stringify(chain[0]?.langchainMessages[0]));
         expect(reconstructed).toBeInstanceOf(HumanMessage);
-        expect((reconstructed as HumanMessage).content).toBe(
-            "Hello, round-trip!",
-        );
+        expect((reconstructed as HumanMessage).content).toBe("Hello, round-trip!");
     });
 
     test("preserves multiple langchainMessages per record (e.g. triage + tool + final)", async () => {
@@ -304,12 +272,8 @@ describe("PgMessageRepository.fetchChain", () => {
 
         expect(chain[0]?.langchainMessages).toHaveLength(2);
 
-        const first = await load(
-            JSON.stringify(chain[0]?.langchainMessages[0]),
-        );
-        const second = await load(
-            JSON.stringify(chain[0]?.langchainMessages[1]),
-        );
+        const first = await load(JSON.stringify(chain[0]?.langchainMessages[0]));
+        const second = await load(JSON.stringify(chain[0]?.langchainMessages[1]));
         expect(first).toBeInstanceOf(AIMessage);
         expect((first as AIMessage).content).toBe("triage response");
         expect(second).toBeInstanceOf(AIMessage);

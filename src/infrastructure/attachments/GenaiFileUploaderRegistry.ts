@@ -40,22 +40,12 @@ export class GenaiFileUploaderRegistry implements IGeminiFileUploaderRegistry {
 
         const apiKey = this.keyMap.get(apiKeyId);
         if (!apiKey) {
-            throw new AppError(
-                "UPLOADER_NOT_FOUND",
-                `No uploader registered for apiKeyId: ${apiKeyId}`,
-            );
+            throw new AppError("UPLOADER_NOT_FOUND", `No uploader registered for apiKeyId: ${apiKeyId}`);
         }
 
-        const uploader = new GenaiFileUploader(
-            apiKey,
-            apiKeyId,
-            this.logger.child({ apiKeyId }),
-        );
+        const uploader = new GenaiFileUploader(apiKey, apiKeyId, this.logger.child({ apiKeyId }));
         this.cache.set(apiKeyId, uploader);
-        this.logger.debug(
-            { apiKeyId },
-            "Constructed new GenaiFileUploader for API key",
-        );
+        this.logger.debug({ apiKeyId }, "Constructed new GenaiFileUploader for API key");
         return uploader;
     }
 }

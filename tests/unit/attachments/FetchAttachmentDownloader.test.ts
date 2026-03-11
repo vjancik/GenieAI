@@ -16,12 +16,7 @@ const testAttachment: DiscordAttachmentInfo = {
 };
 
 /** Creates a minimal Response-like object for fetch mocking. */
-function makeResponse(
-    body: Uint8Array,
-    contentType: string | null,
-    ok = true,
-    status = 200,
-): Response {
+function makeResponse(body: Uint8Array, contentType: string | null, ok = true, status = 200): Response {
     const headers = new Headers();
     if (contentType) headers.set("content-type", contentType);
     return {
@@ -41,9 +36,7 @@ describe("FetchAttachmentDownloader", () => {
 
     test("downloads and base64-encodes content from primary URL", async () => {
         const data = new Uint8Array([1, 2, 3, 4]);
-        const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(
-            makeResponse(data, "image/jpeg"),
-        );
+        const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(makeResponse(data, "image/jpeg"));
 
         const result = await downloader.download(testAttachment);
 
@@ -73,9 +66,7 @@ describe("FetchAttachmentDownloader", () => {
     });
 
     test("falls back to Discord contentType when no Content-Type header", async () => {
-        const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(
-            makeResponse(new Uint8Array([0]), null),
-        );
+        const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(makeResponse(new Uint8Array([0]), null));
 
         const result = await downloader.download({
             ...testAttachment,
@@ -88,9 +79,7 @@ describe("FetchAttachmentDownloader", () => {
     });
 
     test("falls back to application/octet-stream when no header and no Discord contentType", async () => {
-        const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(
-            makeResponse(new Uint8Array([0]), null),
-        );
+        const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(makeResponse(new Uint8Array([0]), null));
 
         const result = await downloader.download({
             ...testAttachment,
@@ -105,18 +94,14 @@ describe("FetchAttachmentDownloader", () => {
     test("falls back to proxyURL when primary URL fails with non-ok response", async () => {
         const data = new Uint8Array([9, 8]);
         const globalFetch = spyOn(globalThis, "fetch")
-            .mockResolvedValueOnce(
-                makeResponse(new Uint8Array(), null, false, 403),
-            )
+            .mockResolvedValueOnce(makeResponse(new Uint8Array(), null, false, 403))
             .mockResolvedValueOnce(makeResponse(data, "image/jpeg"));
 
         const result = await downloader.download(testAttachment);
 
         expect(result.data).toBe(Buffer.from(data).toString("base64"));
         expect(globalFetch).toHaveBeenCalledTimes(2);
-        expect((globalFetch.mock.calls[1] as string[])[0]).toBe(
-            testAttachment.proxyURL,
-        );
+        expect((globalFetch.mock.calls[1] as string[])[0]).toBe(testAttachment.proxyURL);
 
         globalFetch.mockRestore();
     });
@@ -139,25 +124,17 @@ describe("FetchAttachmentDownloader", () => {
             .mockRejectedValueOnce(new Error("primary fail"))
             .mockRejectedValueOnce(new Error("proxy fail"));
 
-        await expect(downloader.download(testAttachment)).rejects.toThrow(
-            AppError,
-        );
+        await expect(downloader.download(testAttachment)).rejects.toThrow(AppError);
 
         globalFetch.mockRestore();
     });
 
     test("throws AppError when both URLs return non-ok responses", async () => {
         const globalFetch = spyOn(globalThis, "fetch")
-            .mockResolvedValueOnce(
-                makeResponse(new Uint8Array(), null, false, 404),
-            )
-            .mockResolvedValueOnce(
-                makeResponse(new Uint8Array(), null, false, 500),
-            );
+            .mockResolvedValueOnce(makeResponse(new Uint8Array(), null, false, 404))
+            .mockResolvedValueOnce(makeResponse(new Uint8Array(), null, false, 500));
 
-        await expect(downloader.download(testAttachment)).rejects.toThrow(
-            AppError,
-        );
+        await expect(downloader.download(testAttachment)).rejects.toThrow(AppError);
 
         globalFetch.mockRestore();
     });

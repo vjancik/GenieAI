@@ -44,12 +44,7 @@ export interface IGeminiFileUploader {
      * @throws {@link AppError} with code `GEMINI_UPLOAD_FAILED` if the upload
      *         or processing fails, or times out waiting for ACTIVE state.
      */
-    upload(
-        filePath: string,
-        fileName: string,
-        mimeType: string,
-        displayName: string,
-    ): Promise<UploadedGeminiFile>;
+    upload(filePath: string, fileName: string, mimeType: string, displayName: string): Promise<UploadedGeminiFile>;
 
     /**
      * Deletes a Gemini file by its file name.

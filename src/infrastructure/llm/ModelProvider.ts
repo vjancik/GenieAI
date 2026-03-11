@@ -1,15 +1,8 @@
 import type { IModelProvider } from "../../application/ports/IModelProvider.ts";
 import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
-import {
-    createGeneralModel,
-    type GeneralModel,
-} from "./models/generalModel.ts";
+import { createGeneralModel, type GeneralModel } from "./models/generalModel.ts";
 import { createSearchModel, type SearchModel } from "./models/searchModel.ts";
-import {
-    createTriageModel,
-    type TriageAgentDeps,
-    type TriageModel,
-} from "./models/triageModel.ts";
+import { createTriageModel, type TriageAgentDeps, type TriageModel } from "./models/triageModel.ts";
 
 /**
  * Lazy-caching model provider for the triage model.
@@ -79,10 +72,7 @@ export class SearchModelProvider implements IModelProvider<SearchModel> {
     readonly modelName: string;
     private readonly model: SearchModel;
 
-    constructor(
-        apiKey: string,
-        config: { modelName: string; includeLLMThoughts: boolean },
-    ) {
+    constructor(apiKey: string, config: { modelName: string; includeLLMThoughts: boolean }) {
         this.modelName = config.modelName;
         this.model = createSearchModel({ apiKey, ...config });
     }

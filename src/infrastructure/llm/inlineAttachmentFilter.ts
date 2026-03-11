@@ -13,9 +13,7 @@ type InlineAttachmentBlock = ContentBlock & { data: string };
  * attachment block, not a plain text block). Such blocks have a `data` field
  * containing a base64-encoded string.
  */
-function isAttachmentBlock(
-    block: ContentBlock,
-): block is InlineAttachmentBlock {
+function isAttachmentBlock(block: ContentBlock): block is InlineAttachmentBlock {
     return typeof block.data === "string";
 }
 
@@ -70,10 +68,7 @@ export function getInlineAttachmentBytes(messages: BaseMessage[]): number {
  * @param maxBytes - The inclusive upper bound for total inline attachment data
  * @returns A new array (shallow copy) with filtered HumanMessage instances where needed
  */
-export function filterHistoryForInlineSize(
-    messages: BaseMessage[],
-    maxBytes: number,
-): BaseMessage[] {
+export function filterHistoryForInlineSize(messages: BaseMessage[], maxBytes: number): BaseMessage[] {
     let totalBytes = getInlineAttachmentBytes(messages);
 
     // Fast path: already within budget
@@ -82,11 +77,7 @@ export function filterHistoryForInlineSize(
     // Work on a shallow copy so we don't mutate the caller's array
     const result: BaseMessage[] = [...messages];
 
-    for (
-        let msgIdx = 0;
-        msgIdx < result.length && totalBytes > maxBytes;
-        msgIdx++
-    ) {
+    for (let msgIdx = 0; msgIdx < result.length && totalBytes > maxBytes; msgIdx++) {
         const msg = result[msgIdx];
         // TODO: we should extend this to work on all message types
         if (!(msg instanceof HumanMessage)) continue;

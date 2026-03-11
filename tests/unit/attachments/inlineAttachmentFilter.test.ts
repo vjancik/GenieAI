@@ -58,33 +58,23 @@ describe("getInlineAttachmentBytes", () => {
     });
 
     test("accumulates across multiple messages", () => {
-        const msg1 = humanWithAttachments("a", [
-            { type: "image", data: SHORT_DATA, mimeType: "image/jpeg" },
-        ]);
-        const msg2 = humanWithAttachments("b", [
-            { type: "video", data: LONG_DATA, mimeType: "video/mp4" },
-        ]);
+        const msg1 = humanWithAttachments("a", [{ type: "image", data: SHORT_DATA, mimeType: "image/jpeg" }]);
+        const msg2 = humanWithAttachments("b", [{ type: "video", data: LONG_DATA, mimeType: "video/mp4" }]);
         expect(getInlineAttachmentBytes([msg1, msg2])).toBe(3 + 1000);
     });
 });
 
 describe("filterHistoryForInlineSize", () => {
     test("returns messages unchanged when already within budget", () => {
-        const msg = humanWithAttachments("hi", [
-            { type: "image", data: SHORT_DATA, mimeType: "image/jpeg" },
-        ]);
+        const msg = humanWithAttachments("hi", [{ type: "image", data: SHORT_DATA, mimeType: "image/jpeg" }]);
         const result = filterHistoryForInlineSize([msg], 1000);
         expect(result).toHaveLength(1);
         expect(result[0]).toBe(msg); // same reference — no copy made
     });
 
     test("strips oldest attachment block first", () => {
-        const msg1 = humanWithAttachments("first", [
-            { type: "image", data: LONG_DATA, mimeType: "image/jpeg" },
-        ]);
-        const msg2 = humanWithAttachments("second", [
-            { type: "image", data: SHORT_DATA, mimeType: "image/png" },
-        ]);
+        const msg1 = humanWithAttachments("first", [{ type: "image", data: LONG_DATA, mimeType: "image/jpeg" }]);
+        const msg2 = humanWithAttachments("second", [{ type: "image", data: SHORT_DATA, mimeType: "image/png" }]);
         // total = 1000 + 3 = 1003; limit = 10 → strip LONG_DATA first
         const result = filterHistoryForInlineSize([msg1, msg2], 10);
 
@@ -114,24 +104,18 @@ describe("filterHistoryForInlineSize", () => {
     });
 
     test("preserves text blocks when stripping attachments", () => {
-        const msg = humanWithAttachments("keep me", [
-            { type: "image", data: LONG_DATA, mimeType: "image/jpeg" },
-        ]);
+        const msg = humanWithAttachments("keep me", [{ type: "image", data: LONG_DATA, mimeType: "image/jpeg" }]);
         const result = filterHistoryForInlineSize([msg], 0);
 
         const filtered = result[0] as HumanMessage;
         const content = filtered.content as ContentBlock[];
         const textBlocks = content.filter((b) => b.type === "text");
         expect(textBlocks).toHaveLength(1);
-        expect((textBlocks[0] as { type: "text"; text: string }).text).toBe(
-            "keep me",
-        );
+        expect((textBlocks[0] as { type: "text"; text: string }).text).toBe("keep me");
     });
 
     test("does not mutate the original messages array", () => {
-        const msg = humanWithAttachments("hi", [
-            { type: "image", data: LONG_DATA, mimeType: "image/jpeg" },
-        ]);
+        const msg = humanWithAttachments("hi", [{ type: "image", data: LONG_DATA, mimeType: "image/jpeg" }]);
         const original = [msg];
         filterHistoryForInlineSize(original, 0);
 
@@ -142,12 +126,8 @@ describe("filterHistoryForInlineSize", () => {
     });
 
     test("handles all attachments stripped across multiple messages", () => {
-        const msg1 = humanWithAttachments("a", [
-            { type: "image", data: LONG_DATA, mimeType: "image/jpeg" },
-        ]);
-        const msg2 = humanWithAttachments("b", [
-            { type: "image", data: LONG_DATA, mimeType: "image/png" },
-        ]);
+        const msg1 = humanWithAttachments("a", [{ type: "image", data: LONG_DATA, mimeType: "image/jpeg" }]);
+        const msg2 = humanWithAttachments("b", [{ type: "image", data: LONG_DATA, mimeType: "image/png" }]);
         // limit = 0 → strip everything
         const result = filterHistoryForInlineSize([msg1, msg2], 0);
 

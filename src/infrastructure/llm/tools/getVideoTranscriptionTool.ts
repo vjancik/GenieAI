@@ -22,23 +22,15 @@ export function createGetVideoTranscriptionTool(logger: Logger) {
             const unique = [...new Set(urls)];
             logger.debug({ urls: unique }, "Extracting video transcriptions");
 
-            const results = await Promise.allSettled(
-                unique.map((url) => extractTranscription(url, logger)),
-            );
+            const results = await Promise.allSettled(unique.map((url) => extractTranscription(url, logger)));
 
             return results
                 .map((result, i) => {
                     if (result.status === "fulfilled") {
                         return result.value;
                     }
-                    const err =
-                        result.reason instanceof Error
-                            ? result.reason
-                            : new Error(String(result.reason));
-                    logger.warn(
-                        { url: unique[i], error: err.message },
-                        "Failed to extract transcription",
-                    );
+                    const err = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
+                    logger.warn({ url: unique[i], error: err.message }, "Failed to extract transcription");
                     return `## ${unique[i]}\n\nError: ${err.message}`;
                 })
                 .join("\n\n---\n\n");
@@ -49,10 +41,7 @@ export function createGetVideoTranscriptionTool(logger: Logger) {
                 "Extract transcriptions/subtitles from video URLs (YouTube, social media, etc.). " +
                 "Use this when the user provides URLs pointing to video content they want summarized or analyzed.",
             schema: z.object({
-                urls: z
-                    .array(z.url())
-                    .min(1)
-                    .describe("Video URLs to transcribe"),
+                urls: z.array(z.url()).min(1).describe("Video URLs to transcribe"),
             }),
         },
     );
@@ -65,10 +54,7 @@ export function createGetVideoTranscriptionTool(logger: Logger) {
  * @param url - The video URL to process
  * @param logger - Logger instance for progress tracking
  */
-async function extractTranscription(
-    url: string,
-    logger: Logger,
-): Promise<string> {
+async function extractTranscription(url: string, logger: Logger): Promise<string> {
     const tmpDir = await mkdtemp(join(tmpdir(), "genie-yt-"));
 
     try {
@@ -92,9 +78,7 @@ async function extractTranscription(
         await proc.exited;
 
         if (proc.exitCode !== 0) {
-            throw new ToolError(
-                `yt-dlp exited with code ${proc.exitCode} for URL: ${url}`,
-            );
+            throw new ToolError(`yt-dlp exited with code ${proc.exitCode} for URL: ${url}`);
         }
 
         // Locate the downloaded VTT file
@@ -152,6 +136,4 @@ export function parseVtt(vtt: string): string {
     );
 }
 
-export type GetVideoTranscriptionTool = ReturnType<
-    typeof createGetVideoTranscriptionTool
->;
+export type GetVideoTranscriptionTool = ReturnType<typeof createGetVideoTranscriptionTool>;

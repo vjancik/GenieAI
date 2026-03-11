@@ -64,9 +64,7 @@ function parseAttachmentMode(raw: string | undefined): AttachmentMode {
     const value = raw ?? "upload";
     if (value === "inline") return "inline";
     if (value === "upload") return "upload";
-    throw new ConfigError(
-        `Invalid UPLOAD_ATTACHMENT_MODE value: "${value}". Expected "inline" or "upload".`,
-    );
+    throw new ConfigError(`Invalid UPLOAD_ATTACHMENT_MODE value: "${value}". Expected "inline" or "upload".`);
 }
 
 /**
@@ -81,9 +79,7 @@ function parseFreeApiKeys(raw: string | undefined): string[] {
         .map((k) => k.trim())
         .filter((k) => k.length > 0);
     if (keys.length === 0) {
-        throw new ConfigError(
-            "GOOGLE_FREE_API_KEYS is required and must contain at least one API key",
-        );
+        throw new ConfigError("GOOGLE_FREE_API_KEYS is required and must contain at least one API key");
     }
     return keys;
 }
@@ -96,14 +92,10 @@ function parseFreeApiKeys(raw: string | undefined): string[] {
  */
 function parsePaidApiKey(raw: string | undefined): string {
     if (!raw?.trim()) {
-        throw new ConfigError(
-            "GOOGLE_PAID_API_KEY is required (paid key for Google Search grounding)",
-        );
+        throw new ConfigError("GOOGLE_PAID_API_KEY is required (paid key for Google Search grounding)");
     }
     if (raw.includes(",")) {
-        throw new ConfigError(
-            "GOOGLE_PAID_API_KEY must be a single key. For multiple keys use GOOGLE_FREE_API_KEYS.",
-        );
+        throw new ConfigError("GOOGLE_PAID_API_KEY must be a single key. For multiple keys use GOOGLE_FREE_API_KEYS.");
     }
     return raw.trim();
 }
@@ -118,9 +110,7 @@ export function loadConfig(): AppConfig {
 
     for (const key of requiredVars) {
         if (!process.env[key]) {
-            throw new ConfigError(
-                `Missing required environment variable: ${key}`,
-            );
+            throw new ConfigError(`Missing required environment variable: ${key}`);
         }
     }
 
@@ -137,11 +127,7 @@ export function loadConfig(): AppConfig {
         logLevel: process.env.LOG_LEVEL ?? "info",
         fileLog: process.env.FILE_LOG === "true",
         attachmentMode: parseAttachmentMode(process.env.UPLOAD_ATTACHMENT_MODE),
-        maxInlineAttachmentSizeMb: Number(
-            process.env.MAX_INLINE_ATTACHMENT_SZ_MB ?? "100",
-        ),
-        geminiFileStaleThresholdMinutes: Number(
-            process.env.GEMINI_FILE_STALE_THRESHOLD_MINUTES ?? "15",
-        ),
+        maxInlineAttachmentSizeMb: Number(process.env.MAX_INLINE_ATTACHMENT_SZ_MB ?? "100"),
+        geminiFileStaleThresholdMinutes: Number(process.env.GEMINI_FILE_STALE_THRESHOLD_MINUTES ?? "15"),
     };
 }

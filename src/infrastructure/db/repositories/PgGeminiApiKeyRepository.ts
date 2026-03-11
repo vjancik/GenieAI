@@ -63,9 +63,7 @@ function buildDeactivateNotInStmt(db: Db) {
  */
 export class PgGeminiApiKeyRepository implements IGeminiApiKeyRepository {
     private readonly stmtUpsertKey: ReturnType<typeof buildUpsertKeyStmt>;
-    private readonly stmtDeactivateNotIn: ReturnType<
-        typeof buildDeactivateNotInStmt
-    >;
+    private readonly stmtDeactivateNotIn: ReturnType<typeof buildDeactivateNotInStmt>;
 
     constructor(
         db: Db,
@@ -80,9 +78,7 @@ export class PgGeminiApiKeyRepository implements IGeminiApiKeyRepository {
      * The reactivation on conflict ensures a key that was previously deactivated
      * (removed from env) is treated as active again when it reappears.
      */
-    async upsert(
-        key: Pick<GeminiApiKey, "apiKey" | "isPaid">,
-    ): Promise<GeminiApiKey> {
+    async upsert(key: Pick<GeminiApiKey, "apiKey" | "isPaid">): Promise<GeminiApiKey> {
         try {
             const [result] = await this.stmtUpsertKey.execute({
                 apiKey: key.apiKey,
@@ -90,15 +86,10 @@ export class PgGeminiApiKeyRepository implements IGeminiApiKeyRepository {
             });
 
             if (!result) {
-                throw new DatabaseError(
-                    "Gemini API key upsert returned no result",
-                );
+                throw new DatabaseError("Gemini API key upsert returned no result");
             }
 
-            this.logger.debug(
-                { apiKeyId: result.id, isPaid: result.isPaid },
-                "Upserted Gemini API key",
-            );
+            this.logger.debug({ apiKeyId: result.id, isPaid: result.isPaid }, "Upserted Gemini API key");
 
             return {
                 id: result.id,
@@ -121,9 +112,7 @@ export class PgGeminiApiKeyRepository implements IGeminiApiKeyRepository {
      */
     async deactivateNotIn(apiKeys: string[]): Promise<void> {
         if (apiKeys.length === 0) {
-            this.logger.error(
-                "deactivateNotIn called with empty array — skipping to prevent full-table deactivation",
-            );
+            this.logger.error("deactivateNotIn called with empty array — skipping to prevent full-table deactivation");
             return;
         }
 
@@ -132,15 +121,9 @@ export class PgGeminiApiKeyRepository implements IGeminiApiKeyRepository {
                 keys: pgTextArray(apiKeys),
             });
 
-            this.logger.debug(
-                { activeKeyCount: apiKeys.length },
-                "Deactivated orphaned Gemini API key records",
-            );
+            this.logger.debug({ activeKeyCount: apiKeys.length }, "Deactivated orphaned Gemini API key records");
         } catch (err) {
-            throw new DatabaseError(
-                "Failed to deactivate orphaned Gemini API keys",
-                err,
-            );
+            throw new DatabaseError("Failed to deactivate orphaned Gemini API keys", err);
         }
     }
 }

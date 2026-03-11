@@ -27,9 +27,7 @@ export function createGetWebsiteTool(logger: Logger) {
                 unique.map(async (url) => {
                     const res = await fetch(url);
                     if (!res.ok) {
-                        throw new ToolError(
-                            `HTTP ${res.status} fetching ${url}`,
-                        );
+                        throw new ToolError(`HTTP ${res.status} fetching ${url}`);
                     }
                     const html = await res.text();
                     const markdown = turndown.turndown(html);
@@ -42,14 +40,8 @@ export function createGetWebsiteTool(logger: Logger) {
                     if (result.status === "fulfilled") {
                         return result.value;
                     }
-                    const err =
-                        result.reason instanceof Error
-                            ? result.reason
-                            : new Error(String(result.reason));
-                    logger.warn(
-                        { url: unique[i], error: err.message },
-                        "Failed to fetch URL",
-                    );
+                    const err = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
+                    logger.warn({ url: unique[i], error: err.message }, "Failed to fetch URL");
                     return `## ${unique[i]}\n\nError: ${err.message}`;
                 })
                 .join("\n\n---\n\n");

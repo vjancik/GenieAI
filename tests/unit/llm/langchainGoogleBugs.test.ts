@@ -26,9 +26,7 @@ import { ChatGoogle } from "@langchain/google";
  * Returns the captured JSON body. Must be called before ChatGoogle is invoked,
  * because the library resolves `fetch` at call-time from globalThis.
  */
-async function captureGenerateContentBody(
-    invoke: () => Promise<unknown>,
-): Promise<Record<string, unknown>> {
+async function captureGenerateContentBody(invoke: () => Promise<unknown>): Promise<Record<string, unknown>> {
     let captured: Record<string, unknown> | undefined;
     const originalFetch = globalThis.fetch;
 
@@ -39,20 +37,12 @@ async function captureGenerateContentBody(
         input: Parameters<typeof fetch>[0],
         init?: Parameters<typeof fetch>[1],
     ): Promise<Response> => {
-        const url =
-            input instanceof Request
-                ? input.url
-                : typeof input === "string"
-                  ? input
-                  : input.toString();
+        const url = input instanceof Request ? input.url : typeof input === "string" ? input : input.toString();
 
-        const body =
-            input instanceof Request ? await input.clone().text() : init?.body;
+        const body = input instanceof Request ? await input.clone().text() : init?.body;
 
         if (url.includes("generateContent") && body) {
-            captured = JSON.parse(
-                typeof body === "string" ? body : String(body),
-            ) as Record<string, unknown>;
+            captured = JSON.parse(typeof body === "string" ? body : String(body)) as Record<string, unknown>;
             // Throw to short-circuit — we don't need an actual API response.
             throw new Error("fetch intercepted");
         }
@@ -73,9 +63,7 @@ async function captureGenerateContentBody(
     }
 
     if (!captured) {
-        throw new Error(
-            "fetch interceptor: generateContent request was never made",
-        );
+        throw new Error("fetch interceptor: generateContent request was never made");
     }
 
     return captured;
@@ -105,40 +93,33 @@ describe("@langchain/google — HumanMessage multimodal serialization", () => {
                     {
                         type: "media",
                         mimeType: "image/png",
-                        fileUri:
-                            "https://generativelanguage.googleapis.com/v1beta/files/img-abc123",
+                        fileUri: "https://generativelanguage.googleapis.com/v1beta/files/img-abc123",
                     },
                     {
                         type: "media",
                         mimeType: "video/mp4",
-                        fileUri:
-                            "https://generativelanguage.googleapis.com/v1beta/files/vid-def456",
+                        fileUri: "https://generativelanguage.googleapis.com/v1beta/files/vid-def456",
                     },
                     {
                         type: "media",
                         mimeType: "audio/mpeg",
-                        fileUri:
-                            "https://generativelanguage.googleapis.com/v1beta/files/aud-003",
+                        fileUri: "https://generativelanguage.googleapis.com/v1beta/files/aud-003",
                     },
                     {
                         type: "media",
                         mimeType: "text/plain",
-                        fileUri:
-                            "https://generativelanguage.googleapis.com/v1beta/files/txt-004",
+                        fileUri: "https://generativelanguage.googleapis.com/v1beta/files/txt-004",
                     },
                     {
                         type: "media",
                         mimeType: "application/pdf",
-                        fileUri:
-                            "https://generativelanguage.googleapis.com/v1beta/files/pdf-005",
+                        fileUri: "https://generativelanguage.googleapis.com/v1beta/files/pdf-005",
                     },
                 ],
             }),
         ];
 
-        const body = await captureGenerateContentBody(() =>
-            model.invoke(messages),
-        );
+        const body = await captureGenerateContentBody(() => model.invoke(messages));
 
         expect(body.contents).toMatchInlineSnapshot(`
 [
@@ -238,9 +219,7 @@ describe("@langchain/google — HumanMessage multimodal serialization", () => {
             }),
         ];
 
-        const body = await captureGenerateContentBody(() =>
-            model.invoke(messages),
-        );
+        const body = await captureGenerateContentBody(() => model.invoke(messages));
 
         expect(body.contents).toMatchInlineSnapshot(`
 [
@@ -395,9 +374,7 @@ describe("@langchain/google — ToolMessage name serialization bug", () => {
         ];
         const followUp = new HumanMessage("Thanks, summarize both results.");
 
-        const body = await captureGenerateContentBody(() =>
-            model.invoke([...history, followUp]),
-        );
+        const body = await captureGenerateContentBody(() => model.invoke([...history, followUp]));
 
         // The snapshot reveals what is actually sent in the request contents.
         // BUG 1: The AIMessage's functionCall parts are entirely absent — the

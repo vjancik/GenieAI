@@ -11,9 +11,7 @@ export interface IMessageRepository {
      * @param message - Message data without auto-generated id and createdAt
      * @returns The saved message including generated id and createdAt
      */
-    save(
-        message: Omit<DiscordMessage, "id" | "createdAt">,
-    ): Promise<DiscordMessage>;
+    save(message: Omit<DiscordMessage, "id" | "createdAt">): Promise<DiscordMessage>;
 
     /**
      * Fetch the full reply chain for the given Discord message ID.

@@ -52,9 +52,7 @@ function extractGeminiUrls(message: BaseMessage): string[] {
     // widened to unknown[] so the isGeminiBlock type predicate (which takes unknown) can
     // be used in filter — TypeScript requires S extends T in Array<T>.filter<S>, and
     // FileUriContentBlock does not extend MessageContentComplex in its type system.
-    return (message.content as unknown[])
-        .filter(isGeminiBlock)
-        .map((block) => block.fileUri);
+    return (message.content as unknown[]).filter(isGeminiBlock).map((block) => block.fileUri);
 }
 
 /**
@@ -94,8 +92,7 @@ export class GeminiFileRefreshService {
     ) {
         // Gemini TTL is 48 hours; a file is stale when less than staleThreshold remains
         const geminiTtlMs = 48 * 60 * 60 * 1000;
-        this.staleThresholdMs =
-            geminiTtlMs - config.geminiFileStaleThresholdMinutes * 60 * 1000;
+        this.staleThresholdMs = geminiTtlMs - config.geminiFileStaleThresholdMinutes * 60 * 1000;
     }
 
     /**
@@ -120,8 +117,7 @@ export class GeminiFileRefreshService {
                 name: "Refresh Gemini file history",
                 op: "gemini.files.refresh_history",
                 attributes: {
-                    "gemini.file_url_count":
-                        messages.flatMap(extractGeminiUrls).length,
+                    "gemini.file_url_count": messages.flatMap(extractGeminiUrls).length,
                     "llm.api_key_id": apiKeyId,
                 },
             },
@@ -132,11 +128,7 @@ export class GeminiFileRefreshService {
 
                 // LEFT JOIN: always returns GeminiFile (discord context); upload is null if
                 // the file has never been uploaded for this key or was trigger-cleaned.
-                const fileStateMap =
-                    await this.geminiFileRepo.findWithUploadStateForKey(
-                        allGeminiUrls,
-                        apiKeyId,
-                    );
+                const fileStateMap = await this.geminiFileRepo.findWithUploadStateForKey(allGeminiUrls, apiKeyId);
 
                 // Build URL substitution map: originalUrl → new geminiUrl (or null if attachment deleted)
                 const urlSubstitutions = new Map<string, string | null>();
@@ -145,18 +137,9 @@ export class GeminiFileRefreshService {
                 for (const [originalUrl, { file, upload }] of fileStateMap) {
                     if (upload === null) {
                         // Never uploaded for this key (new key or trigger-cleaned row)
-                        const newUrl = await this.refreshOne(
-                            originalUrl,
-                            file,
-                            null,
-                            apiKeyId,
-                            refetcher,
-                        );
+                        const newUrl = await this.refreshOne(originalUrl, file, null, apiKeyId, refetcher);
                         urlSubstitutions.set(originalUrl, newUrl);
-                    } else if (
-                        now - upload.uploadedAt.getTime() >=
-                        this.staleThresholdMs
-                    ) {
+                    } else if (now - upload.uploadedAt.getTime() >= this.staleThresholdMs) {
                         // Upload exists but is approaching or past expiry
                         this.logger.info(
                             {
@@ -166,13 +149,7 @@ export class GeminiFileRefreshService {
                             },
                             "Gemini file upload is stale; refreshing",
                         );
-                        const newUrl = await this.refreshOne(
-                            originalUrl,
-                            file,
-                            upload,
-                            apiKeyId,
-                            refetcher,
-                        );
+                        const newUrl = await this.refreshOne(originalUrl, file, upload, apiKeyId, refetcher);
                         urlSubstitutions.set(originalUrl, newUrl);
                     } else if (upload.geminiUrl !== originalUrl) {
                         // Fresh upload exists but with a different URL (prior refresh updated the URL in DB
@@ -182,10 +159,7 @@ export class GeminiFileRefreshService {
                     // else: fresh upload with unchanged URL — no substitution needed
                 }
 
-                span.setAttribute(
-                    "gemini.substitutions_count",
-                    urlSubstitutions.size,
-                );
+                span.setAttribute("gemini.substitutions_count", urlSubstitutions.size);
 
                 if (urlSubstitutions.size === 0) return messages;
 
@@ -227,10 +201,7 @@ export class GeminiFileRefreshService {
             },
             async () => {
                 // Re-fetch the Discord attachment to get a fresh CDN URL
-                const attachment = await refetcher.fetchAttachment(
-                    file.messageDiscordId,
-                    file.discordAttachmentId,
-                );
+                const attachment = await refetcher.fetchAttachment(file.messageDiscordId, file.discordAttachmentId);
 
                 if (!attachment) {
                     this.logger.warn(
@@ -243,26 +214,15 @@ export class GeminiFileRefreshService {
                     return null;
                 }
 
-                const tempPath = join(
-                    TEMP_DIR,
-                    `${Bun.randomUUIDv7()}-${file.discordFilename}`,
-                );
+                const tempPath = join(TEMP_DIR, `${Bun.randomUUIDv7()}-${file.discordFilename}`);
                 try {
                     // Stream attachment to disk
-                    const mimeType = await this.diskDownloader.downloadToFile(
-                        attachment,
-                        tempPath,
-                    );
+                    const mimeType = await this.diskDownloader.downloadToFile(attachment, tempPath);
 
                     // Upload to Gemini using the uploader for this specific API key
                     const uploader = this.uploaderRegistry.get(apiKeyId);
                     const newFileName = `files/${Bun.randomUUIDv7()}`;
-                    const uploaded = await uploader.upload(
-                        tempPath,
-                        newFileName,
-                        mimeType,
-                        file.discordFilename,
-                    );
+                    const uploaded = await uploader.upload(tempPath, newFileName, mimeType, file.discordFilename);
 
                     // Delete the old Gemini file best-effort (may already be expired).
                     // Not awaited so it doesn't delay the response.
@@ -293,10 +253,7 @@ export class GeminiFileRefreshService {
                 } finally {
                     // Always clean up the temp file
                     await unlink(tempPath).catch((err) => {
-                        this.logger.warn(
-                            { tempPath, err },
-                            "Failed to delete temp file after Gemini upload",
-                        );
+                        this.logger.warn({ tempPath, err }, "Failed to delete temp file after Gemini upload");
                     });
                 }
             },
@@ -310,10 +267,7 @@ export class GeminiFileRefreshService {
      * - String substitution: replaces the `fileUri` field with the new URL.
      * - Unchanged messages are returned as-is (no new object created).
      */
-    private applySubstitutions(
-        messages: BaseMessage[],
-        substitutions: Map<string, string | null>,
-    ): BaseMessage[] {
+    private applySubstitutions(messages: BaseMessage[], substitutions: Map<string, string | null>): BaseMessage[] {
         return messages.map((msg) => {
             if (!(msg instanceof HumanMessage)) return msg;
             if (!Array.isArray(msg.content)) return msg;

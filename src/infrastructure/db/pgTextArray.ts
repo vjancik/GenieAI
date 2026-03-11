@@ -19,9 +19,7 @@ export function pgTextArray(values: string[]): {
     toJSON(): string;
 } {
     // Escape backslashes and double-quotes inside each value per the PG array literal format.
-    const serialized = `{${values
-        .map((v) => `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`)
-        .join(",")}}`;
+    const serialized = `{${values.map((v) => `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`).join(",")}}`;
     return {
         toString: () => serialized,
         toJSON: () => serialized,

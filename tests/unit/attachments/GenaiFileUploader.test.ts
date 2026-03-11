@@ -38,12 +38,9 @@ mock.module("@google/genai", () => ({
     },
 }));
 
-const { GenaiFileUploader } = await import(
-    "../../../src/infrastructure/attachments/GenaiFileUploader.ts"
-);
+const { GenaiFileUploader } = await import("../../../src/infrastructure/attachments/GenaiFileUploader.ts");
 
-const GEMINI_URI =
-    "https://generativelanguage.googleapis.com/v1beta/files/test123";
+const GEMINI_URI = "https://generativelanguage.googleapis.com/v1beta/files/test123";
 
 beforeEach(() => {
     // mockReset clears both call history AND the mockImplementationOnce queue,
@@ -67,18 +64,9 @@ beforeEach(() => {
 
 describe("GenaiFileUploader.upload", () => {
     test("returns geminiFileName and geminiUrl when file is immediately ACTIVE", async () => {
-        const uploader = new GenaiFileUploader(
-            "test-key",
-            "test-api-key-id",
-            testLogger,
-        );
+        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger);
 
-        const result = await uploader.upload(
-            "/tmp/test.png",
-            "files/test123",
-            "image/png",
-            "test.png",
-        );
+        const result = await uploader.upload("/tmp/test.png", "files/test123", "image/png", "test.png");
 
         expect(result.geminiFileName).toBe("files/test123");
         expect(result.geminiUrl).toBe(GEMINI_URI);
@@ -87,18 +75,9 @@ describe("GenaiFileUploader.upload", () => {
     });
 
     test("calls ai.files.upload with correct parameters", async () => {
-        const uploader = new GenaiFileUploader(
-            "test-key",
-            "test-api-key-id",
-            testLogger,
-        );
+        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger);
 
-        await uploader.upload(
-            "/tmp/photo.jpg",
-            "files/my-uuid",
-            "image/jpeg",
-            "photo.jpg",
-        );
+        await uploader.upload("/tmp/photo.jpg", "files/my-uuid", "image/jpeg", "photo.jpg");
 
         expect(mockFilesUpload).toHaveBeenCalledWith({
             file: "/tmp/photo.jpg",
@@ -117,20 +96,11 @@ describe("GenaiFileUploader.upload", () => {
             uri: null as unknown as string,
         }));
 
-        const uploader = new GenaiFileUploader(
-            "test-key",
-            "test-api-key-id",
-            testLogger,
-        );
+        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger);
 
-        await expect(
-            uploader.upload(
-                "/tmp/test.png",
-                "files/test123",
-                "image/png",
-                "test.png",
-            ),
-        ).rejects.toBeInstanceOf(AppError);
+        await expect(uploader.upload("/tmp/test.png", "files/test123", "image/png", "test.png")).rejects.toBeInstanceOf(
+            AppError,
+        );
     });
 
     test("throws AppError when ACTIVE file has no URI", async () => {
@@ -140,30 +110,17 @@ describe("GenaiFileUploader.upload", () => {
             uri: null as unknown as string,
         }));
 
-        const uploader = new GenaiFileUploader(
-            "test-key",
-            "test-api-key-id",
-            testLogger,
-        );
+        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger);
 
-        await expect(
-            uploader.upload(
-                "/tmp/test.png",
-                "files/test123",
-                "image/png",
-                "test.png",
-            ),
-        ).rejects.toBeInstanceOf(AppError);
+        await expect(uploader.upload("/tmp/test.png", "files/test123", "image/png", "test.png")).rejects.toBeInstanceOf(
+            AppError,
+        );
     });
 });
 
 describe("GenaiFileUploader.deleteFile", () => {
     test("calls ai.files.delete with the provided file name", async () => {
-        const uploader = new GenaiFileUploader(
-            "test-key",
-            "test-api-key-id",
-            testLogger,
-        );
+        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger);
 
         await uploader.deleteFile("files/test123");
 
@@ -175,15 +132,9 @@ describe("GenaiFileUploader.deleteFile", () => {
             throw new Error("File not found");
         });
 
-        const uploader = new GenaiFileUploader(
-            "test-key",
-            "test-api-key-id",
-            testLogger,
-        );
+        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger);
 
         // Errors are swallowed — file may have already expired
-        await expect(
-            uploader.deleteFile("files/gone"),
-        ).resolves.toBeUndefined();
+        await expect(uploader.deleteFile("files/gone")).resolves.toBeUndefined();
     });
 });

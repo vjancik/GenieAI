@@ -1,19 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { BaseMessage } from "@langchain/core/messages";
-import {
-    AIMessage,
-    ChatMessage,
-    HumanMessage,
-    SystemMessage,
-    ToolMessage,
-} from "@langchain/core/messages";
+import { AIMessage, ChatMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import pino from "pino";
 import type { AgentStatusUpdate } from "../../../src/application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
-import {
-    AllFreeKeysExhaustedError,
-    AppError,
-} from "../../../src/domain/errors/AppError.ts";
+import { AllFreeKeysExhaustedError, AppError } from "../../../src/domain/errors/AppError.ts";
 import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
 import {
     AgentOrchestrator,
@@ -25,9 +16,7 @@ const testLogger = pino({ level: "silent" });
 /** Helper to create a mock model that returns a given response */
 function makeModel(response: string) {
     return {
-        invoke: mock(
-            async (_messages: BaseMessage[]) => new AIMessage(response),
-        ),
+        invoke: mock(async (_messages: BaseMessage[]) => new AIMessage(response)),
     };
 }
 
@@ -39,10 +28,7 @@ function makeTool(result: string) {
 }
 
 /** Helper to create a triage model mock that returns a specific tool call */
-function makeTriageWithToolCall(
-    toolName: string,
-    toolArgs: Record<string, unknown> = {},
-) {
+function makeTriageWithToolCall(toolName: string, toolArgs: Record<string, unknown> = {}) {
     return {
         invoke: mock(
             async (_messages: BaseMessage[]) =>
@@ -64,10 +50,7 @@ function makeTriageWithToolCall(
 /** Helper to create a triage model mock with no tool call */
 function makeTriageWithNoToolCall() {
     return {
-        invoke: mock(
-            async (_messages: BaseMessage[]) =>
-                new AIMessage({ content: "I am confused", tool_calls: [] }),
-        ),
+        invoke: mock(async (_messages: BaseMessage[]) => new AIMessage({ content: "I am confused", tool_calls: [] })),
     };
 }
 
@@ -121,9 +104,7 @@ describe("dbMessagesToLangchain", () => {
             {
                 ...baseMsg,
                 role: "human",
-                langchainMessages: [
-                    original.toJSON() as unknown as Record<string, unknown>,
-                ],
+                langchainMessages: [original.toJSON() as unknown as Record<string, unknown>],
             },
         ];
         const result = dbMessagesToLangchain(records, testLogger);
@@ -138,9 +119,7 @@ describe("dbMessagesToLangchain", () => {
             {
                 ...baseMsg,
                 role: "assistant",
-                langchainMessages: [
-                    original.toJSON() as unknown as Record<string, unknown>,
-                ],
+                langchainMessages: [original.toJSON() as unknown as Record<string, unknown>],
             },
         ];
         const result = dbMessagesToLangchain(records, testLogger);
@@ -179,25 +158,19 @@ describe("dbMessagesToLangchain", () => {
                 ...baseMsg,
                 discordMessageId: "d1",
                 role: "human",
-                langchainMessages: [
-                    human.toJSON() as unknown as Record<string, unknown>,
-                ],
+                langchainMessages: [human.toJSON() as unknown as Record<string, unknown>],
             },
             {
                 ...baseMsg,
                 discordMessageId: "d2",
                 role: "assistant",
-                langchainMessages: [
-                    ai.toJSON() as unknown as Record<string, unknown>,
-                ],
+                langchainMessages: [ai.toJSON() as unknown as Record<string, unknown>],
             },
             {
                 ...baseMsg,
                 discordMessageId: "d3",
                 role: "human",
-                langchainMessages: [
-                    humanFollow.toJSON() as unknown as Record<string, unknown>,
-                ],
+                langchainMessages: [humanFollow.toJSON() as unknown as Record<string, unknown>],
             },
         ];
         const result = dbMessagesToLangchain(records, testLogger);
@@ -235,9 +208,7 @@ describe("dbMessagesToLangchain — constructor dispatch", () => {
     test("round-trips HumanMessage", () => {
         const original = new HumanMessage("hello");
         const result = dbMessagesToLangchain(
-            singleRecord(
-                original.toJSON() as unknown as Record<string, unknown>,
-            ),
+            singleRecord(original.toJSON() as unknown as Record<string, unknown>),
             testLogger,
         );
         expect(result[0]).toBeInstanceOf(HumanMessage);
@@ -247,9 +218,7 @@ describe("dbMessagesToLangchain — constructor dispatch", () => {
     test("round-trips AIMessage", () => {
         const original = new AIMessage("hi");
         const result = dbMessagesToLangchain(
-            singleRecord(
-                original.toJSON() as unknown as Record<string, unknown>,
-            ),
+            singleRecord(original.toJSON() as unknown as Record<string, unknown>),
             testLogger,
         );
         expect(result[0]).toBeInstanceOf(AIMessage);
@@ -262,9 +231,7 @@ describe("dbMessagesToLangchain — constructor dispatch", () => {
             tool_call_id: "call_abc",
         });
         const result = dbMessagesToLangchain(
-            singleRecord(
-                original.toJSON() as unknown as Record<string, unknown>,
-            ),
+            singleRecord(original.toJSON() as unknown as Record<string, unknown>),
             testLogger,
         );
         expect(result[0]).toBeInstanceOf(ToolMessage);
@@ -275,12 +242,7 @@ describe("dbMessagesToLangchain — constructor dispatch", () => {
     test("throws AppError for SystemMessage", () => {
         const original = new SystemMessage("system prompt");
         expect(() =>
-            dbMessagesToLangchain(
-                singleRecord(
-                    original.toJSON() as unknown as Record<string, unknown>,
-                ),
-                testLogger,
-            ),
+            dbMessagesToLangchain(singleRecord(original.toJSON() as unknown as Record<string, unknown>), testLogger),
         ).toThrow(AppError);
     });
 
@@ -291,9 +253,7 @@ describe("dbMessagesToLangchain — constructor dispatch", () => {
             id: ["langchain_core", "messages", "WeirdMessage"],
             kwargs: { content: "hi" },
         };
-        expect(() =>
-            dbMessagesToLangchain(singleRecord(unknown), testLogger),
-        ).toThrow(AppError);
+        expect(() => dbMessagesToLangchain(singleRecord(unknown), testLogger)).toThrow(AppError);
     });
 
     test("round-trips ChatMessage and logs a warning", () => {
@@ -305,9 +265,7 @@ describe("dbMessagesToLangchain — constructor dispatch", () => {
 
         const original = new ChatMessage({ content: "hi", role: "user" });
         const result = dbMessagesToLangchain(
-            singleRecord(
-                original.toJSON() as unknown as Record<string, unknown>,
-            ),
+            singleRecord(original.toJSON() as unknown as Record<string, unknown>),
             mockLogger,
         );
         expect(result[0]).toBeInstanceOf(ChatMessage);
@@ -337,9 +295,7 @@ describe("dbMessagesToLangchain — thought chunk filtering", () => {
             {
                 ...baseMsg,
                 role: "assistant",
-                langchainMessages: [
-                    msg.toJSON() as unknown as Record<string, unknown>,
-                ],
+                langchainMessages: [msg.toJSON() as unknown as Record<string, unknown>],
             },
         ];
     }
@@ -358,11 +314,7 @@ describe("dbMessagesToLangchain — thought chunk filtering", () => {
     });
 
     test("preserves thought chunks when filterThoughtChunks = false", () => {
-        const [result] = dbMessagesToLangchain(
-            thoughtRecord(),
-            testLogger,
-            false,
-        );
+        const [result] = dbMessagesToLangchain(thoughtRecord(), testLogger, false);
         const parts = result?.content as { type: string; thought?: boolean }[];
         expect(parts.some((p) => p.thought === true)).toBe(true);
         expect(parts).toHaveLength(2);
@@ -374,9 +326,7 @@ describe("dbMessagesToLangchain — thought chunk filtering", () => {
             {
                 ...baseMsg,
                 role: "human",
-                langchainMessages: [
-                    msg.toJSON() as unknown as Record<string, unknown>,
-                ],
+                langchainMessages: [msg.toJSON() as unknown as Record<string, unknown>],
             },
         ];
         const [result] = dbMessagesToLangchain(records, testLogger);
@@ -407,10 +357,7 @@ describe("Orchestrator.process", () => {
             },
         );
 
-        const result = await orchestrator.process(
-            [],
-            new HumanMessage("What happened today?"),
-        );
+        const result = await orchestrator.process([], new HumanMessage("What happened today?"));
 
         expect(searchModel.invoke).toHaveBeenCalledTimes(1);
         expect(generalModel.invoke).not.toHaveBeenCalled();
@@ -441,10 +388,7 @@ describe("Orchestrator.process", () => {
             },
         );
 
-        const result = await orchestrator.process(
-            [],
-            new HumanMessage("Tell me a joke"),
-        );
+        const result = await orchestrator.process([], new HumanMessage("Tell me a joke"));
 
         expect(generalModel.invoke).toHaveBeenCalledTimes(1);
         expect(searchModel.invoke).not.toHaveBeenCalled();
@@ -459,9 +403,7 @@ describe("Orchestrator.process", () => {
         });
         const generalModel = makeModel("summary of website");
         const searchModel = makeModel("search response");
-        const websiteTool = makeTool(
-            "## https://example.com\n\nPage content here",
-        );
+        const websiteTool = makeTool("## https://example.com\n\nPage content here");
         const videoTool = makeTool("video transcript");
 
         const orchestrator = new AgentOrchestrator(
@@ -479,10 +421,7 @@ describe("Orchestrator.process", () => {
             },
         );
 
-        const result = await orchestrator.process(
-            [],
-            new HumanMessage("Summarize https://example.com"),
-        );
+        const result = await orchestrator.process([], new HumanMessage("Summarize https://example.com"));
 
         expect(websiteTool.invoke).toHaveBeenCalledWith({
             urls: ["https://example.com"],
@@ -501,9 +440,7 @@ describe("Orchestrator.process", () => {
         const generalModel = makeModel("video summary");
         const searchModel = makeModel("search response");
         const websiteTool = makeTool("website content");
-        const videoTool = makeTool(
-            "## https://youtube.com/watch?v=abc\n\nTranscript here",
-        );
+        const videoTool = makeTool("## https://youtube.com/watch?v=abc\n\nTranscript here");
 
         const orchestrator = new AgentOrchestrator(
             asProvider(triageModel) as never,
@@ -520,10 +457,7 @@ describe("Orchestrator.process", () => {
             },
         );
 
-        const result = await orchestrator.process(
-            [],
-            new HumanMessage("Summarize this video"),
-        );
+        const result = await orchestrator.process([], new HumanMessage("Summarize this video"));
 
         expect(videoTool.invoke).toHaveBeenCalledWith({
             urls: ["https://youtube.com/watch?v=abc"],
@@ -556,10 +490,7 @@ describe("Orchestrator.process", () => {
             },
         );
 
-        const result = await orchestrator.process(
-            [],
-            new HumanMessage("Hello"),
-        );
+        const result = await orchestrator.process([], new HumanMessage("Hello"));
 
         expect(generalModel.invoke).toHaveBeenCalledTimes(1);
         expect(result.content).toBe("fallback response");
@@ -588,18 +519,11 @@ describe("Orchestrator.process", () => {
             },
         );
 
-        const history: BaseMessage[] = [
-            new HumanMessage("First message"),
-            new AIMessage("First response"),
-        ];
+        const history: BaseMessage[] = [new HumanMessage("First message"), new AIMessage("First response")];
 
-        await orchestrator.process(
-            history,
-            new HumanMessage("Follow-up question"),
-        );
+        await orchestrator.process(history, new HumanMessage("Follow-up question"));
 
-        const callArgs = (generalModel.invoke as ReturnType<typeof mock>).mock
-            .calls[0]?.[0] as BaseMessage[];
+        const callArgs = (generalModel.invoke as ReturnType<typeof mock>).mock.calls[0]?.[0] as BaseMessage[];
         expect(callArgs).toBeDefined();
         // Should include history messages in the invocation
         const contents = callArgs.map((m) => m.content);
@@ -638,10 +562,7 @@ describe("Orchestrator.process", () => {
             },
         );
 
-        const result = await orchestrator.process(
-            [],
-            new HumanMessage("Think about this"),
-        );
+        const result = await orchestrator.process([], new HumanMessage("Think about this"));
 
         // Thought chunks excluded from displayed content
         expect(result.content).toBe("The actual answer.");
@@ -673,14 +594,9 @@ describe("Orchestrator.process", () => {
         );
 
         const updates: AgentStatusUpdate[] = [];
-        await orchestrator.process([], new HumanMessage("Hello"), (u) =>
-            updates.push(u),
-        );
+        await orchestrator.process([], new HumanMessage("Hello"), (u) => updates.push(u));
 
-        expect(updates.map((u) => u.type)).toEqual([
-            AgentStatusType.TRIAGE,
-            AgentStatusType.GENERATING,
-        ]);
+        expect(updates.map((u) => u.type)).toEqual([AgentStatusType.TRIAGE, AgentStatusType.GENERATING]);
     });
 
     test("emits TRIAGE and SEARCHING status updates on search route", async () => {
@@ -706,16 +622,9 @@ describe("Orchestrator.process", () => {
         );
 
         const updates: AgentStatusUpdate[] = [];
-        await orchestrator.process(
-            [],
-            new HumanMessage("What happened today?"),
-            (u) => updates.push(u),
-        );
+        await orchestrator.process([], new HumanMessage("What happened today?"), (u) => updates.push(u));
 
-        expect(updates.map((u) => u.type)).toEqual([
-            AgentStatusType.TRIAGE,
-            AgentStatusType.SEARCHING,
-        ]);
+        expect(updates.map((u) => u.type)).toEqual([AgentStatusType.TRIAGE, AgentStatusType.SEARCHING]);
     });
 
     test("emits TRIAGE, FETCHING_CONTENT, and GENERATING status updates on tool route", async () => {
@@ -743,11 +652,7 @@ describe("Orchestrator.process", () => {
         );
 
         const updates: AgentStatusUpdate[] = [];
-        await orchestrator.process(
-            [],
-            new HumanMessage("Summarize example.com"),
-            (u) => updates.push(u),
-        );
+        await orchestrator.process([], new HumanMessage("Summarize example.com"), (u) => updates.push(u));
 
         expect(updates.map((u) => u.type)).toEqual([
             AgentStatusType.TRIAGE,
@@ -779,9 +684,7 @@ describe("Orchestrator.process", () => {
         );
 
         // Two-arg call must still work; no callback provided
-        expect(
-            orchestrator.process([], new HumanMessage("Hello")),
-        ).resolves.toBeDefined();
+        expect(orchestrator.process([], new HumanMessage("Hello"))).resolves.toBeDefined();
     });
 });
 
@@ -857,11 +760,10 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
             }),
         };
 
-        const result = await makeOrchestrator(
-            makeTriageWithNoToolCall(),
-            generalModel,
-            provider,
-        ).process([], new HumanMessage("hello"));
+        const result = await makeOrchestrator(makeTriageWithNoToolCall(), generalModel, provider).process(
+            [],
+            new HumanMessage("hello"),
+        );
 
         expect(result.content).toBe("success on second key");
         expect(provider.nextKey).toHaveBeenCalledTimes(1);
@@ -884,11 +786,10 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
             }),
         };
 
-        const result = await makeOrchestrator(
-            makeTriageWithNoToolCall(),
-            generalModel,
-            provider,
-        ).process([], new HumanMessage("hello"));
+        const result = await makeOrchestrator(makeTriageWithNoToolCall(), generalModel, provider).process(
+            [],
+            new HumanMessage("hello"),
+        );
 
         expect(result.content).toBe("success on concurrent-advanced key");
         // Cursor was already moved by the concurrent advance — nextKey() must
@@ -907,11 +808,10 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
 
         let thrown: unknown;
         try {
-            await makeOrchestrator(
-                makeTriageWithNoToolCall(),
-                generalModel,
-                provider,
-            ).process([], new HumanMessage("hello"));
+            await makeOrchestrator(makeTriageWithNoToolCall(), generalModel, provider).process(
+                [],
+                new HumanMessage("hello"),
+            );
         } catch (err) {
             thrown = err;
         }

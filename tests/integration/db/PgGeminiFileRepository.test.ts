@@ -1,11 +1,4 @@
-import {
-    afterAll,
-    afterEach,
-    beforeAll,
-    describe,
-    expect,
-    test,
-} from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { sql } from "drizzle-orm";
 import pino from "pino";
 import type { GeminiFile } from "../../../src/domain/message/GeminiFile.ts";
@@ -13,11 +6,7 @@ import type { GeminiFileUpload } from "../../../src/domain/message/GeminiFileUpl
 import { createDb } from "../../../src/infrastructure/db/connection.ts";
 import { PgGeminiApiKeyRepository } from "../../../src/infrastructure/db/repositories/PgGeminiApiKeyRepository.ts";
 import { PgGeminiFileRepository } from "../../../src/infrastructure/db/repositories/PgGeminiFileRepository.ts";
-import {
-    geminiFiles,
-    geminiFileUploads,
-    messages,
-} from "../../../src/infrastructure/db/schema.ts";
+import { geminiFiles, geminiFileUploads, messages } from "../../../src/infrastructure/db/schema.ts";
 
 /**
  * Integration tests for PgGeminiFileRepository.
@@ -33,9 +22,7 @@ import {
  * Each test group sets up prerequisite rows in beforeAll and cleans up in afterEach.
  */
 
-const TEST_DB_URL =
-    process.env.DATABASE_URL ??
-    "postgresql://genie_test:genie_test@localhost:5433/genie_test";
+const TEST_DB_URL = process.env.DATABASE_URL ?? "postgresql://genie_test:genie_test@localhost:5433/genie_test";
 
 const testLogger = pino({ level: "silent" });
 
@@ -58,9 +45,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-    await (
-        db as unknown as { $client: { end?: () => Promise<void> } }
-    ).$client?.end?.();
+    await (db as unknown as { $client: { end?: () => Promise<void> } }).$client?.end?.();
 });
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -69,9 +54,7 @@ afterAll(async () => {
  * Inserts a minimal messages row so gemini_files FK constraints are satisfied.
  * Returns the discord_message_id of the inserted row.
  */
-async function insertTestMessage(
-    discordMessageId = "test-msg-001",
-): Promise<string> {
+async function insertTestMessage(discordMessageId = "test-msg-001"): Promise<string> {
     await db.insert(messages).values({
         discordMessageId,
         repliesToDiscordId: null,
@@ -86,21 +69,15 @@ async function insertTestMessage(
 }
 
 /** Inserts a minimal gemini_api_keys row and returns its UUID. */
-async function insertTestApiKey(
-    apiKey = "test-api-key",
-    isPaid = false,
-): Promise<string> {
+async function insertTestApiKey(apiKey = "test-api-key", isPaid = false): Promise<string> {
     const record = await keyRepo.upsert({ apiKey, isPaid });
     return record.id;
 }
 
 /** Builds a minimal GeminiFile input payload (without id). */
-function filePayload(
-    overrides: Partial<Omit<GeminiFile, "id">> = {},
-): Omit<GeminiFile, "id"> {
+function filePayload(overrides: Partial<Omit<GeminiFile, "id">> = {}): Omit<GeminiFile, "id"> {
     return {
-        originalGeminiUrl:
-            "https://generativelanguage.googleapis.com/v1beta/files/test-file",
+        originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/test-file",
         discordAttachmentId: "att-001",
         discordFilename: "photo.png",
         messageDiscordId: "test-msg-001",
@@ -109,15 +86,12 @@ function filePayload(
 }
 
 /** Builds a minimal GeminiFileUpload input payload (without id). */
-function uploadPayload(
-    overrides: Partial<Omit<GeminiFileUpload, "id">> = {},
-): Omit<GeminiFileUpload, "id"> {
+function uploadPayload(overrides: Partial<Omit<GeminiFileUpload, "id">> = {}): Omit<GeminiFileUpload, "id"> {
     return {
         geminiFileId: "will-be-overridden",
         apiKeyId: "will-be-overridden",
         geminiFileName: "files/test-uuid",
-        geminiUrl:
-            "https://generativelanguage.googleapis.com/v1beta/files/test-uuid",
+        geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/test-uuid",
         uploadedAt: new Date(),
         ...overrides,
     };
@@ -161,14 +135,12 @@ describe("PgGeminiFileRepository.saveFile", () => {
 
         const f1 = await repo.saveFile(
             filePayload({
-                originalGeminiUrl:
-                    "https://generativelanguage.googleapis.com/v1beta/files/file-1",
+                originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/file-1",
             }),
         );
         const f2 = await repo.saveFile(
             filePayload({
-                originalGeminiUrl:
-                    "https://generativelanguage.googleapis.com/v1beta/files/file-2",
+                originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/file-2",
             }),
         );
 
@@ -188,10 +160,7 @@ describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
         const savedFile = await repo.saveFile(filePayload());
 
         // No upload row inserted — LEFT JOIN should yield upload: null
-        const result = await repo.findWithUploadStateForKey(
-            [savedFile.originalGeminiUrl],
-            apiKeyId,
-        );
+        const result = await repo.findWithUploadStateForKey([savedFile.originalGeminiUrl], apiKeyId);
 
         expect(result.size).toBe(1);
         const entry = result.get(savedFile.originalGeminiUrl);
@@ -211,16 +180,12 @@ describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
                 geminiFileId: savedFile.id,
                 apiKeyId,
                 geminiFileName: "files/present-uuid",
-                geminiUrl:
-                    "https://generativelanguage.googleapis.com/v1beta/files/present-uuid",
+                geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/present-uuid",
                 uploadedAt,
             }),
         );
 
-        const result = await repo.findWithUploadStateForKey(
-            [savedFile.originalGeminiUrl],
-            apiKeyId,
-        );
+        const result = await repo.findWithUploadStateForKey([savedFile.originalGeminiUrl], apiKeyId);
 
         expect(result.size).toBe(1);
         const entry = result.get(savedFile.originalGeminiUrl);
@@ -243,16 +208,12 @@ describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
                 geminiFileId: savedFile.id,
                 apiKeyId: keyId1,
                 geminiFileName: "files/key1-upload",
-                geminiUrl:
-                    "https://generativelanguage.googleapis.com/v1beta/files/key1-upload",
+                geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/key1-upload",
             }),
         );
 
         // Query for key2 — no upload should be found
-        const result = await repo.findWithUploadStateForKey(
-            [savedFile.originalGeminiUrl],
-            keyId2,
-        );
+        const result = await repo.findWithUploadStateForKey([savedFile.originalGeminiUrl], keyId2);
 
         const entry = result.get(savedFile.originalGeminiUrl);
         expect(entry?.upload).toBeNull();
@@ -260,9 +221,7 @@ describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
 
     test("returns an empty map when no gemini_files rows match the requested URLs", async () => {
         const result = await repo.findWithUploadStateForKey(
-            [
-                "https://generativelanguage.googleapis.com/v1beta/files/nonexistent",
-            ],
+            ["https://generativelanguage.googleapis.com/v1beta/files/nonexistent"],
             // any valid uuid
             "6e32a57f-6f48-411d-a4e4-e81d86cbf508",
         );
@@ -281,14 +240,12 @@ describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
 
         const file1 = await repo.saveFile(
             filePayload({
-                originalGeminiUrl:
-                    "https://generativelanguage.googleapis.com/v1beta/files/multi-1",
+                originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/multi-1",
             }),
         );
         const file2 = await repo.saveFile(
             filePayload({
-                originalGeminiUrl:
-                    "https://generativelanguage.googleapis.com/v1beta/files/multi-2",
+                originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/multi-2",
                 discordAttachmentId: "att-002",
             }),
         );
@@ -299,8 +256,7 @@ describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
                 geminiFileId: file1.id,
                 apiKeyId,
                 geminiFileName: "files/multi-1-upload",
-                geminiUrl:
-                    "https://generativelanguage.googleapis.com/v1beta/files/multi-1-upload",
+                geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/multi-1-upload",
             }),
         );
 
@@ -327,8 +283,7 @@ describe("PgGeminiFileRepository.upsertUpload", () => {
             geminiFileId: savedFile.id,
             apiKeyId,
             geminiFileName: "files/new-upload-uuid",
-            geminiUrl:
-                "https://generativelanguage.googleapis.com/v1beta/files/new-upload-uuid",
+            geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/new-upload-uuid",
         });
 
         const result = await repo.upsertUpload(payload);
@@ -337,9 +292,7 @@ describe("PgGeminiFileRepository.upsertUpload", () => {
         expect(result.geminiFileId).toBe(savedFile.id);
         expect(result.apiKeyId).toBe(apiKeyId);
         expect(result.geminiFileName).toBe("files/new-upload-uuid");
-        expect(result.geminiUrl).toBe(
-            "https://generativelanguage.googleapis.com/v1beta/files/new-upload-uuid",
-        );
+        expect(result.geminiUrl).toBe("https://generativelanguage.googleapis.com/v1beta/files/new-upload-uuid");
     });
 
     test("ON CONFLICT DO UPDATE: updates geminiUrl and uploadedAt for same (geminiFileId, apiKeyId)", async () => {
@@ -354,8 +307,7 @@ describe("PgGeminiFileRepository.upsertUpload", () => {
                 geminiFileId: savedFile.id,
                 apiKeyId,
                 geminiFileName: "files/initial-uuid",
-                geminiUrl:
-                    "https://generativelanguage.googleapis.com/v1beta/files/initial-uuid",
+                geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/initial-uuid",
                 uploadedAt: new Date(Date.now() - 1 * 60 * 60 * 1000), // 1h ago
             }),
         );
@@ -366,8 +318,7 @@ describe("PgGeminiFileRepository.upsertUpload", () => {
                 geminiFileId: savedFile.id,
                 apiKeyId,
                 geminiFileName: "files/refreshed-uuid",
-                geminiUrl:
-                    "https://generativelanguage.googleapis.com/v1beta/files/refreshed-uuid",
+                geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/refreshed-uuid",
                 uploadedAt: new Date(),
             }),
         );
@@ -376,9 +327,7 @@ describe("PgGeminiFileRepository.upsertUpload", () => {
         expect(refreshed.id).toBe(initial.id);
         // Updated fields
         expect(refreshed.geminiFileName).toBe("files/refreshed-uuid");
-        expect(refreshed.geminiUrl).toBe(
-            "https://generativelanguage.googleapis.com/v1beta/files/refreshed-uuid",
-        );
+        expect(refreshed.geminiUrl).toBe("https://generativelanguage.googleapis.com/v1beta/files/refreshed-uuid");
         expect(refreshed.uploadedAt).toBeInstanceOf(Date);
 
         // Only one row in the table
@@ -397,8 +346,7 @@ describe("PgGeminiFileRepository.upsertUpload", () => {
                 geminiFileId: savedFile.id,
                 apiKeyId: keyId1,
                 geminiFileName: "files/key-alpha-upload",
-                geminiUrl:
-                    "https://generativelanguage.googleapis.com/v1beta/files/key-alpha-upload",
+                geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/key-alpha-upload",
             }),
         );
         await repo.upsertUpload(
@@ -406,8 +354,7 @@ describe("PgGeminiFileRepository.upsertUpload", () => {
                 geminiFileId: savedFile.id,
                 apiKeyId: keyId2,
                 geminiFileName: "files/key-beta-upload",
-                geminiUrl:
-                    "https://generativelanguage.googleapis.com/v1beta/files/key-beta-upload",
+                geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/key-beta-upload",
             }),
         );
 

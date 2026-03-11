@@ -18,16 +18,10 @@ export const GENERAL_SYSTEM_PROMPT =
  * @param params.modelName - Gemini model identifier (e.g. "gemini-2.0-flash")
  * @param params.includeLLMThoughts - Whether to include thought tokens in responses
  */
-export function createGeneralModel(params: {
-    apiKey: string;
-    modelName: string;
-    includeLLMThoughts: boolean;
-}) {
+export function createGeneralModel(params: { apiKey: string; modelName: string; includeLLMThoughts: boolean }) {
     // automatic Sentry instrumentation doesn't work in Bun
     const sentryCallback =
-        process.versions.bun && process.env.SENTRY_INITIALIZED
-            ? [Sentry.createLangChainCallbackHandler()]
-            : undefined;
+        process.versions.bun && process.env.SENTRY_INITIALIZED ? [Sentry.createLangChainCallbackHandler()] : undefined;
 
     return new ChatGoogle({
         model: params.modelName,

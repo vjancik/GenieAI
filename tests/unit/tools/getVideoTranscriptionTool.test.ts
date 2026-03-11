@@ -22,8 +22,7 @@ describe("parseVtt", () => {
     });
 
     test("strips numeric cue identifiers", () => {
-        const vtt =
-            "WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.000\nHello\n\n2\n00:00:04.000 --> 00:00:06.000\nWorld";
+        const vtt = "WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.000\nHello\n\n2\n00:00:04.000 --> 00:00:06.000\nWorld";
         const result = parseVtt(vtt);
         // Should not have isolated numeric lines
         expect(result).not.toMatch(/\b1\b/);

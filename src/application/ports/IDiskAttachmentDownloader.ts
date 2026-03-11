@@ -24,8 +24,5 @@ export interface IDiskAttachmentDownloader {
      *          Discord metadata, or `"application/octet-stream"` as fallback)
      * @throws {@link AppError} with code `ATTACHMENT_DOWNLOAD_FAILED` if both URLs fail
      */
-    downloadToFile(
-        attachment: DiscordAttachmentInfo,
-        destPath: string,
-    ): Promise<string>;
+    downloadToFile(attachment: DiscordAttachmentInfo, destPath: string): Promise<string>;
 }

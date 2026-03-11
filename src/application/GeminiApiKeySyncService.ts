@@ -37,9 +37,7 @@ export class GeminiApiKeySyncService {
         // Upsert all keys — free first, then paid
         // NOTE: Multiple queries preferred to single unnest() ARRAY query on process initialization
         const freeKeyRecords = await Promise.all(
-            freeApiKeys.map((apiKey) =>
-                this.geminiApiKeyRepo.upsert({ apiKey, isPaid: false }),
-            ),
+            freeApiKeys.map((apiKey) => this.geminiApiKeyRepo.upsert({ apiKey, isPaid: false })),
         );
         const paidKeyRecord = await this.geminiApiKeyRepo.upsert({
             apiKey: paidApiKey,

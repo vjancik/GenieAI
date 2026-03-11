@@ -32,8 +32,7 @@ export function is429Error(err: unknown): boolean {
 
     // Check HTTP status code if present (e.g. HTTPError or AxiosError shapes)
     const status =
-        (err as { status?: unknown; statusCode?: unknown }).status ??
-        (err as { statusCode?: unknown }).statusCode;
+        (err as { status?: unknown; statusCode?: unknown }).status ?? (err as { statusCode?: unknown }).statusCode;
     if (status === 429) {
         return true;
     }

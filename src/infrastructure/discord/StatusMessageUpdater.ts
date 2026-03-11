@@ -64,12 +64,7 @@ export class StatusMessageUpdater {
      * @param editFn - Async function that performs the actual `message.edit(content)`
      * @param content - The new status string to display
      */
-    scheduleUpdate(
-        channelId: string,
-        messageId: string,
-        editFn: EditFn,
-        content: string,
-    ): void {
+    scheduleUpdate(channelId: string, messageId: string, editFn: EditFn, content: string): void {
         const existing = this.pendingByMessage.get(messageId);
         if (existing) {
             // Timer already scheduled — update content in-place, keep the timer as-is
@@ -112,11 +107,7 @@ export class StatusMessageUpdater {
      * Creates a setTimeout that reads the latest pending content from the map when it fires.
      * This ensures that multiple rapid updates collapse into a single edit showing the newest state.
      */
-    private createTimer(
-        channelId: string,
-        messageId: string,
-        delay: number,
-    ): ReturnType<typeof setTimeout> {
+    private createTimer(channelId: string, messageId: string, delay: number): ReturnType<typeof setTimeout> {
         return setTimeout(() => {
             const pending = this.pendingByMessage.get(messageId);
             if (!pending) return;
@@ -130,10 +121,7 @@ export class StatusMessageUpdater {
     /** Fire an edit as fire-and-forget, catching and logging any errors so they never propagate. */
     private fireEdit(messageId: string, editFn: EditFn, content: string): void {
         editFn(content).catch((err) => {
-            this.logger.warn(
-                { err, messageId },
-                "Failed to edit status message",
-            );
+            this.logger.warn({ err, messageId }, "Failed to edit status message");
         });
     }
 }

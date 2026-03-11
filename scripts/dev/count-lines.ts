@@ -86,11 +86,7 @@ function analyzeFile(filePath: string): LineStats {
         const t = line.trim();
         if (t === "") {
             blank++;
-        } else if (
-            t.startsWith("//") ||
-            t.startsWith("/*") ||
-            t.startsWith("*")
-        ) {
+        } else if (t.startsWith("//") || t.startsWith("/*") || t.startsWith("*")) {
             comment++;
         } else {
             code++;
@@ -118,9 +114,7 @@ function sumStats(filePaths: string[]): CategoryStats {
 
 // ── Collect files ────────────────────────────────────────────────────────────
 
-const allFiles = SEARCH_DIRS.flatMap((d) =>
-    collectTsFiles(join(PROJECT_ROOT, d)),
-);
+const allFiles = SEARCH_DIRS.flatMap((d) => collectTsFiles(join(PROJECT_ROOT, d)));
 const sourceFiles = allFiles.filter((f) => !f.endsWith(".test.ts"));
 const testFiles = allFiles.filter((f) => f.endsWith(".test.ts"));
 
@@ -149,17 +143,12 @@ function n(x: number): string {
     return x.toLocaleString("en-US");
 }
 
-const strRows = ROWS.map((row) =>
-    row.map((cell, i) => (i === 0 ? String(cell) : n(cell as number))),
-);
+const strRows = ROWS.map((row) => row.map((cell, i) => (i === 0 ? String(cell) : n(cell as number))));
 
 // Compute column widths from headers and data
-const widths = HEADERS.map((h, i) =>
-    Math.max(h.length, ...strRows.map((r) => (r[i] ?? "").length)),
-);
+const widths = HEADERS.map((h, i) => Math.max(h.length, ...strRows.map((r) => (r[i] ?? "").length)));
 
-const sep = (l: string, m: string, r: string) =>
-    l + widths.map((w) => "─".repeat(w + 2)).join(m) + r;
+const sep = (l: string, m: string, r: string) => l + widths.map((w) => "─".repeat(w + 2)).join(m) + r;
 
 const formatRow = (cells: string[]) =>
     `│${cells.map((c, i) => ` ${i === 0 ? c.padEnd(widths[i] ?? 0) : c.padStart(widths[i] ?? 0)} `).join("│")}│`;

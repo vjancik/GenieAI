@@ -12,8 +12,7 @@ describe("createGetWebsiteTool", () => {
         mockFetch = mock(async (_url: string) => ({
             ok: true,
             status: 200,
-            text: async () =>
-                "<html><body><h1>Hello</h1><p>World</p></body></html>",
+            text: async () => "<html><body><h1>Hello</h1><p>World</p></body></html>",
         }));
         globalThis.fetch = mockFetch as unknown as typeof fetch;
     });
@@ -23,9 +22,7 @@ describe("createGetWebsiteTool", () => {
     });
 
     test("fetches a URL and converts HTML to markdown", async () => {
-        const { createGetWebsiteTool } = await import(
-            "../../../src/infrastructure/llm/tools/getWebsiteTool.ts"
-        );
+        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
         const tool = createGetWebsiteTool(testLogger);
 
         const result = await tool.invoke({ urls: ["https://example.com"] });
@@ -38,9 +35,7 @@ describe("createGetWebsiteTool", () => {
     });
 
     test("deduplicates URLs before fetching", async () => {
-        const { createGetWebsiteTool } = await import(
-            "../../../src/infrastructure/llm/tools/getWebsiteTool.ts"
-        );
+        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
         const tool = createGetWebsiteTool(testLogger);
 
         await tool.invoke({
@@ -54,14 +49,11 @@ describe("createGetWebsiteTool", () => {
         mockFetch = mock(async (url: string) => ({
             ok: true,
             status: 200,
-            text: async () =>
-                `<html><body><p>Content from ${url}</p></body></html>`,
+            text: async () => `<html><body><p>Content from ${url}</p></body></html>`,
         }));
         globalThis.fetch = mockFetch as unknown as typeof fetch;
 
-        const { createGetWebsiteTool } = await import(
-            "../../../src/infrastructure/llm/tools/getWebsiteTool.ts"
-        );
+        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
         const tool = createGetWebsiteTool(testLogger);
 
         const result = await tool.invoke({
@@ -82,9 +74,7 @@ describe("createGetWebsiteTool", () => {
         }));
         globalThis.fetch = mockFetch as unknown as typeof fetch;
 
-        const { createGetWebsiteTool } = await import(
-            "../../../src/infrastructure/llm/tools/getWebsiteTool.ts"
-        );
+        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
         const tool = createGetWebsiteTool(testLogger);
 
         const result = await tool.invoke({ urls: ["https://bad.example.com"] });
@@ -104,15 +94,12 @@ describe("createGetWebsiteTool", () => {
             return {
                 ok: true,
                 status: 200,
-                text: async () =>
-                    "<html><body><p>Good content</p></body></html>",
+                text: async () => "<html><body><p>Good content</p></body></html>",
             };
         });
         globalThis.fetch = mockFetch as unknown as typeof fetch;
 
-        const { createGetWebsiteTool } = await import(
-            "../../../src/infrastructure/llm/tools/getWebsiteTool.ts"
-        );
+        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
         const tool = createGetWebsiteTool(testLogger);
 
         const result = await tool.invoke({

@@ -1,21 +1,9 @@
-import {
-    afterAll,
-    afterEach,
-    beforeAll,
-    describe,
-    expect,
-    test,
-} from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { sql } from "drizzle-orm";
 import pino from "pino";
 import { createDb } from "../../../src/infrastructure/db/connection.ts";
 import { PgGeminiApiKeyRepository } from "../../../src/infrastructure/db/repositories/PgGeminiApiKeyRepository.ts";
-import {
-    geminiApiKeys,
-    geminiFiles,
-    geminiFileUploads,
-    messages,
-} from "../../../src/infrastructure/db/schema.ts";
+import { geminiApiKeys, geminiFiles, geminiFileUploads, messages } from "../../../src/infrastructure/db/schema.ts";
 
 /**
  * Integration tests for PgGeminiApiKeyRepository.
@@ -25,9 +13,7 @@ import {
  *   - DATABASE_URL env var set to the test DB connection string
  */
 
-const TEST_DB_URL =
-    process.env.DATABASE_URL ??
-    "postgresql://genie_test:genie_test@localhost:5433/genie_test";
+const TEST_DB_URL = process.env.DATABASE_URL ?? "postgresql://genie_test:genie_test@localhost:5433/genie_test";
 
 const testLogger = pino({ level: "silent" });
 
@@ -46,9 +32,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-    await (
-        db as unknown as { $client: { end?: () => Promise<void> } }
-    ).$client?.end?.();
+    await (db as unknown as { $client: { end?: () => Promise<void> } }).$client?.end?.();
 });
 
 describe("PgGeminiApiKeyRepository.upsert", () => {
@@ -192,8 +176,7 @@ describe("PgGeminiApiKeyRepository.deactivateNotIn", () => {
         const [fileRow] = await db
             .insert(geminiFiles)
             .values({
-                originalGeminiUrl:
-                    "https://generativelanguage.googleapis.com/v1beta/files/deactivate-test",
+                originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/deactivate-test",
                 discordAttachmentId: "att-deactivate",
                 discordFilename: "test.png",
                 messageDiscordId: "msg-deactivate-test",
@@ -209,8 +192,7 @@ describe("PgGeminiApiKeyRepository.deactivateNotIn", () => {
             geminiFileId: fileRow.id,
             apiKeyId: key.id,
             geminiFileName: "files/deactivate-test-uuid",
-            geminiUrl:
-                "https://generativelanguage.googleapis.com/v1beta/files/deactivate-test-uuid",
+            geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/deactivate-test-uuid",
             uploadedAt: new Date(),
         });
 

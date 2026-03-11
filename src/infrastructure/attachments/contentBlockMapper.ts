@@ -7,12 +7,7 @@
  * "file" is the catch-all for any MIME type that doesn't map to a more specific type.
  * We let the model reject unsupported file types rather than pre-filtering here.
  */
-export type LangChainBlockType =
-    | "image"
-    | "video"
-    | "audio"
-    | "text-plain"
-    | "file";
+export type LangChainBlockType = "image" | "video" | "audio" | "text-plain" | "file";
 
 /**
  * Returns the LangChain content block type for a given MIME type.

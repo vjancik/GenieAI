@@ -27,11 +27,7 @@ import { PgMessageRepository } from "./infrastructure/db/repositories/PgMessageR
 import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
 import { StatusMessageUpdater } from "./infrastructure/discord/StatusMessageUpdater.ts";
 import { AgentOrchestrator } from "./infrastructure/llm/agents/geminiAgentOrchestrator.ts";
-import {
-    GeneralModelProvider,
-    SearchModelProvider,
-    TriageModelProvider,
-} from "./infrastructure/llm/ModelProvider.ts";
+import { GeneralModelProvider, SearchModelProvider, TriageModelProvider } from "./infrastructure/llm/ModelProvider.ts";
 import { RoundRobinFreeKeyProvider } from "./infrastructure/llm/RoundRobinFreeKeyProvider.ts";
 import { createGetVideoTranscriptionTool } from "./infrastructure/llm/tools/getVideoTranscriptionTool.ts";
 import { createGetWebsiteTool } from "./infrastructure/llm/tools/getWebsiteTool.ts";
@@ -46,36 +42,17 @@ logger.info("Starting GenieAI bot...");
 
 // Database
 const db = createDb(config.databaseUrl);
-const messageRepository = new PgMessageRepository(
-    db,
-    logger.child({ module: "repository" }),
-);
-const geminiApiKeyRepository = new PgGeminiApiKeyRepository(
-    db,
-    logger.child({ module: "repository:apiKey" }),
-);
-const geminiFileRepository = new PgGeminiFileRepository(
-    db,
-    logger.child({ module: "repository:gemini" }),
-);
+const messageRepository = new PgMessageRepository(db, logger.child({ module: "repository" }));
+const geminiApiKeyRepository = new PgGeminiApiKeyRepository(db, logger.child({ module: "repository:apiKey" }));
+const geminiFileRepository = new PgGeminiFileRepository(db, logger.child({ module: "repository:gemini" }));
 
 // Sync API keys from env → DB to assign stable UUIDs (required before wiring providers)
-const apiKeySyncService = new GeminiApiKeySyncService(
-    geminiApiKeyRepository,
-    logger.child({ module: "apiKeySync" }),
-);
-const { freeKeys, paidKey } = await apiKeySyncService.sync(
-    config.googleFreeApiKeys,
-    config.googlePaidApiKey,
-);
+const apiKeySyncService = new GeminiApiKeySyncService(geminiApiKeyRepository, logger.child({ module: "apiKeySync" }));
+const { freeKeys, paidKey } = await apiKeySyncService.sync(config.googleFreeApiKeys, config.googlePaidApiKey);
 
 // Attachment infrastructure
-const attachmentDownloader = new FetchAttachmentDownloader(
-    logger.child({ module: "attachments" }),
-);
-const diskDownloader = new FetchDiskAttachmentDownloader(
-    logger.child({ module: "attachments:disk" }),
-);
+const attachmentDownloader = new FetchAttachmentDownloader(logger.child({ module: "attachments" }));
+const diskDownloader = new FetchDiskAttachmentDownloader(logger.child({ module: "attachments:disk" }));
 
 // Lazy uploader registry — one GenaiFileUploader per API key, constructed on first use
 const uploaderRegistry = new GenaiFileUploaderRegistry(
@@ -84,12 +61,8 @@ const uploaderRegistry = new GenaiFileUploaderRegistry(
 );
 
 // LLM tools
-const getWebsiteTool = createGetWebsiteTool(
-    logger.child({ module: "tool:website" }),
-);
-const getVideoTranscriptionTool = createGetVideoTranscriptionTool(
-    logger.child({ module: "tool:video" }),
-);
+const getWebsiteTool = createGetWebsiteTool(logger.child({ module: "tool:website" }));
+const getVideoTranscriptionTool = createGetVideoTranscriptionTool(logger.child({ module: "tool:video" }));
 
 // Lazy model providers — one ChatGoogle client per (provider, apiKey) pair
 const freeKeyProvider = new RoundRobinFreeKeyProvider(freeKeys);
@@ -149,9 +122,7 @@ const handleDiscordMention = new HandleDiscordMention(
 );
 
 // Discord gateway
-const statusUpdater = new StatusMessageUpdater(
-    logger.child({ module: "statusUpdater" }),
-);
+const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
 const gateway = new DiscordGateway(
     config.discordToken,
     handleDiscordMention,

@@ -37,9 +37,7 @@ export interface IGeminiFileRepository {
     findWithUploadStateForKey(
         originalUrls: string[],
         apiKeyId: string,
-    ): Promise<
-        Map<string, { file: GeminiFile; upload: GeminiFileUpload | null }>
-    >;
+    ): Promise<Map<string, { file: GeminiFile; upload: GeminiFileUpload | null }>>;
 
     /**
      * Inserts or updates the upload record for a (geminiFileId, apiKeyId) pair.
@@ -54,7 +52,5 @@ export interface IGeminiFileRepository {
      * @param record - All fields except `id` (assigned by the database)
      * @returns The saved/updated record
      */
-    upsertUpload(
-        record: Omit<GeminiFileUpload, "id">,
-    ): Promise<GeminiFileUpload>;
+    upsertUpload(record: Omit<GeminiFileUpload, "id">): Promise<GeminiFileUpload>;
 }

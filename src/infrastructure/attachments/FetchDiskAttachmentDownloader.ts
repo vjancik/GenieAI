@@ -15,15 +15,10 @@ import { AppError } from "../../domain/errors/AppError.ts";
  *
  * The caller is responsible for deleting the destination file after use.
  */
-export class FetchDiskAttachmentDownloader
-    implements IDiskAttachmentDownloader
-{
+export class FetchDiskAttachmentDownloader implements IDiskAttachmentDownloader {
     constructor(private readonly logger: Logger) {}
 
-    async downloadToFile(
-        attachment: DiscordAttachmentInfo,
-        destPath: string,
-    ): Promise<string> {
+    async downloadToFile(attachment: DiscordAttachmentInfo, destPath: string): Promise<string> {
         return Sentry.startSpan(
             {
                 name: "Download Discord attachment to disk",
@@ -55,10 +50,7 @@ export class FetchDiskAttachmentDownloader
                         "Primary attachment URL failed, trying proxy URL",
                     );
                     try {
-                        result = await this.streamToFile(
-                            attachment.proxyURL,
-                            destPath,
-                        );
+                        result = await this.streamToFile(attachment.proxyURL, destPath);
                     } catch (proxyErr) {
                         throw new AppError(
                             "ATTACHMENT_DOWNLOAD_FAILED",
@@ -68,17 +60,11 @@ export class FetchDiskAttachmentDownloader
                     }
                 }
 
-                const mimeType =
-                    result.mimeType ??
-                    attachment.contentType ??
-                    "application/octet-stream";
+                const mimeType = result.mimeType ?? attachment.contentType ?? "application/octet-stream";
 
                 span.setAttribute("attachment.mime_type", mimeType);
 
-                this.logger.debug(
-                    { name: attachment.name, destPath, mimeType },
-                    "Downloaded attachment to disk",
-                );
+                this.logger.debug({ name: attachment.name, destPath, mimeType }, "Downloaded attachment to disk");
 
                 return mimeType;
             },
@@ -90,33 +76,21 @@ export class FetchDiskAttachmentDownloader
      * Creates or overwrites the file at `destPath`.
      * Cleans up a partially written file on failure.
      */
-    private async streamToFile(
-        url: string,
-        destPath: string,
-    ): Promise<{ mimeType: string | null }> {
+    private async streamToFile(url: string, destPath: string): Promise<{ mimeType: string | null }> {
         this.logger.debug({ url }, "Fetching attachment URL");
         const response = await fetch(url);
         if (!response.ok) {
-            throw new AppError(
-                "ATTACHMENT_DOWNLOAD_FAILED",
-                `HTTP ${response.status} fetching attachment from ${url}`,
-            );
+            throw new AppError("ATTACHMENT_DOWNLOAD_FAILED", `HTTP ${response.status} fetching attachment from ${url}`);
         }
 
         if (!response.body) {
-            throw new AppError(
-                "ATTACHMENT_DOWNLOAD_FAILED",
-                `No response body for attachment at ${url}`,
-            );
+            throw new AppError("ATTACHMENT_DOWNLOAD_FAILED", `No response body for attachment at ${url}`);
         }
 
         const rawContentType = response.headers.get("content-type");
         const mimeType = rawContentType?.split(";")[0]?.trim() ?? null;
         const contentLength = response.headers.get("content-length");
-        this.logger.debug(
-            { mimeType, contentLength, destPath },
-            "Response received, writing to disk",
-        );
+        this.logger.debug({ mimeType, contentLength, destPath }, "Response received, writing to disk");
 
         // Write the response body to disk by reading chunks from the stream
         const file = Bun.file(destPath);

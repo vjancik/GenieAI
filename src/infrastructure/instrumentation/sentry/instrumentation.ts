@@ -28,24 +28,13 @@ const bunFetchIntegration: Integration = {
 
         const originalFetch = globalThis.fetch;
 
-        async function instrumentedFetch(
-            input: string | URL | Request,
-            init?: RequestInit,
-        ): Promise<Response> {
+        async function instrumentedFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
             // Resolve the URL string from the various allowed input types
-            const url =
-                input instanceof Request
-                    ? input.url
-                    : input instanceof URL
-                      ? input.href
-                      : String(input);
+            const url = input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);
 
             // Strip query string and fragment to avoid capturing sensitive params
             const sanitizedUrl = url.split("?")[0] ?? url;
-            const method = (
-                (input instanceof Request ? input.method : init?.method) ??
-                "GET"
-            ).toUpperCase();
+            const method = ((input instanceof Request ? input.method : init?.method) ?? "GET").toUpperCase();
 
             return Sentry.startSpan(
                 {
@@ -58,10 +47,7 @@ const bunFetchIntegration: Integration = {
                 },
                 async (span) => {
                     const response = await originalFetch(input as string, init);
-                    span.setAttribute(
-                        "http.response.status_code",
-                        response.status,
-                    );
+                    span.setAttribute("http.response.status_code", response.status);
                     return response;
                 },
             );

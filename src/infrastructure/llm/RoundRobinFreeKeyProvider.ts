@@ -18,9 +18,7 @@ export class RoundRobinFreeKeyProvider implements IFreeKeyProvider {
 
     constructor(private readonly keys: GeminiApiKey[]) {
         if (keys.length === 0) {
-            throw new ConfigError(
-                "RoundRobinFreeKeyProvider requires at least one free API key",
-            );
+            throw new ConfigError("RoundRobinFreeKeyProvider requires at least one free API key");
         }
     }
 

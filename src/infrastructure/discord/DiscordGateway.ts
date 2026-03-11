@@ -3,14 +3,8 @@ import { Client, Events, GatewayIntentBits, type Message } from "discord.js";
 import type { HandleDiscordMention } from "../../application/HandleDiscordMention.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { IDiscordAttachmentRefetcher } from "../../application/ports/IDiscordAttachmentRefetcher.ts";
-import type {
-    AgentStatusUpdate,
-    OnStatusUpdate,
-} from "../../application/types/AgentStatus.ts";
-import {
-    AgentStatusType,
-    assertNever,
-} from "../../application/types/AgentStatus.ts";
+import type { AgentStatusUpdate, OnStatusUpdate } from "../../application/types/AgentStatus.ts";
+import { AgentStatusType, assertNever } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
 
@@ -47,10 +41,7 @@ function statusUpdateContent(update: AgentStatusUpdate): string {
  * @param message - The Discord message to check
  * @param botUserId - The bot's Discord user ID
  */
-export function isExplicitMention(
-    message: Message,
-    botUserId: string,
-): boolean {
+export function isExplicitMention(message: Message, botUserId: string): boolean {
     return message.mentions.has(botUserId, { ignoreRepliedUser: true });
 }
 
@@ -68,15 +59,8 @@ export function isExplicitMention(
  * @param botRoleId - The bot's managed role ID in this guild, or null for DMs
  * @returns Trimmed message content without the bot's user/role mention tokens
  */
-export function extractUserContent(
-    message: Message,
-    botUserId: string,
-    botRoleId: string | null,
-): string {
-    let content = message.content.replace(
-        new RegExp(`<@!?${botUserId}>`, "g"),
-        "",
-    );
+export function extractUserContent(message: Message, botUserId: string, botRoleId: string | null): string {
+    let content = message.content.replace(new RegExp(`<@!?${botUserId}>`, "g"), "");
     if (botRoleId) {
         content = content.replace(new RegExp(`<@&${botRoleId}>`, "g"), "");
     }
@@ -116,10 +100,7 @@ export class DiscordGateway {
     /** Connect the bot to Discord's gateway. */
     async start(): Promise<void> {
         await this.client.login(this.token);
-        this.logger.info(
-            { tag: this.client.user?.tag },
-            "Discord bot connected",
-        );
+        this.logger.info({ tag: this.client.user?.tag }, "Discord bot connected");
     }
 
     /** Gracefully disconnect from Discord. */
@@ -157,9 +138,7 @@ export class DiscordGateway {
         // botRole is the managed role Discord auto-creates for the bot in each guild; null in DMs
         const botRoleId = message.guild?.members.me?.roles.botRole?.id ?? null;
         const userContent = extractUserContent(message, botUserId, botRoleId);
-        const attachments: DiscordAttachmentInfo[] = [
-            ...message.attachments.values(),
-        ].map((a) => ({
+        const attachments: DiscordAttachmentInfo[] = [...message.attachments.values()].map((a) => ({
             id: a.id,
             url: a.url,
             proxyURL: a.proxyURL,
@@ -196,8 +175,7 @@ export class DiscordGateway {
                     "discord.channel_id": message.channelId,
                     "discord.guild_id": message.guildId ?? undefined,
                     "discord.attachment_count": attachments.length,
-                    "discord.has_reply":
-                        message.reference?.messageId !== undefined,
+                    "discord.has_reply": message.reference?.messageId !== undefined,
                 },
             },
             async (span) => {
@@ -227,13 +205,9 @@ export class DiscordGateway {
                             attachmentId: string,
                         ): Promise<DiscordAttachmentInfo | null> {
                             try {
-                                const channel =
-                                    await client.channels.fetch(channelId);
+                                const channel = await client.channels.fetch(channelId);
                                 if (!channel?.isTextBased()) return null;
-                                const msg =
-                                    await channel.messages.fetch(
-                                        messageDiscordId,
-                                    );
+                                const msg = await channel.messages.fetch(messageDiscordId);
                                 const att = msg.attachments.get(attachmentId);
                                 if (!att) return null;
                                 return {
@@ -256,44 +230,38 @@ export class DiscordGateway {
                         // replaced with a pre-resolved promise for all subsequent status updates.
                         // thinkingMessagePromise is always assigned before onStatusUpdate
                         // can be called — the assignment is on the line above this closure.
-                        thinkingMessagePromise = thinkingMessagePromise?.then(
-                            (thinkingMessage) => {
-                                this.statusUpdater.scheduleUpdate(
-                                    message.channelId,
-                                    thinkingMessage.id,
-                                    async (content) =>
-                                        void (await thinkingMessage.edit({
-                                            content: `*${content} <t:${Math.round(Date.now() / 1000)}:R>*`,
-                                            allowedMentions: {
-                                                repliedUser: false,
-                                            },
-                                        })),
-                                    statusUpdateContent(update),
-                                );
-                                return thinkingMessage;
-                            },
-                        );
+                        thinkingMessagePromise = thinkingMessagePromise?.then((thinkingMessage) => {
+                            this.statusUpdater.scheduleUpdate(
+                                message.channelId,
+                                thinkingMessage.id,
+                                async (content) =>
+                                    void (await thinkingMessage.edit({
+                                        content: `*${content} <t:${Math.round(Date.now() / 1000)}:R>*`,
+                                        allowedMentions: {
+                                            repliedUser: false,
+                                        },
+                                    })),
+                                statusUpdateContent(update),
+                            );
+                            return thinkingMessage;
+                        });
                     };
 
                     // handle() never throws — errors are caught internally and returned as a response
-                    const { response, newMessages } =
-                        await this.mentionHandler.handle({
-                            discordMessageId: message.id,
-                            referencedMessageId:
-                                message.reference?.messageId ?? null,
-                            channelId: message.channelId,
-                            guildId: message.guildId,
-                            userContent,
-                            attachments,
-                            onStatusUpdate,
-                            attachmentRefetcher,
-                        });
+                    const { response, newMessages } = await this.mentionHandler.handle({
+                        discordMessageId: message.id,
+                        referencedMessageId: message.reference?.messageId ?? null,
+                        channelId: message.channelId,
+                        guildId: message.guildId,
+                        userContent,
+                        attachments,
+                        onStatusUpdate,
+                        attachmentRefetcher,
+                    });
 
                     // Truncate to Discord's 2000-character limit
                     const truncated = response.length > 2000;
-                    const safeResponse = truncated
-                        ? `${response.slice(0, 1997)}...`
-                        : response;
+                    const safeResponse = truncated ? `${response.slice(0, 1997)}...` : response;
 
                     span.setAttributes({
                         "discord.response_truncated": truncated,
@@ -319,10 +287,7 @@ export class DiscordGateway {
                         newMessages,
                     });
                 } catch (err) {
-                    this.logger.error(
-                        { err, discordMessageId: message.id },
-                        "Failed to send or persist bot reply",
-                    );
+                    this.logger.error({ err, discordMessageId: message.id }, "Failed to send or persist bot reply");
                     Sentry.captureException(err);
 
                     // Attempt to edit the thinking message with an error notice. Guard
@@ -332,9 +297,7 @@ export class DiscordGateway {
                     thinkingMessagePromise
                         ?.then((thinkingMessage) => {
                             this.statusUpdater.cancel(thinkingMessage.id);
-                            return thinkingMessage.edit(
-                                "Sorry, I encountered an error processing your request.",
-                            );
+                            return thinkingMessage.edit("Sorry, I encountered an error processing your request.");
                         })
                         .catch((editErr) => {
                             this.logger.warn(

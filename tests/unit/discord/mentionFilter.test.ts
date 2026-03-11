@@ -1,10 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Message } from "discord.js";
 import { MessageType } from "discord.js";
-import {
-    extractUserContent,
-    isExplicitMention,
-} from "../../../src/infrastructure/discord/DiscordGateway.ts";
+import { extractUserContent, isExplicitMention } from "../../../src/infrastructure/discord/DiscordGateway.ts";
 
 const BOT_ID = "123456789";
 const OTHER_USER_ID = "987654321";
@@ -32,8 +29,7 @@ function makeMessage(opts: {
              */
             has: (id: string, options?: { ignoreRepliedUser?: boolean }) => {
                 if (id !== opts.mentionsBotId) return false;
-                if (options?.ignoreRepliedUser && repliedUser?.id === id)
-                    return false;
+                if (options?.ignoreRepliedUser && repliedUser?.id === id) return false;
                 return true;
             },
         },
@@ -121,9 +117,7 @@ describe("extractUserContent", () => {
         const msg = makeMessage({
             content: `<@${BOT_ID}> hey <@${OTHER_USER_ID}> what do you think?`,
         });
-        expect(extractUserContent(msg, BOT_ID, null)).toBe(
-            `hey <@${OTHER_USER_ID}> what do you think?`,
-        );
+        expect(extractUserContent(msg, BOT_ID, null)).toBe(`hey <@${OTHER_USER_ID}> what do you think?`);
     });
 
     test("strips the bot's role mention (<@&roleId>) when botRoleId is provided", () => {
@@ -131,9 +125,7 @@ describe("extractUserContent", () => {
         const msg = makeMessage({
             content: `<@&${BOT_ROLE_ID}> <@${BOT_ID}> what is 2+2?`,
         });
-        expect(extractUserContent(msg, BOT_ID, BOT_ROLE_ID)).toBe(
-            "what is 2+2?",
-        );
+        expect(extractUserContent(msg, BOT_ID, BOT_ROLE_ID)).toBe("what is 2+2?");
     });
 
     test("does not strip other role mentions when botRoleId is provided", () => {
@@ -142,17 +134,13 @@ describe("extractUserContent", () => {
         const msg = makeMessage({
             content: `<@&${OTHER_ROLE_ID}> <@${BOT_ID}> what is 2+2?`,
         });
-        expect(extractUserContent(msg, BOT_ID, BOT_ROLE_ID)).toBe(
-            `<@&${OTHER_ROLE_ID}>  what is 2+2?`,
-        );
+        expect(extractUserContent(msg, BOT_ID, BOT_ROLE_ID)).toBe(`<@&${OTHER_ROLE_ID}>  what is 2+2?`);
     });
 
     test("does not strip role mentions when botRoleId is null (DM)", () => {
         const msg = makeMessage({
             content: `<@&111222333> <@${BOT_ID}> what is 2+2?`,
         });
-        expect(extractUserContent(msg, BOT_ID, null)).toBe(
-            "<@&111222333>  what is 2+2?",
-        );
+        expect(extractUserContent(msg, BOT_ID, null)).toBe("<@&111222333>  what is 2+2?");
     });
 });
