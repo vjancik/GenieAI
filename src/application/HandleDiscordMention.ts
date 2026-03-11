@@ -99,131 +99,153 @@ export class HandleDiscordMention {
         onStatusUpdate?: OnStatusUpdate;
         attachmentRefetcher?: IDiscordAttachmentRefetcher;
     }): Promise<{ response: string; newMessages: BaseMessage[] }> {
-        return Sentry.startSpan(
-            {
-                name: "Process Discord mention",
-                op: "app.mention.handle",
-                attributes: {
-                    "discord.message_id": params.discordMessageId,
-                    "app.attachment_count": params.attachments.length,
-                    "app.attachment_mode": this.attachmentMode,
-                    "app.has_reply_chain": params.referencedMessageId !== null,
+        try {
+            return await Sentry.startSpan(
+                {
+                    name: "Process Discord mention",
+                    op: "app.mention.handle",
+                    attributes: {
+                        "discord.message_id": params.discordMessageId,
+                        "app.attachment_count": params.attachments.length,
+                        "app.attachment_mode": this.attachmentMode,
+                        "app.has_reply_chain":
+                            params.referencedMessageId !== null,
+                    },
                 },
-            },
-            async (span) => {
-                if (this.attachmentMode === "inline") {
-                    // Guard: reject if total attachment size exceeds the configured limit
-                    if (params.attachments.length > 0) {
-                        const totalBytes = params.attachments.reduce(
-                            (sum, a) => sum + a.size,
-                            0,
-                        );
-                        if (totalBytes > this.maxInlineBytes) {
-                            const limitMb = this.maxInlineBytes / (1024 * 1024);
-                            const actualMb = (
-                                totalBytes /
-                                (1024 * 1024)
-                            ).toFixed(1);
-                            this.logger.warn(
-                                {
-                                    totalBytes,
-                                    maxBytes: this.maxInlineBytes,
-                                    discordMessageId: params.discordMessageId,
-                                },
-                                "Attachment size exceeds limit — rejecting",
+                async (span) => {
+                    if (this.attachmentMode === "inline") {
+                        // Guard: reject if total attachment size exceeds the configured limit
+                        if (params.attachments.length > 0) {
+                            const totalBytes = params.attachments.reduce(
+                                (sum, a) => sum + a.size,
+                                0,
                             );
-                            return {
-                                response: `Sorry, your attachments total ${actualMb} MB which exceeds the ${limitMb} MB limit. Please send smaller files.`,
-                                newMessages: [],
-                            };
+                            if (totalBytes > this.maxInlineBytes) {
+                                const limitMb =
+                                    this.maxInlineBytes / (1024 * 1024);
+                                const actualMb = (
+                                    totalBytes /
+                                    (1024 * 1024)
+                                ).toFixed(1);
+                                this.logger.warn(
+                                    {
+                                        totalBytes,
+                                        maxBytes: this.maxInlineBytes,
+                                        discordMessageId:
+                                            params.discordMessageId,
+                                    },
+                                    "Attachment size exceeds limit — rejecting",
+                                );
+                                return {
+                                    response: `Sorry, your attachments total ${actualMb} MB which exceeds the ${limitMb} MB limit. Please send smaller files.`,
+                                    newMessages: [],
+                                };
+                            }
                         }
                     }
-                }
 
-                // Fetch existing reply chain if this message is a reply
-                const dbHistory =
-                    params.referencedMessageId !== null
-                        ? await this.messageRepo.fetchChain(
-                              params.referencedMessageId,
-                          )
-                        : [];
+                    // Fetch existing reply chain if this message is a reply
+                    const dbHistory =
+                        params.referencedMessageId !== null
+                            ? await this.messageRepo.fetchChain(
+                                  params.referencedMessageId,
+                              )
+                            : [];
 
-                const history = this.orchestrator.buildHistory(dbHistory);
+                    const history = this.orchestrator.buildHistory(dbHistory);
 
-                span.setAttribute("app.history_length", history.length);
+                    span.setAttribute("app.history_length", history.length);
 
-                this.logger.debug(
-                    {
-                        discordMessageId: params.discordMessageId,
-                        historyLength: history.length,
-                        hasReply: params.referencedMessageId !== null,
-                        attachmentCount: params.attachments.length,
-                        attachmentMode: this.attachmentMode,
-                    },
-                    "Processing mention with history",
-                );
-
-                // Build the human message — multimodal if attachments are present.
-                // In upload mode this also returns pending gemini file records that must
-                // be saved AFTER the user's message row exists (FK constraint).
-                const { humanMsg, pendingRecords } =
-                    await this.buildHumanMessage(
-                        params.discordMessageId,
-                        params.userContent,
-                        params.attachments,
-                        params.onStatusUpdate,
+                    this.logger.debug(
+                        {
+                            discordMessageId: params.discordMessageId,
+                            historyLength: history.length,
+                            hasReply: params.referencedMessageId !== null,
+                            attachmentCount: params.attachments.length,
+                            attachmentMode: this.attachmentMode,
+                        },
+                        "Processing mention with history",
                     );
 
-                // Persist the user's message first so gemini_files FK is satisfied.
-                await this.messageRepo.save({
-                    discordMessageId: params.discordMessageId,
-                    repliesToDiscordId: params.referencedMessageId,
-                    channelId: params.channelId,
-                    guildId: params.guildId,
-                    role: "human",
-                    // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
-                    // which is incompatible with our DB schema's Record<string, unknown>. Double cast
-                    // through unknown bridges the gap — the serialized shape IS a plain JSON object.
-                    langchainMessages: [
-                        humanMsg.toJSON() as unknown as Record<string, unknown>,
-                    ],
-                });
-
-                // Two-phase save for each uploaded attachment:
-                // 1. saveFile — idempotent insert into gemini_files (permanent anchor)
-                // 2. upsertUpload — insert/update gemini_file_uploads (ephemeral per-key record)
-                if (pendingRecords.length > 0) {
-                    if (!this.geminiFileRepo || !this.geminiFileUploader) {
-                        throw new Error(
-                            "Upload mode repository dependencies not injected into HandleDiscordMention",
+                    // Build the human message — multimodal if attachments are present.
+                    // In upload mode this also returns pending gemini file records that must
+                    // be saved AFTER the user's message row exists (FK constraint).
+                    const { humanMsg, pendingRecords } =
+                        await this.buildHumanMessage(
+                            params.discordMessageId,
+                            params.userContent,
+                            params.attachments,
+                            params.onStatusUpdate,
                         );
-                    }
-                    const { geminiFileRepo, geminiFileUploader } = this;
-                    for (const { fileAnchor, uploadData } of pendingRecords) {
-                        // TODO: we might have to delete these files in a catch clause if the handler fails as the originalUrl will never get persisted to langchainMessages and this record will never be selected
-                        const savedFile =
-                            await geminiFileRepo.saveFile(fileAnchor);
-                        await geminiFileRepo.upsertUpload({
-                            geminiFileId: savedFile.id,
-                            apiKeyId: geminiFileUploader.apiKeyId,
-                            ...uploadData,
-                        });
-                    }
-                }
 
-                // Generate the AI response; the orchestrator handles Gemini file refresh internally
-                // per key attempt, threaded via attachmentRefetcher in context.
-                const { content, newMessages } =
-                    await this.orchestrator.process(
-                        history,
-                        humanMsg,
-                        params.onStatusUpdate,
-                        params.attachmentRefetcher,
-                    );
+                    // Persist the user's message first so gemini_files FK is satisfied.
+                    await this.messageRepo.save({
+                        discordMessageId: params.discordMessageId,
+                        repliesToDiscordId: params.referencedMessageId,
+                        channelId: params.channelId,
+                        guildId: params.guildId,
+                        role: "human",
+                        // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
+                        // which is incompatible with our DB schema's Record<string, unknown>. Double cast
+                        // through unknown bridges the gap — the serialized shape IS a plain JSON object.
+                        langchainMessages: [
+                            humanMsg.toJSON() as unknown as Record<
+                                string,
+                                unknown
+                            >,
+                        ],
+                    });
 
-                return { response: content, newMessages };
-            },
-        );
+                    // Two-phase save for each uploaded attachment:
+                    // 1. saveFile — idempotent insert into gemini_files (permanent anchor)
+                    // 2. upsertUpload — insert/update gemini_file_uploads (ephemeral per-key record)
+                    if (pendingRecords.length > 0) {
+                        if (!this.geminiFileRepo || !this.geminiFileUploader) {
+                            throw new Error(
+                                "Upload mode repository dependencies not injected into HandleDiscordMention",
+                            );
+                        }
+                        const { geminiFileRepo, geminiFileUploader } = this;
+                        for (const {
+                            fileAnchor,
+                            uploadData,
+                        } of pendingRecords) {
+                            // TODO: we might have to delete these files in a catch clause if the handler fails as the originalUrl will never get persisted to langchainMessages and this record will never be selected
+                            const savedFile =
+                                await geminiFileRepo.saveFile(fileAnchor);
+                            await geminiFileRepo.upsertUpload({
+                                geminiFileId: savedFile.id,
+                                apiKeyId: geminiFileUploader.apiKeyId,
+                                ...uploadData,
+                            });
+                        }
+                    }
+
+                    // Generate the AI response; the orchestrator handles Gemini file refresh internally
+                    // per key attempt, threaded via attachmentRefetcher in context.
+                    const { content, newMessages } =
+                        await this.orchestrator.process(
+                            history,
+                            humanMsg,
+                            params.onStatusUpdate,
+                            params.attachmentRefetcher,
+                        );
+
+                    return { response: content, newMessages };
+                },
+            );
+        } catch (err) {
+            this.logger.error(
+                { err, discordMessageId: params.discordMessageId },
+                "Failed to process mention",
+            );
+            Sentry.captureException(err);
+            return {
+                response:
+                    "Sorry, I encountered an error processing your request.",
+                newMessages: [],
+            };
+        }
     }
 
     /**

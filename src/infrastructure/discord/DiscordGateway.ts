@@ -12,7 +12,6 @@ import {
     assertNever,
 } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";
-import { DiscordError } from "../../domain/errors/AppError.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
 
 /**
@@ -184,6 +183,10 @@ export class DiscordGateway {
             "Processing bot mention",
         );
 
+        // Declared outside the span so the catch handler can access it even if the
+        // span callback threw before the thinking message was sent.
+        let thinkingMessagePromise: Promise<Message> | undefined;
+
         await Sentry.startSpan(
             {
                 name: "Handle Discord mention",
@@ -198,60 +201,81 @@ export class DiscordGateway {
                 },
             },
             async (span) => {
-                /**
-                 * Per-request attachment refetcher: closes over the discord.js client and
-                 * the current channelId. All messages in a reply chain share the same channel,
-                 * so this is valid for refetching any historical message in the chain.
-                 * Used by GeminiFileRefreshService in upload mode to get fresh CDN URLs.
-                 */
-                const channelId = message.channelId;
-                const client = this.client;
-                // TODO: wouldn't this be cleaner as a lambda instead of a module? Unsure
-                const attachmentRefetcher: IDiscordAttachmentRefetcher = {
-                    async fetchAttachment(
-                        messageDiscordId: string,
-                        attachmentId: string,
-                    ): Promise<DiscordAttachmentInfo | null> {
-                        try {
-                            const channel =
-                                await client.channels.fetch(channelId);
-                            if (!channel?.isTextBased()) return null;
-                            const msg =
-                                await channel.messages.fetch(messageDiscordId);
-                            const att = msg.attachments.get(attachmentId);
-                            if (!att) return null;
-                            return {
-                                id: att.id,
-                                url: att.url,
-                                proxyURL: att.proxyURL,
-                                name: att.name ?? "attachment",
-                                size: att.size,
-                                contentType: att.contentType,
-                            };
-                        } catch {
-                            return null;
-                        }
-                    },
-                };
-
-                // Send the "Thinking" placeholder immediately so the user gets instant feedback
-                const thinkingMessage = await message.reply(
-                    `*Thinking since <t:${Math.round(Date.now() / 1000)}:R>*`,
-                );
-
-                const onStatusUpdate: OnStatusUpdate = (update) => {
-                    this.statusUpdater.scheduleUpdate(
-                        message.channelId,
-                        thinkingMessage.id,
-                        async (content) =>
-                            void (await thinkingMessage.edit(
-                                `*${content} <t:${Math.round(Date.now() / 1000)}:R>*`,
-                            )),
-                        statusUpdateContent(update),
-                    );
-                };
-
                 try {
+                    // Send the "Thinking" placeholder immediately — fire-and-forget (not awaited)
+                    // so it does not delay AI processing. Sent as a reply with allowedMentions
+                    // suppressed so the user is not pinged at this stage. The promise is resolved
+                    // lazily on the first status update, or awaited when we need to delete it
+                    // after the real response is sent.
+                    thinkingMessagePromise = message.reply({
+                        content: `*Thinking since <t:${Math.round(Date.now() / 1000)}:R>*`,
+                        allowedMentions: { repliedUser: false },
+                    });
+
+                    /**
+                     * Per-request attachment refetcher: closes over the discord.js client and
+                     * the current channelId. All messages in a reply chain share the same channel,
+                     * so this is valid for refetching any historical message in the chain.
+                     * Used by GeminiFileRefreshService in upload mode to get fresh CDN URLs.
+                     */
+                    const channelId = message.channelId;
+                    const client = this.client;
+                    // TODO: wouldn't this be cleaner as a lambda instead of a module? Unsure
+                    const attachmentRefetcher: IDiscordAttachmentRefetcher = {
+                        async fetchAttachment(
+                            messageDiscordId: string,
+                            attachmentId: string,
+                        ): Promise<DiscordAttachmentInfo | null> {
+                            try {
+                                const channel =
+                                    await client.channels.fetch(channelId);
+                                if (!channel?.isTextBased()) return null;
+                                const msg =
+                                    await channel.messages.fetch(
+                                        messageDiscordId,
+                                    );
+                                const att = msg.attachments.get(attachmentId);
+                                if (!att) return null;
+                                return {
+                                    id: att.id,
+                                    url: att.url,
+                                    proxyURL: att.proxyURL,
+                                    name: att.name ?? "attachment",
+                                    size: att.size,
+                                    contentType: att.contentType,
+                                };
+                            } catch {
+                                return null;
+                            }
+                        },
+                    };
+
+                    const onStatusUpdate: OnStatusUpdate = (update) => {
+                        // Await the thinking message promise so we have the message ID before
+                        // scheduling an edit. The promise resolves on the first call and is
+                        // replaced with a pre-resolved promise for all subsequent status updates.
+                        // thinkingMessagePromise is always assigned before onStatusUpdate
+                        // can be called — the assignment is on the line above this closure.
+                        thinkingMessagePromise = thinkingMessagePromise?.then(
+                            (thinkingMessage) => {
+                                this.statusUpdater.scheduleUpdate(
+                                    message.channelId,
+                                    thinkingMessage.id,
+                                    async (content) =>
+                                        void (await thinkingMessage.edit({
+                                            content: `*${content} <t:${Math.round(Date.now() / 1000)}:R>*`,
+                                            allowedMentions: {
+                                                repliedUser: false,
+                                            },
+                                        })),
+                                    statusUpdateContent(update),
+                                );
+                                return thinkingMessage;
+                            },
+                        );
+                    };
+
+                    // handle() never throws — errors are caught internally and returned as a response
                     const { response, newMessages } =
                         await this.mentionHandler.handle({
                             discordMessageId: message.id,
@@ -265,9 +289,6 @@ export class DiscordGateway {
                             attachmentRefetcher,
                         });
 
-                    // Cancel any pending status edit before writing the final response
-                    this.statusUpdater.cancel(thinkingMessage.id);
-
                     // Truncate to Discord's 2000-character limit
                     const truncated = response.length > 2000;
                     const safeResponse = truncated
@@ -279,36 +300,48 @@ export class DiscordGateway {
                         "discord.response_length": response.length,
                     });
 
-                    // Replace the placeholder with the final response
-                    await thinkingMessage.edit(safeResponse);
+                    // Resolve the thinking message and cancel any pending status edit
+                    thinkingMessagePromise.then((thinkingMessage) => {
+                        this.statusUpdater.cancel(thinkingMessage.id);
+                        // Delete the thinking placeholder and reply with the final response so
+                        // the user is pinged when the response is actually ready.
+                        thinkingMessage.delete();
+                    });
 
-                    // Persist only after the final response is successfully displayed
+                    const botReply = await message.reply(safeResponse);
+
+                    // Persist only after the final response is successfully sent
                     await this.mentionHandler.saveBotResponse({
-                        botDiscordMessageId: thinkingMessage.id,
+                        botDiscordMessageId: botReply.id,
                         repliesToDiscordId: message.id,
-                        channelId: thinkingMessage.channelId,
-                        guildId: thinkingMessage.guildId,
+                        channelId: botReply.channelId,
+                        guildId: botReply.guildId,
                         newMessages,
                     });
                 } catch (err) {
                     this.logger.error(
                         { err, discordMessageId: message.id },
-                        "Failed to process mention",
+                        "Failed to send or persist bot reply",
                     );
-
                     Sentry.captureException(err);
-                    this.statusUpdater.cancel(thinkingMessage.id);
 
-                    try {
-                        await thinkingMessage.edit(
-                            "Sorry, I encountered an error processing your request.",
-                        );
-                    } catch (editErr) {
-                        throw new DiscordError(
-                            "Failed to send error reply",
-                            editErr,
-                        );
-                    }
+                    // Attempt to edit the thinking message with an error notice. Guard
+                    // against undefined in case the error was thrown before the thinking
+                    // message send was initiated. It may also already be deleted if the
+                    // error occurred after thinkingMessage.delete(), so swallow any failure.
+                    thinkingMessagePromise
+                        ?.then((thinkingMessage) => {
+                            this.statusUpdater.cancel(thinkingMessage.id);
+                            return thinkingMessage.edit(
+                                "Sorry, I encountered an error processing your request.",
+                            );
+                        })
+                        .catch((editErr) => {
+                            this.logger.warn(
+                                { editErr, discordMessageId: message.id },
+                                "Failed to edit thinking message with error notice",
+                            );
+                        });
                 }
             },
         );
