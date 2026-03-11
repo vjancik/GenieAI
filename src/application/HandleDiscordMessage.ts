@@ -5,6 +5,7 @@ import { HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import type { GeminiFile } from "../domain/message/GeminiFile.ts";
 import type { IMessageRepository } from "../domain/message/IMessageRepository.ts";
+import type { MessageIntent } from "../domain/message/MessageIntent.ts";
 import type { AppConfig } from "./config/AppConfig.ts";
 import type { IAgentOrchestrator } from "./ports/IAgentOrchestrator.ts";
 import type { DiscordAttachmentInfo, IAttachmentDownloader } from "./ports/IAttachmentDownloader.ts";
@@ -93,6 +94,7 @@ export class HandleDiscordMessage {
         guildId: string | null;
         userContent: string;
         attachments: DiscordAttachmentInfo[];
+        intent: MessageIntent;
         onStatusUpdate?: OnStatusUpdate;
         attachmentRefetcher?: IDiscordAttachmentRefetcher;
     }): Promise<{
@@ -207,6 +209,7 @@ export class HandleDiscordMessage {
                     const { content, newMessages } = await this.orchestrator.process(
                         history,
                         humanMsg,
+                        params.intent,
                         params.onStatusUpdate,
                         params.attachmentRefetcher,
                     );

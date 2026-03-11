@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { Message } from "discord.js";
 import { MessageType } from "discord.js";
-import { extractUserContent, isExplicitMention } from "../../../src/infrastructure/discord/DiscordGateway.ts";
+import { MessageIntent } from "../../../src/domain/message/MessageIntent.ts";
+import {
+    extractUserContent,
+    isExplicitMention,
+    parseMessageIntent,
+} from "../../../src/infrastructure/discord/DiscordGateway.ts";
 
 const BOT_ID = "123456789";
 const OTHER_USER_ID = "987654321";
@@ -83,6 +88,53 @@ describe("isExplicitMention", () => {
     });
 });
 
+describe("parseMessageIntent", () => {
+    test("returns GENERAL for !ai command", () => {
+        expect(parseMessageIntent("!ai what is the weather?")).toBe(MessageIntent.GENERAL);
+    });
+
+    test("returns SEARCH for !aisearch command", () => {
+        expect(parseMessageIntent("!aisearch latest news")).toBe(MessageIntent.SEARCH);
+    });
+
+    test("returns SUMMARY for !aisummary command", () => {
+        expect(parseMessageIntent("!aisummary summarize this")).toBe(MessageIntent.SUMMARY);
+    });
+
+    test("returns UNKNOWN when no command prefix", () => {
+        expect(parseMessageIntent("just a regular message")).toBe(MessageIntent.UNKNOWN);
+    });
+
+    test("returns UNKNOWN for empty string", () => {
+        expect(parseMessageIntent("")).toBe(MessageIntent.UNKNOWN);
+    });
+
+    test("is case-insensitive: !AI", () => {
+        expect(parseMessageIntent("!AI hello")).toBe(MessageIntent.GENERAL);
+    });
+
+    test("is case-insensitive: !AiSearch", () => {
+        expect(parseMessageIntent("!AiSearch query")).toBe(MessageIntent.SEARCH);
+    });
+
+    test("is case-insensitive: !AISUMMARY", () => {
+        expect(parseMessageIntent("!AISUMMARY text")).toBe(MessageIntent.SUMMARY);
+    });
+
+    test("does not match !ai without trailing whitespace", () => {
+        expect(parseMessageIntent("!aiquery")).toBe(MessageIntent.UNKNOWN);
+    });
+
+    test("does not match !aisearch if not at start of string", () => {
+        expect(parseMessageIntent("hey !aisearch something")).toBe(MessageIntent.UNKNOWN);
+    });
+
+    test("!aisearch is not shadowed by !ai prefix", () => {
+        // !ai must not match the beginning of !aisearch
+        expect(parseMessageIntent("!aisearch find this")).toBe(MessageIntent.SEARCH);
+    });
+});
+
 describe("extractUserContent", () => {
     test("strips <@userId> mention format", () => {
         const msg = makeMessage({ content: `<@${BOT_ID}> hello there` });
@@ -142,5 +194,35 @@ describe("extractUserContent", () => {
             content: `<@&111222333> <@${BOT_ID}> what is 2+2?`,
         });
         expect(extractUserContent(msg, BOT_ID, null)).toBe("<@&111222333>  what is 2+2?");
+    });
+
+    test("strips !ai command prefix", () => {
+        const msg = makeMessage({ content: "!ai tell me a joke" });
+        expect(extractUserContent(msg, BOT_ID, null)).toBe("tell me a joke");
+    });
+
+    test("strips !aisearch command prefix", () => {
+        const msg = makeMessage({ content: "!aisearch latest news" });
+        expect(extractUserContent(msg, BOT_ID, null)).toBe("latest news");
+    });
+
+    test("strips !aisummary command prefix", () => {
+        const msg = makeMessage({ content: "!aisummary this article" });
+        expect(extractUserContent(msg, BOT_ID, null)).toBe("this article");
+    });
+
+    test("strips command prefix case-insensitively", () => {
+        const msg = makeMessage({ content: "!AI what is TypeScript?" });
+        expect(extractUserContent(msg, BOT_ID, null)).toBe("what is TypeScript?");
+    });
+
+    test("strips command prefix when it appears before a bot mention", () => {
+        const msg = makeMessage({ content: `!aisearch <@${BOT_ID}> find something` });
+        expect(extractUserContent(msg, BOT_ID, null)).toBe("find something");
+    });
+
+    test("does not strip command prefix without trailing whitespace", () => {
+        const msg = makeMessage({ content: "!aiquery something" });
+        expect(extractUserContent(msg, BOT_ID, null)).toBe("!aiquery something");
     });
 });

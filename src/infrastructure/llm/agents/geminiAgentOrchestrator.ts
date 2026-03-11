@@ -22,6 +22,7 @@ import type { Logger } from "../../../application/types/Logger.ts";
 import { AllFreeKeysExhaustedError, AppError } from "../../../domain/errors/AppError.ts";
 import type { GeminiApiKey } from "../../../domain/message/GeminiApiKey.ts";
 import type { DiscordMessage } from "../../../domain/message/Message.ts";
+import { MessageIntent } from "../../../domain/message/MessageIntent.ts";
 import type { AppConfig } from "../../config/config.ts";
 import { filterHistoryForInlineSize } from "../inlineAttachmentFilter.ts";
 import { is429Error } from "../is429Error.ts";
@@ -37,6 +38,7 @@ import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
  * Lives in context (not state) so it is never serialized by a checkpointer.
  */
 const OrchestratorContextSchema = z.object({
+    intent: z.custom<MessageIntent>(),
     onStatusUpdate: z.custom<OnStatusUpdate>().optional(),
     attachmentRefetcher: z.custom<IDiscordAttachmentRefetcher>().optional(),
 });
@@ -288,6 +290,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     async process(
         history: BaseMessage[],
         userMessage: HumanMessage,
+        intent: MessageIntent,
         onStatusUpdate?: OnStatusUpdate,
         attachmentRefetcher?: IDiscordAttachmentRefetcher,
     ): Promise<{ content: string; newMessages: BaseMessage[] }> {
@@ -295,7 +298,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             {
                 name: "Orchestrate agent pipeline",
                 op: "agent.process",
-                attributes: { "agent.history_length": history.length },
+                attributes: { "agent.history_length": history.length, "agent.intent": intent },
             },
             async (span) => {
                 const initialMessages = [...history, userMessage];
@@ -304,7 +307,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 // annotate the known output shape — MessagesAnnotation always produces { messages: BaseMessage[] }.
                 const result = (await this.graph.invoke(
                     { messages: initialMessages },
-                    { context: { onStatusUpdate, attachmentRefetcher } },
+                    { context: { intent, onStatusUpdate, attachmentRefetcher } },
                 )) as { messages: BaseMessage[] };
 
                 // Everything after the initial seed is "new" — generated during this turn
@@ -439,7 +442,34 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     }
 
     /**
+     * Routes from START based on the declared {@link MessageIntent} in context.
+     *
+     * - GENERAL → general node directly (skip triage)
+     * - SEARCH  → search node directly (skip triage)
+     * - SUMMARY / UNKNOWN → triage (let the model decide)
+     *
+     * This is called as a conditional edge function; LangGraph passes the state and
+     * config so the intent can be read from context without being stored in state.
+     */
+    private routeFromIntent(_state: GraphState, config: NodeConfig): "triage" | "general" | "search" {
+        const intent = config.context?.intent;
+        switch (intent) {
+            case MessageIntent.GENERAL:
+                return "general";
+            case MessageIntent.SEARCH:
+                return "search";
+            default:
+                return "triage";
+        }
+    }
+
+    /**
      * Compiles the LangGraph StateGraph. Called once in the constructor.
+     *
+     * START routes via a conditional edge based on the declared intent:
+     * - GENERAL → general node directly
+     * - SEARCH  → search node directly
+     * - SUMMARY / UNKNOWN → triage (model decides)
      *
      * The triage node uses Command.goto for dynamic routing without conditional edges.
      * Routing sentinel calls (route_to_search / route_to_general) are consumed here
@@ -453,7 +483,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             .addNode("executeTool", this.executeToolNode.bind(this))
             .addNode("general", this.generalNode.bind(this))
             .addNode("search", this.searchNode.bind(this))
-            .addEdge(START, "triage")
+            .addConditionalEdges(START, this.routeFromIntent.bind(this), ["triage", "general", "search"])
             .addEdge("executeTool", "general")
             .addEdge("general", END)
             .addEdge("search", END);

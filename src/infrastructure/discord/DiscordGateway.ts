@@ -15,10 +15,54 @@ import type { IDiscordAttachmentRefetcher } from "../../application/ports/IDisco
 import type { AgentStatusUpdate, OnStatusUpdate } from "../../application/types/AgentStatus.ts";
 import { AgentStatusType, assertNever } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";
+import { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
 
 /** Custom ID for the Retry button attached to failed bot responses. */
 const RETRY_BUTTON_ID = "retry_mention";
+
+/**
+ * Maps each recognized bot command prefix to its corresponding {@link MessageIntent}.
+ * Commands must appear at the start of a message, followed by at least one whitespace.
+ * Matching is case-insensitive to accommodate phone auto-capitalization.
+ *
+ * Add new commands here — the rest of the pipeline picks up the intent automatically.
+ */
+export const DiscordCommand: Record<string, MessageIntent> = {
+    "!ai": MessageIntent.GENERAL,
+    "!aisearch": MessageIntent.SEARCH,
+    "!aisummary": MessageIntent.SUMMARY,
+};
+
+/**
+ * Builds a regex that matches any recognized command prefix at the start of the string,
+ * followed by one or more whitespace characters. Case-insensitive.
+ *
+ * Longer commands are sorted first to prevent `!ai` from shadowing `!aisearch` / `!aisummary`.
+ */
+function buildCommandPrefixRegex(): RegExp {
+    const sorted = Object.keys(DiscordCommand).sort((a, b) => b.length - a.length);
+    const escaped = sorted.map((cmd) => cmd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    return new RegExp(`^(?:${escaped.join("|")})\\s+`, "i");
+}
+
+const COMMAND_PREFIX_REGEX = buildCommandPrefixRegex();
+
+/**
+ * Determines the {@link MessageIntent} for a raw message string by checking for a
+ * recognized command prefix at the start of the content (case-insensitive).
+ * Returns {@link MessageIntent.UNKNOWN} if no command prefix is found.
+ *
+ * @param rawContent - The raw message string (before any stripping)
+ */
+export function parseMessageIntent(rawContent: string): MessageIntent {
+    const match = COMMAND_PREFIX_REGEX.exec(rawContent);
+    if (!match) return MessageIntent.UNKNOWN;
+    // TYPE COERCION: match[0] is the matched prefix+whitespace; slice to get just the command token
+    // and lowercase it to normalize for the map lookup.
+    const command = match[0].trimEnd().toLowerCase();
+    return DiscordCommand[command] ?? MessageIntent.UNKNOWN;
+}
 
 /**
  * Maps an agent status update to the Discord message string shown to the user
@@ -58,29 +102,36 @@ export function isExplicitMention(message: Message, botUserId: string): boolean 
 }
 
 /**
- * Strips bot @mention tokens and the bot's managed role mention token from the message content.
- * Discord encodes user mentions as `<@userId>` or `<@!userId>` (legacy nickname format),
- * and role mentions as `<@&roleId>`.
+ * Strips bot @mention tokens, the bot's managed role mention token, and any leading
+ * command prefix (e.g. `!ai`, `!aisearch`) from the message content in a single pass.
  *
- * The bot's managed role ID is sourced from the guild member object at call time, so only
- * the bot's own role mention is stripped rather than all role mentions. In DMs there are no
- * role mentions, so `botRoleId` will be null and the role-stripping step is skipped entirely.
+ * Discord encodes user mentions as `<@userId>` or `<@!userId>` (legacy nickname format),
+ * and role mentions as `<@&roleId>`. The bot's managed role ID is sourced from the guild
+ * member object at call time, so only the bot's own role mention is stripped rather than
+ * all role mentions. In DMs there are no role mentions, so `botRoleId` will be null and
+ * the role-stripping step is skipped entirely.
+ *
+ * Command stripping is case-insensitive to accommodate phone auto-capitalization.
+ * The command prefix is only stripped when it appears at the start of the content,
+ * followed by at least one whitespace character.
  *
  * @param message - The Discord message
  * @param botUserId - The bot's Discord user ID
  * @param botRoleId - The bot's managed role ID in this guild, or null for DMs
- * @returns Trimmed message content without the bot's user/role mention tokens
+ * @returns Trimmed message content without the bot's user/role mention tokens or command prefix
  */
 export function extractUserContent(message: Message, botUserId: string, botRoleId: string | null): string {
-    let content = message.content.replace(new RegExp(`<@!?${botUserId}>`, "g"), "");
-    if (botRoleId) {
-        content = content.replace(new RegExp(`<@&${botRoleId}>`, "g"), "");
-    }
-    return content.trim();
+    // Strip command prefix first — it always appears at the message start before any mention tokens
+    const stripped = message.content.replace(COMMAND_PREFIX_REGEX, "");
+    // Strip bot user mention (<@userId> / <@!userId>) and optionally the bot's role mention (<@&roleId>)
+    const mentionPattern = botRoleId
+        ? new RegExp(`<@!?${botUserId}>|<@&${botRoleId}>`, "g")
+        : new RegExp(`<@!?${botUserId}>`, "g");
+    return stripped.replace(mentionPattern, "").trim();
 }
 
 /**
- * Manages the Discord gateway connection and dispatches incoming mention events.
+ * Manages the Discord gateway connection and dispatches incoming message events.
  *
  * Requires the following intents:
  * - Guilds: for guild metadata
@@ -188,11 +239,13 @@ export class DiscordGateway {
         const botUserId = this.client.user?.id;
         if (!botUserId) return;
 
-        // Only respond to explicit @mentions, not reply-mentions
-        if (!isExplicitMention(message, botUserId)) return;
-
         // botRole is the managed role Discord auto-creates for the bot in each guild; null in DMs
         const botRoleId = message.guild?.members.me?.roles.botRole?.id ?? null;
+        // Parse intent from raw content before stripping, so the command prefix is visible
+        const intent = parseMessageIntent(message.content);
+
+        // Only respond to explicit @mentions or recognized command prefixes
+        if (intent === MessageIntent.UNKNOWN && !isExplicitMention(message, botUserId)) return;
         const userContent = extractUserContent(message, botUserId, botRoleId);
         const attachments: DiscordAttachmentInfo[] = [...message.attachments.values()].map((a) => ({
             id: a.id,
@@ -215,7 +268,7 @@ export class DiscordGateway {
                 referencedMessageId: message.reference?.messageId ?? null,
                 attachmentCount: attachments.length,
             },
-            "Processing bot mention",
+            "Processing bot message",
         );
 
         // Declared outside the span so the catch handler can access it even if the
@@ -224,7 +277,7 @@ export class DiscordGateway {
 
         await Sentry.startSpan(
             {
-                name: "Handle Discord mention",
+                name: "Handle Discord message",
                 op: "discord.message.handle",
                 attributes: {
                     "discord.message_id": message.id,
@@ -311,6 +364,7 @@ export class DiscordGateway {
                         guildId: message.guildId,
                         userContent,
                         attachments,
+                        intent,
                         onStatusUpdate,
                         attachmentRefetcher,
                     });

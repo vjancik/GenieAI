@@ -7,6 +7,7 @@ import type { IAttachmentDownloader } from "../../../src/application/ports/IAtta
 import type { OnStatusUpdate } from "../../../src/application/types/AgentStatus.ts";
 import type { IMessageRepository } from "../../../src/domain/message/IMessageRepository.ts";
 import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
+import { MessageIntent } from "../../../src/domain/message/MessageIntent.ts";
 
 const testLogger = pino({ level: "silent" });
 
@@ -75,6 +76,7 @@ describe("HandleDiscordMention.handle", () => {
             guildId: "guild-1",
             userContent: "Hello",
             attachments: [],
+            intent: MessageIntent.UNKNOWN,
         });
 
         expect(result.response).toBe("Hello back!");
@@ -93,6 +95,7 @@ describe("HandleDiscordMention.handle", () => {
             guildId: null,
             userContent: "Hello",
             attachments: [],
+            intent: MessageIntent.UNKNOWN,
         });
 
         expect(repo.fetchChain).not.toHaveBeenCalled();
@@ -110,6 +113,7 @@ describe("HandleDiscordMention.handle", () => {
             guildId: "guild-1",
             userContent: "Follow-up",
             attachments: [],
+            intent: MessageIntent.UNKNOWN,
         });
 
         expect(repo.fetchChain).toHaveBeenCalledWith("discord-123");
@@ -127,6 +131,7 @@ describe("HandleDiscordMention.handle", () => {
             guildId: "guild-1",
             userContent: "Follow-up",
             attachments: [],
+            intent: MessageIntent.UNKNOWN,
         });
 
         const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock.calls[0];
@@ -152,13 +157,14 @@ describe("HandleDiscordMention.handle", () => {
             guildId: null,
             userContent: "Hello",
             attachments: [],
+            intent: MessageIntent.UNKNOWN,
             onStatusUpdate,
         });
 
         const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock.calls[0];
         expect(firstCall).toBeDefined();
-        // Third argument must be the exact callback passed in
-        expect(firstCall?.[2]).toBe(onStatusUpdate);
+        // Fourth argument (index 3) must be the exact callback passed in; index 2 is intent
+        expect(firstCall?.[3]).toBe(onStatusUpdate);
     });
 
     test("passes empty history to orchestrator when no reply chain", async () => {
@@ -173,6 +179,7 @@ describe("HandleDiscordMention.handle", () => {
             guildId: null,
             userContent: "Hello",
             attachments: [],
+            intent: MessageIntent.UNKNOWN,
         });
 
         const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock.calls[0];
@@ -193,6 +200,7 @@ describe("HandleDiscordMention.handle", () => {
             guildId: "guild-1",
             userContent: "What is 2+2?",
             attachments: [],
+            intent: MessageIntent.UNKNOWN,
         });
 
         const saveCall = (repo.save as ReturnType<typeof mock>).mock.calls[0]?.[0] as DiscordMessage;
@@ -237,6 +245,7 @@ describe("HandleDiscordMention.handle", () => {
                     contentType: "application/zip",
                 },
             ],
+            intent: MessageIntent.UNKNOWN,
         });
 
         expect(result.response).toContain("exceeds");
@@ -267,6 +276,7 @@ describe("HandleDiscordMention.handle", () => {
                     contentType: "image/png",
                 },
             ],
+            intent: MessageIntent.UNKNOWN,
         });
 
         expect(downloader.download).toHaveBeenCalledTimes(1);

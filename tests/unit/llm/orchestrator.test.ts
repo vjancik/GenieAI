@@ -6,6 +6,7 @@ import type { AgentStatusUpdate } from "../../../src/application/types/AgentStat
 import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
 import { AllFreeKeysExhaustedError, AppError } from "../../../src/domain/errors/AppError.ts";
 import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
+import { MessageIntent } from "../../../src/domain/message/MessageIntent.ts";
 import {
     AgentOrchestrator,
     dbMessagesToLangchain,
@@ -357,7 +358,7 @@ describe("Orchestrator.process", () => {
             },
         );
 
-        const result = await orchestrator.process([], new HumanMessage("What happened today?"));
+        const result = await orchestrator.process([], new HumanMessage("What happened today?"), MessageIntent.UNKNOWN);
 
         expect(searchModel.invoke).toHaveBeenCalledTimes(1);
         expect(generalModel.invoke).not.toHaveBeenCalled();
@@ -388,7 +389,7 @@ describe("Orchestrator.process", () => {
             },
         );
 
-        const result = await orchestrator.process([], new HumanMessage("Tell me a joke"));
+        const result = await orchestrator.process([], new HumanMessage("Tell me a joke"), MessageIntent.UNKNOWN);
 
         expect(generalModel.invoke).toHaveBeenCalledTimes(1);
         expect(searchModel.invoke).not.toHaveBeenCalled();
@@ -421,7 +422,11 @@ describe("Orchestrator.process", () => {
             },
         );
 
-        const result = await orchestrator.process([], new HumanMessage("Summarize https://example.com"));
+        const result = await orchestrator.process(
+            [],
+            new HumanMessage("Summarize https://example.com"),
+            MessageIntent.UNKNOWN,
+        );
 
         expect(websiteTool.invoke).toHaveBeenCalledWith({
             urls: ["https://example.com"],
@@ -457,7 +462,7 @@ describe("Orchestrator.process", () => {
             },
         );
 
-        const result = await orchestrator.process([], new HumanMessage("Summarize this video"));
+        const result = await orchestrator.process([], new HumanMessage("Summarize this video"), MessageIntent.UNKNOWN);
 
         expect(videoTool.invoke).toHaveBeenCalledWith({
             urls: ["https://youtube.com/watch?v=abc"],
@@ -490,7 +495,7 @@ describe("Orchestrator.process", () => {
             },
         );
 
-        const result = await orchestrator.process([], new HumanMessage("Hello"));
+        const result = await orchestrator.process([], new HumanMessage("Hello"), MessageIntent.UNKNOWN);
 
         expect(generalModel.invoke).toHaveBeenCalledTimes(1);
         expect(result.content).toBe("fallback response");
@@ -521,7 +526,7 @@ describe("Orchestrator.process", () => {
 
         const history: BaseMessage[] = [new HumanMessage("First message"), new AIMessage("First response")];
 
-        await orchestrator.process(history, new HumanMessage("Follow-up question"));
+        await orchestrator.process(history, new HumanMessage("Follow-up question"), MessageIntent.UNKNOWN);
 
         const callArgs = (generalModel.invoke as ReturnType<typeof mock>).mock.calls[0]?.[0] as BaseMessage[];
         expect(callArgs).toBeDefined();
@@ -562,7 +567,7 @@ describe("Orchestrator.process", () => {
             },
         );
 
-        const result = await orchestrator.process([], new HumanMessage("Think about this"));
+        const result = await orchestrator.process([], new HumanMessage("Think about this"), MessageIntent.UNKNOWN);
 
         // Thought chunks excluded from displayed content
         expect(result.content).toBe("The actual answer.");
@@ -594,7 +599,7 @@ describe("Orchestrator.process", () => {
         );
 
         const updates: AgentStatusUpdate[] = [];
-        await orchestrator.process([], new HumanMessage("Hello"), (u) => updates.push(u));
+        await orchestrator.process([], new HumanMessage("Hello"), MessageIntent.UNKNOWN, (u) => updates.push(u));
 
         expect(updates.map((u) => u.type)).toEqual([AgentStatusType.TRIAGE, AgentStatusType.GENERATING]);
     });
@@ -622,7 +627,9 @@ describe("Orchestrator.process", () => {
         );
 
         const updates: AgentStatusUpdate[] = [];
-        await orchestrator.process([], new HumanMessage("What happened today?"), (u) => updates.push(u));
+        await orchestrator.process([], new HumanMessage("What happened today?"), MessageIntent.UNKNOWN, (u) =>
+            updates.push(u),
+        );
 
         expect(updates.map((u) => u.type)).toEqual([AgentStatusType.TRIAGE, AgentStatusType.SEARCHING]);
     });
@@ -652,7 +659,9 @@ describe("Orchestrator.process", () => {
         );
 
         const updates: AgentStatusUpdate[] = [];
-        await orchestrator.process([], new HumanMessage("Summarize example.com"), (u) => updates.push(u));
+        await orchestrator.process([], new HumanMessage("Summarize example.com"), MessageIntent.UNKNOWN, (u) =>
+            updates.push(u),
+        );
 
         expect(updates.map((u) => u.type)).toEqual([
             AgentStatusType.TRIAGE,
@@ -684,7 +693,7 @@ describe("Orchestrator.process", () => {
         );
 
         // Two-arg call must still work; no callback provided
-        expect(orchestrator.process([], new HumanMessage("Hello"))).resolves.toBeDefined();
+        expect(orchestrator.process([], new HumanMessage("Hello"), MessageIntent.UNKNOWN)).resolves.toBeDefined();
     });
 });
 
@@ -763,6 +772,7 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
         const result = await makeOrchestrator(makeTriageWithNoToolCall(), generalModel, provider).process(
             [],
             new HumanMessage("hello"),
+            MessageIntent.UNKNOWN,
         );
 
         expect(result.content).toBe("success on second key");
@@ -789,6 +799,7 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
         const result = await makeOrchestrator(makeTriageWithNoToolCall(), generalModel, provider).process(
             [],
             new HumanMessage("hello"),
+            MessageIntent.UNKNOWN,
         );
 
         expect(result.content).toBe("success on concurrent-advanced key");
@@ -811,6 +822,7 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
             await makeOrchestrator(makeTriageWithNoToolCall(), generalModel, provider).process(
                 [],
                 new HumanMessage("hello"),
+                MessageIntent.UNKNOWN,
             );
         } catch (err) {
             thrown = err;
