@@ -206,6 +206,19 @@ function extractContent(response: BaseMessage): string {
 type GraphState = typeof MessagesAnnotation.State;
 
 /**
+ * Maps each LangGraph node to its string identifier.
+ * Centralizes node names to prevent typos across addNode, addEdge, Command.goto, and return types.
+ */
+export const OrchestratorNode = {
+    TRIAGE: "triage",
+    EXECUTE_TOOL: "executeTool",
+    GENERAL: "general",
+    SEARCH: "search",
+} as const;
+
+export type OrchestratorNode = (typeof OrchestratorNode)[keyof typeof OrchestratorNode];
+
+/**
  * Orchestrates the multi-agent triage routing pipeline as a LangGraph StateGraph.
  *
  * Graph topology:
@@ -451,15 +464,15 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * This is called as a conditional edge function; LangGraph passes the state and
      * config so the intent can be read from context without being stored in state.
      */
-    private routeFromIntent(_state: GraphState, config: NodeConfig): "triage" | "general" | "search" {
+    private routeFromIntent(_state: GraphState, config: NodeConfig): OrchestratorNode {
         const intent = config.context?.intent;
         switch (intent) {
             case MessageIntent.GENERAL:
-                return "general";
+                return OrchestratorNode.GENERAL;
             case MessageIntent.SEARCH:
-                return "search";
+                return OrchestratorNode.SEARCH;
             default:
-                return "triage";
+                return OrchestratorNode.TRIAGE;
         }
     }
 
@@ -477,16 +490,20 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      */
     private buildGraph() {
         let graph = new StateGraph(MessagesAnnotation, OrchestratorContextSchema)
-            .addNode("triage", this.triageNode.bind(this), {
-                ends: ["executeTool", "general", "search"],
+            .addNode(OrchestratorNode.TRIAGE, this.triageNode.bind(this), {
+                ends: [OrchestratorNode.EXECUTE_TOOL, OrchestratorNode.GENERAL, OrchestratorNode.SEARCH],
             })
-            .addNode("executeTool", this.executeToolNode.bind(this))
-            .addNode("general", this.generalNode.bind(this))
-            .addNode("search", this.searchNode.bind(this))
-            .addConditionalEdges(START, this.routeFromIntent.bind(this), ["triage", "general", "search"])
-            .addEdge("executeTool", "general")
-            .addEdge("general", END)
-            .addEdge("search", END);
+            .addNode(OrchestratorNode.EXECUTE_TOOL, this.executeToolNode.bind(this))
+            .addNode(OrchestratorNode.GENERAL, this.generalNode.bind(this))
+            .addNode(OrchestratorNode.SEARCH, this.searchNode.bind(this))
+            .addConditionalEdges(START, this.routeFromIntent.bind(this), [
+                OrchestratorNode.TRIAGE,
+                OrchestratorNode.GENERAL,
+                OrchestratorNode.SEARCH,
+            ])
+            .addEdge(OrchestratorNode.EXECUTE_TOOL, OrchestratorNode.GENERAL)
+            .addEdge(OrchestratorNode.GENERAL, END)
+            .addEdge(OrchestratorNode.SEARCH, END);
 
         // automatic Sentry instrumentation doesn't work in Bun
         if (process.versions.bun && process.env.SENTRY_INITIALIZED) {
@@ -524,7 +541,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             if (!toolCall) {
                 this.logger.info("Triage made no tool call, routing to general agent");
                 span.setAttribute("agent.triage_route", "general");
-                return new Command({ goto: "general" });
+                return new Command({ goto: OrchestratorNode.GENERAL });
             }
 
             this.logger.info({ toolName: toolCall.name }, "Triage selected route");
@@ -543,22 +560,22 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     // Setting name on the AIMessage here makes the lookup return the correct name.
                     triageResponse.name = toolCall.name;
                     return new Command({
-                        goto: "executeTool",
+                        goto: OrchestratorNode.EXECUTE_TOOL,
                         update: { messages: [triageResponse] },
                     });
                 }
 
                 case "route_to_search":
                     // Routing sentinel: do NOT add triage message to state
-                    return new Command({ goto: "search" });
+                    return new Command({ goto: OrchestratorNode.SEARCH });
 
                 case "route_to_general":
                     // Routing sentinel: do NOT add triage message to state
-                    return new Command({ goto: "general" });
+                    return new Command({ goto: OrchestratorNode.GENERAL });
 
                 default:
                     this.logger.warn({ toolName: toolCall.name }, "Unknown triage tool, falling back to general");
-                    return new Command({ goto: "general" });
+                    return new Command({ goto: OrchestratorNode.GENERAL });
             }
         });
     }
