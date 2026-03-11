@@ -1,5 +1,14 @@
 import * as Sentry from "@sentry/bun";
-import { Client, Events, GatewayIntentBits, type Message } from "discord.js";
+import {
+    ActionRowBuilder,
+    ButtonBuilder,
+    type ButtonInteraction,
+    ButtonStyle,
+    Client,
+    Events,
+    GatewayIntentBits,
+    type Message,
+} from "discord.js";
 import type { HandleDiscordMention } from "../../application/HandleDiscordMention.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { IDiscordAttachmentRefetcher } from "../../application/ports/IDiscordAttachmentRefetcher.ts";
@@ -7,6 +16,9 @@ import type { AgentStatusUpdate, OnStatusUpdate } from "../../application/types/
 import { AgentStatusType, assertNever } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
+
+/** Custom ID for the Retry button attached to failed bot responses. */
+const RETRY_BUTTON_ID = "retry_mention";
 
 /**
  * Maps an agent status update to the Discord message string shown to the user
@@ -119,10 +131,54 @@ export class DiscordGateway {
             void this.handleMessageCreate(message);
         });
 
+        this.client.on(Events.InteractionCreate, (interaction) => {
+            if (!interaction.isButton()) return;
+            if (interaction.customId !== RETRY_BUTTON_ID) return;
+            void this.handleRetryButton(interaction);
+        });
+
         this.client.on(Events.Error, (err) => {
             this.logger.error({ err }, "Discord client error");
             Sentry.captureException(err);
         });
+    }
+
+    /**
+     * Handles a Retry button click on a failed bot response.
+     *
+     * Fetches the original user message the bot was replying to, then re-invokes
+     * the message handler as if the user had sent that message again. If the original
+     * message no longer exists, removes the Retry button and replies ephemerally.
+     */
+    private async handleRetryButton(interaction: ButtonInteraction): Promise<void> {
+        const originalMessageId = interaction.message.reference?.messageId;
+        const channel = interaction.channel;
+
+        let originalMessage: Message | undefined;
+        if (originalMessageId && channel?.isTextBased()) {
+            try {
+                originalMessage = await channel.messages.fetch(originalMessageId);
+            } catch {
+                // fetch failed — original message was deleted
+            }
+        }
+
+        if (!originalMessage) {
+            // Original message is gone or unreachable — remove the button and notify ephemerally
+            await Promise.allSettled([
+                interaction.reply({
+                    content: "Original message is missing, retry is no longer possible.",
+                    ephemeral: true,
+                }),
+                interaction.message.edit({ components: [] }),
+            ]);
+            return;
+        }
+
+        // Acknowledge the interaction immediately so Discord doesn't show "interaction failed"
+        await interaction.deferUpdate();
+
+        await this.handleMessageCreate(originalMessage);
     }
 
     private async handleMessageCreate(message: Message): Promise<void> {
@@ -248,7 +304,7 @@ export class DiscordGateway {
                     };
 
                     // handle() never throws — errors are caught internally and returned as a response
-                    const { response, newMessages } = await this.mentionHandler.handle({
+                    const { response, newMessages, isFailure, isRetryable } = await this.mentionHandler.handle({
                         discordMessageId: message.id,
                         referencedMessageId: message.reference?.messageId ?? null,
                         channelId: message.channelId,
@@ -266,6 +322,7 @@ export class DiscordGateway {
                     span.setAttributes({
                         "discord.response_truncated": truncated,
                         "discord.response_length": response.length,
+                        "discord.is_failure": isFailure ?? false,
                     });
 
                     // Resolve the thinking message and cancel any pending status edit
@@ -276,7 +333,21 @@ export class DiscordGateway {
                         thinkingMessage.delete();
                     });
 
-                    const botReply = await message.reply(safeResponse);
+                    // Attach a Retry button when the use case signals a retryable failure
+                    const retryRow =
+                        isFailure && isRetryable
+                            ? new ActionRowBuilder<ButtonBuilder>().addComponents(
+                                  new ButtonBuilder()
+                                      .setCustomId(RETRY_BUTTON_ID)
+                                      .setLabel("Retry")
+                                      .setStyle(ButtonStyle.Primary),
+                              )
+                            : undefined;
+
+                    const botReply = await message.reply({
+                        content: safeResponse,
+                        ...(retryRow && { components: [retryRow] }),
+                    });
 
                     // Persist only after the final response is successfully sent
                     await this.mentionHandler.saveBotResponse({

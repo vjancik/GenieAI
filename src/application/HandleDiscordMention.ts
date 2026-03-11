@@ -95,7 +95,12 @@ export class HandleDiscordMention {
         attachments: DiscordAttachmentInfo[];
         onStatusUpdate?: OnStatusUpdate;
         attachmentRefetcher?: IDiscordAttachmentRefetcher;
-    }): Promise<{ response: string; newMessages: BaseMessage[] }> {
+    }): Promise<{
+        response: string;
+        newMessages: BaseMessage[];
+        isFailure?: boolean;
+        isRetryable?: boolean;
+    }> {
         try {
             return await Sentry.startSpan(
                 {
@@ -215,6 +220,8 @@ export class HandleDiscordMention {
             return {
                 response: "Sorry, I encountered an error processing your request.",
                 newMessages: [],
+                isFailure: true,
+                isRetryable: true,
             };
         }
     }
