@@ -92,7 +92,7 @@ describe("@langchain/google — HumanMessage multimodal serialization", () => {
      * Uses the legacy converter path (no output_version in response_metadata).
      * This is the WORKING approach documented in the bug report.
      */
-    test("v0 content: with media type blocks produces expected Gemini parts (snapshot)", async () => {    
+    test("v0 content: with media type blocks produces expected Gemini parts (snapshot)", async () => {
         const model = new ChatGoogle({
             model: "gemini-2.5-flash",
             apiKey: "test-api-key-fake",
@@ -117,19 +117,22 @@ describe("@langchain/google — HumanMessage multimodal serialization", () => {
                     {
                         type: "media",
                         mimeType: "audio/mpeg",
-                        fileUri: "https://generativelanguage.googleapis.com/v1beta/files/aud-003",
+                        fileUri:
+                            "https://generativelanguage.googleapis.com/v1beta/files/aud-003",
                     },
                     {
                         type: "media",
                         mimeType: "text/plain",
-                        fileUri: "https://generativelanguage.googleapis.com/v1beta/files/txt-004",
+                        fileUri:
+                            "https://generativelanguage.googleapis.com/v1beta/files/txt-004",
                     },
                     {
                         type: "media",
                         mimeType: "application/pdf",
-                        fileUri: "https://generativelanguage.googleapis.com/v1beta/files/pdf-005",
+                        fileUri:
+                            "https://generativelanguage.googleapis.com/v1beta/files/pdf-005",
                     },
-                ]
+                ],
             }),
         ];
 

@@ -90,46 +90,69 @@ describe("isExplicitMention", () => {
 describe("extractUserContent", () => {
     test("strips <@userId> mention format", () => {
         const msg = makeMessage({ content: `<@${BOT_ID}> hello there` });
-        expect(extractUserContent(msg, BOT_ID)).toBe("hello there");
+        expect(extractUserContent(msg, BOT_ID, null)).toBe("hello there");
     });
 
     test("strips <@!userId> legacy nickname mention format", () => {
         const msg = makeMessage({ content: `<@!${BOT_ID}> what is 2+2?` });
-        expect(extractUserContent(msg, BOT_ID)).toBe("what is 2+2?");
+        expect(extractUserContent(msg, BOT_ID, null)).toBe("what is 2+2?");
     });
 
     test("strips multiple bot mentions", () => {
         const msg = makeMessage({
             content: `<@${BOT_ID}> hey <@${BOT_ID}> test`,
         });
-        expect(extractUserContent(msg, BOT_ID)).toBe("hey  test");
+        expect(extractUserContent(msg, BOT_ID, null)).toBe("hey  test");
     });
 
     test("trims surrounding whitespace", () => {
         const msg = makeMessage({
             content: `  <@${BOT_ID}>   tell me a joke   `,
         });
-        expect(extractUserContent(msg, BOT_ID)).toBe("tell me a joke");
+        expect(extractUserContent(msg, BOT_ID, null)).toBe("tell me a joke");
     });
 
     test("returns empty string when only a mention is present", () => {
         const msg = makeMessage({ content: `<@${BOT_ID}>` });
-        expect(extractUserContent(msg, BOT_ID)).toBe("");
+        expect(extractUserContent(msg, BOT_ID, null)).toBe("");
     });
 
     test("does not strip other users' mentions", () => {
         const msg = makeMessage({
             content: `<@${BOT_ID}> hey <@${OTHER_USER_ID}> what do you think?`,
         });
-        expect(extractUserContent(msg, BOT_ID)).toBe(
+        expect(extractUserContent(msg, BOT_ID, null)).toBe(
             `hey <@${OTHER_USER_ID}> what do you think?`,
         );
     });
 
-    test("strips role mentions (<@&roleId>)", () => {
+    test("strips the bot's role mention (<@&roleId>) when botRoleId is provided", () => {
+        const BOT_ROLE_ID = "111222333";
+        const msg = makeMessage({
+            content: `<@&${BOT_ROLE_ID}> <@${BOT_ID}> what is 2+2?`,
+        });
+        expect(extractUserContent(msg, BOT_ID, BOT_ROLE_ID)).toBe(
+            "what is 2+2?",
+        );
+    });
+
+    test("does not strip other role mentions when botRoleId is provided", () => {
+        const BOT_ROLE_ID = "111222333";
+        const OTHER_ROLE_ID = "999888777";
+        const msg = makeMessage({
+            content: `<@&${OTHER_ROLE_ID}> <@${BOT_ID}> what is 2+2?`,
+        });
+        expect(extractUserContent(msg, BOT_ID, BOT_ROLE_ID)).toBe(
+            `<@&${OTHER_ROLE_ID}>  what is 2+2?`,
+        );
+    });
+
+    test("does not strip role mentions when botRoleId is null (DM)", () => {
         const msg = makeMessage({
             content: `<@&111222333> <@${BOT_ID}> what is 2+2?`,
         });
-        expect(extractUserContent(msg, BOT_ID)).toBe("what is 2+2?");
+        expect(extractUserContent(msg, BOT_ID, null)).toBe(
+            "<@&111222333>  what is 2+2?",
+        );
     });
 });

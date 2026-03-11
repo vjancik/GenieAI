@@ -154,8 +154,7 @@ const statusUpdater = new StatusMessageUpdater(
 );
 const gateway = new DiscordGateway(
     config.discordToken,
-    handleDiscordMention.handle.bind(handleDiscordMention),
-    handleDiscordMention.saveBotResponse.bind(handleDiscordMention),
+    handleDiscordMention,
     logger.child({ module: "discord" }),
     statusUpdater,
 );

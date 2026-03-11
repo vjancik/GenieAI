@@ -1,6 +1,6 @@
-import type { BaseMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import { Client, Events, GatewayIntentBits, type Message } from "discord.js";
+import type { HandleDiscordMention } from "../../application/HandleDiscordMention.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { IDiscordAttachmentRefetcher } from "../../application/ports/IDiscordAttachmentRefetcher.ts";
 import type {
@@ -56,48 +56,33 @@ export function isExplicitMention(
 }
 
 /**
- * Strips bot @mention tokens and all role mention tokens from the message content.
+ * Strips bot @mention tokens and the bot's managed role mention token from the message content.
  * Discord encodes user mentions as `<@userId>` or `<@!userId>` (legacy nickname format),
- * and role mentions as `<@&roleId>`. Role mentions are stripped unconditionally since
- * the bot's role ID is not available here and they are always noise in the user's intent.
+ * and role mentions as `<@&roleId>`.
+ *
+ * The bot's managed role ID is sourced from the guild member object at call time, so only
+ * the bot's own role mention is stripped rather than all role mentions. In DMs there are no
+ * role mentions, so `botRoleId` will be null and the role-stripping step is skipped entirely.
  *
  * @param message - The Discord message
  * @param botUserId - The bot's Discord user ID
- * @returns Trimmed message content without bot mention or role mention tokens
+ * @param botRoleId - The bot's managed role ID in this guild, or null for DMs
+ * @returns Trimmed message content without the bot's user/role mention tokens
  */
 export function extractUserContent(
     message: Message,
     botUserId: string,
+    botRoleId: string | null,
 ): string {
-    return (
-        message.content
-            .replace(new RegExp(`<@!?${botUserId}>`, "g"), "")
-            // TODO: pass the bot default server role ID to selectively strip only the bot's role mention, if present
-            .replace(/<@&\d+>/g, "")
-            .trim()
+    let content = message.content.replace(
+        new RegExp(`<@!?${botUserId}>`, "g"),
+        "",
     );
+    if (botRoleId) {
+        content = content.replace(new RegExp(`<@&${botRoleId}>`, "g"), "");
+    }
+    return content.trim();
 }
-
-/** Callback invoked when the bot receives a valid explicit mention. */
-export type MentionHandler = (params: {
-    discordMessageId: string;
-    referencedMessageId: string | null;
-    channelId: string;
-    guildId: string | null;
-    userContent: string;
-    attachments: DiscordAttachmentInfo[];
-    onStatusUpdate?: OnStatusUpdate;
-    attachmentRefetcher?: IDiscordAttachmentRefetcher;
-}) => Promise<{ response: string; newMessages: BaseMessage[] }>;
-
-/** Callback invoked after the bot's reply is sent, to persist the bot's message. */
-export type BotReplySavedCallback = (params: {
-    botDiscordMessageId: string;
-    repliesToDiscordId: string;
-    channelId: string;
-    guildId: string | null;
-    newMessages: BaseMessage[];
-}) => Promise<void>;
 
 /**
  * Manages the Discord gateway connection and dispatches incoming mention events.
@@ -113,8 +98,7 @@ export class DiscordGateway {
 
     constructor(
         private readonly token: string,
-        private readonly mentionHandler: MentionHandler,
-        private readonly botReplySaved: BotReplySavedCallback,
+        private readonly mentionHandler: HandleDiscordMention,
         private readonly logger: Logger,
         private readonly statusUpdater: StatusMessageUpdater,
     ) {
@@ -171,7 +155,9 @@ export class DiscordGateway {
         // Only respond to explicit @mentions, not reply-mentions
         if (!isExplicitMention(message, botUserId)) return;
 
-        const userContent = extractUserContent(message, botUserId);
+        // botRole is the managed role Discord auto-creates for the bot in each guild; null in DMs
+        const botRoleId = message.guild?.members.me?.roles.botRole?.id ?? null;
+        const userContent = extractUserContent(message, botUserId, botRoleId);
         const attachments: DiscordAttachmentInfo[] = [
             ...message.attachments.values(),
         ].map((a) => ({
@@ -266,8 +252,8 @@ export class DiscordGateway {
                 };
 
                 try {
-                    const { response, newMessages } = await this.mentionHandler(
-                        {
+                    const { response, newMessages } =
+                        await this.mentionHandler.handle({
                             discordMessageId: message.id,
                             referencedMessageId:
                                 message.reference?.messageId ?? null,
@@ -277,8 +263,7 @@ export class DiscordGateway {
                             attachments,
                             onStatusUpdate,
                             attachmentRefetcher,
-                        },
-                    );
+                        });
 
                     // Cancel any pending status edit before writing the final response
                     this.statusUpdater.cancel(thinkingMessage.id);
@@ -298,7 +283,7 @@ export class DiscordGateway {
                     await thinkingMessage.edit(safeResponse);
 
                     // Persist only after the final response is successfully displayed
-                    await this.botReplySaved({
+                    await this.mentionHandler.saveBotResponse({
                         botDiscordMessageId: thinkingMessage.id,
                         repliesToDiscordId: message.id,
                         channelId: thinkingMessage.channelId,
