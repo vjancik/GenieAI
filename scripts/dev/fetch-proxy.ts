@@ -24,7 +24,7 @@ globalThis.fetch = async function proxiedFetch(input: Request | string | URL, in
             body = "(parse error)";
         }
 
-        console.log("[fetch-proxy] generateContent request\n" + JSON.stringify({ url, body }, null, 2));
+        console.log(`[fetch-proxy] generateContent request\n${JSON.stringify({ url, body }, null, 2)}`);
     }
 
     return originalFetch(input, init);

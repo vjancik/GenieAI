@@ -15,7 +15,7 @@
 import * as Sentry from "@sentry/bun";
 import { GeminiApiKeySyncService } from "./application/GeminiApiKeySyncService.ts";
 import { GeminiFileRefreshService } from "./application/GeminiFileRefreshService.ts";
-import { HandleDiscordMention } from "./application/HandleDiscordMention.ts";
+import { HandleDiscordMessage } from "./application/HandleDiscordMessage.ts";
 import { FetchAttachmentDownloader } from "./infrastructure/attachments/FetchAttachmentDownloader.ts";
 import { FetchDiskAttachmentDownloader } from "./infrastructure/attachments/FetchDiskAttachmentDownloader.ts";
 import { GenaiFileUploaderRegistry } from "./infrastructure/attachments/GenaiFileUploaderRegistry.ts";
@@ -110,7 +110,7 @@ const orchestrator = new AgentOrchestrator(
 const primaryUploader = uploaderRegistry.get(freeKeyProvider.currentKey.id);
 
 // Application use case
-const handleDiscordMention = new HandleDiscordMention(
+const handleDiscordMention = new HandleDiscordMessage(
     messageRepository,
     orchestrator,
     attachmentDownloader,

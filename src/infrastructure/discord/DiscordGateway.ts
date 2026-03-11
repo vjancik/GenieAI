@@ -9,7 +9,7 @@ import {
     GatewayIntentBits,
     type Message,
 } from "discord.js";
-import type { HandleDiscordMention } from "../../application/HandleDiscordMention.ts";
+import type { HandleDiscordMessage } from "../../application/HandleDiscordMessage.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { IDiscordAttachmentRefetcher } from "../../application/ports/IDiscordAttachmentRefetcher.ts";
 import type { AgentStatusUpdate, OnStatusUpdate } from "../../application/types/AgentStatus.ts";
@@ -93,7 +93,7 @@ export class DiscordGateway {
 
     constructor(
         private readonly token: string,
-        private readonly mentionHandler: HandleDiscordMention,
+        private readonly mentionHandler: HandleDiscordMessage,
         private readonly logger: Logger,
         private readonly statusUpdater: StatusMessageUpdater,
     ) {

@@ -38,7 +38,7 @@ type PendingGeminiRecord = {
 };
 
 /**
- * Application use case: handle an incoming Discord @mention.
+ * Application use case: handle an incoming Discord message.
  *
  * Coordinates:
  * 1. Fetching prior conversation history from the reply chain
@@ -53,7 +53,7 @@ type PendingGeminiRecord = {
  * All messages are serialized using LangChain's BaseMessage.toJSON() to preserve
  * full metadata (thoughtSignatures, tool calls, response_metadata) for context continuity.
  */
-export class HandleDiscordMention {
+export class HandleDiscordMessage {
     private readonly maxInlineBytes: number;
     private readonly attachmentMode: AppConfig["attachmentMode"];
 
@@ -73,7 +73,7 @@ export class HandleDiscordMention {
     }
 
     /**
-     * Process an incoming Discord mention event.
+     * Process an incoming Discord message.
      *
      * @param params.discordMessageId - Discord snowflake for the user's message
      * @param params.referencedMessageId - Discord snowflake of the message being replied to, or null
@@ -104,8 +104,8 @@ export class HandleDiscordMention {
         try {
             return await Sentry.startSpan(
                 {
-                    name: "Process Discord mention",
-                    op: "app.mention.handle",
+                    name: "Process Discord message",
+                    op: "app.message.handle",
                     attributes: {
                         "discord.message_id": params.discordMessageId,
                         "app.attachment_count": params.attachments.length,
@@ -155,7 +155,7 @@ export class HandleDiscordMention {
                             attachmentCount: params.attachments.length,
                             attachmentMode: this.attachmentMode,
                         },
-                        "Processing mention with history",
+                        "Processing message with history",
                     );
 
                     // Build the human message — multimodal if attachments are present.
@@ -187,7 +187,7 @@ export class HandleDiscordMention {
                     if (pendingRecords.length > 0) {
                         if (!this.geminiFileRepo || !this.geminiFileUploader) {
                             throw new Error(
-                                "Upload mode repository dependencies not injected into HandleDiscordMention",
+                                "Upload mode repository dependencies not injected into HandleDiscordMessage",
                             );
                         }
                         const { geminiFileRepo, geminiFileUploader } = this;
@@ -215,7 +215,7 @@ export class HandleDiscordMention {
                 },
             );
         } catch (err) {
-            this.logger.error({ err, discordMessageId: params.discordMessageId }, "Failed to process mention");
+            this.logger.error({ err, discordMessageId: params.discordMessageId }, "Failed to process message");
             Sentry.captureException(err);
             return {
                 response: "Sorry, I encountered an error processing your request.",
@@ -249,7 +249,7 @@ export class HandleDiscordMention {
         await Sentry.startSpan(
             {
                 name: "Save bot response",
-                op: "app.mention.save_bot_response",
+                op: "app.message.save_bot_response",
                 attributes: {
                     "discord.message_id": params.botDiscordMessageId,
                     "app.message_count": params.newMessages.length,
@@ -389,7 +389,7 @@ export class HandleDiscordMention {
             },
             async () => {
                 if (!this.diskDownloader || !this.geminiFileUploader) {
-                    throw new Error("Upload mode dependencies not injected into HandleDiscordMention");
+                    throw new Error("Upload mode dependencies not injected into HandleDiscordMessage");
                 }
 
                 // Legacy LangChain media format for file references — uses fileUri instead of data.
