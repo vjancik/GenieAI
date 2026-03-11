@@ -8,7 +8,7 @@ import {
     SystemMessage,
     ToolMessage,
 } from "@langchain/core/messages";
-import { Command, END, MessagesAnnotation, START, StateGraph } from "@langchain/langgraph";
+import { Command, END, MessagesValue, START, StateGraph, StateSchema } from "@langchain/langgraph";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
 import type { GeminiFileRefreshService } from "../../../application/GeminiFileRefreshService.ts";
@@ -34,11 +34,25 @@ import type { GetVideoTranscriptionTool } from "../tools/getVideoTranscriptionTo
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
 
 /**
+ * Graph state schema: extends the prebuilt messages reducer with an `intent` field.
+ * Intent is seeded once at invocation and never mutated by nodes — the plain Zod
+ * schema produces a LastValue channel (replace semantics).
+ *
+ * Storing intent in state (rather than context) makes it available to the
+ * conditional edge function and any node without threading it through context.
+ */
+const OrchestratorStateSchema = new StateSchema({
+    messages: MessagesValue,
+    intent: z.custom<MessageIntent>(),
+});
+
+/**
  * Zod schema for the LangGraph runtime context passed to each node.
  * Lives in context (not state) so it is never serialized by a checkpointer.
+ * Intent was moved to state; only ephemeral per-invocation callbacks remain here.
+
  */
 const OrchestratorContextSchema = z.object({
-    intent: z.custom<MessageIntent>(),
     onStatusUpdate: z.custom<OnStatusUpdate>().optional(),
     attachmentRefetcher: z.custom<IDiscordAttachmentRefetcher>().optional(),
 });
@@ -202,8 +216,8 @@ function extractContent(response: BaseMessage): string {
         .join("");
 }
 
-/** Graph state type from MessagesAnnotation */
-type GraphState = typeof MessagesAnnotation.State;
+/** Graph state type — messages + intent seeded at invocation. */
+type GraphState = typeof OrchestratorStateSchema.State;
 
 /**
  * Maps each LangGraph node to its string identifier.
@@ -315,13 +329,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             },
             async (span) => {
                 const initialMessages = [...history, userMessage];
-                // Always pass context so nodes receive a non-optional config
-                // TYPE COERCION: LangGraph's compiled graph is typed as any (see field declaration);
-                // annotate the known output shape — MessagesAnnotation always produces { messages: BaseMessage[] }.
-                const result = (await this.graph.invoke(
-                    { messages: initialMessages },
-                    { context: { intent, onStatusUpdate, attachmentRefetcher } },
-                )) as { messages: BaseMessage[] };
+                const result = await this.graph.invoke(
+                    { messages: initialMessages, intent },
+                    { context: { onStatusUpdate, attachmentRefetcher } },
+                );
 
                 // Everything after the initial seed is "new" — generated during this turn
                 const newMessages = result.messages.slice(initialMessages.length);
@@ -464,9 +475,8 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * This is called as a conditional edge function; LangGraph passes the state and
      * config so the intent can be read from context without being stored in state.
      */
-    private routeFromIntent(_state: GraphState, config: NodeConfig): OrchestratorNode {
-        const intent = config.context?.intent;
-        switch (intent) {
+    private routeFromIntent(state: GraphState, _config: NodeConfig): OrchestratorNode {
+        switch (state.intent) {
             case MessageIntent.GENERAL:
                 return OrchestratorNode.GENERAL;
             case MessageIntent.SEARCH:
@@ -489,7 +499,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * without being added to graph state — they are invisible in persisted history.
      */
     private buildGraph() {
-        let graph = new StateGraph(MessagesAnnotation, OrchestratorContextSchema)
+        let graph = new StateGraph(OrchestratorStateSchema, OrchestratorContextSchema)
             .addNode(OrchestratorNode.TRIAGE, this.triageNode.bind(this), {
                 ends: [OrchestratorNode.EXECUTE_TOOL, OrchestratorNode.GENERAL, OrchestratorNode.SEARCH],
             })
