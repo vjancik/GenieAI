@@ -1,150 +1,67 @@
 import type { IModelProvider } from "../../application/ports/IModelProvider.ts";
 import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
-import { createGeneralModel, type GeneralModel } from "./models/generalModel.ts";
-import { createSearchModel, type SearchModel } from "./models/searchModel.ts";
-import { createTriageModel, type TriageAgentDeps, type TriageModel } from "./models/triageModel.ts";
 
 /**
- * Lazy-caching model provider for the triage model.
- *
- * Builds one {@link TriageModel} per unique API key string, caching after first
- * construction. The cache key is the raw `apiKey` string, not the UUID, because
- * `ChatGoogle` and `bindTools` are keyed on the raw key used to initialize the client.
- *
- * If `fallbackModelName` is provided, a separate fallback model instance is also
- * cached per key and returned via {@link getFallback}.
- *
- * Implements {@link IModelProvider} so the orchestrator depends only on the interface.
+ * Cache key tuple: `[apiKey, modelName]`.
+ * Using a composite key allows a single map to hold both primary and fallback
+ * model instances without a second map or a two-level nested structure.
  */
-export class TriageModelProvider implements IModelProvider<TriageModel> {
-    private readonly cache = new Map<string, TriageModel>();
-    private readonly fallbackCache = new Map<string, TriageModel>();
-    readonly modelName: string;
+type ModelCacheKey = `${string}::${string}`;
 
-    constructor(private readonly deps: Omit<TriageAgentDeps, "apiKey"> & { fallbackModelName?: string }) {
-        this.modelName = deps.modelName;
-    }
-
-    /** Returns the triage model for the given key, constructing and caching on first access. */
-    get(key: GeminiApiKey): TriageModel {
-        const cached = this.cache.get(key.apiKey);
-        if (cached) return cached;
-        const model = createTriageModel({ ...this.deps, apiKey: key.apiKey });
-        this.cache.set(key.apiKey, model);
-        return model;
-    }
-
-    /**
-     * Returns the fallback triage model for the given key, or `undefined` if no fallback
-     * model name was configured. The fallback uses the same bound tools as the primary.
-     */
-    getFallback(key: GeminiApiKey): TriageModel | undefined {
-        if (!this.deps.fallbackModelName) return undefined;
-        const cached = this.fallbackCache.get(key.apiKey);
-        if (cached) return cached;
-        const model = createTriageModel({ ...this.deps, modelName: this.deps.fallbackModelName, apiKey: key.apiKey });
-        this.fallbackCache.set(key.apiKey, model);
-        return model;
-    }
+function toCacheKey(apiKey: string, modelName: string): ModelCacheKey {
+    return `${apiKey}::${modelName}`;
 }
 
 /**
- * Lazy-caching model provider for the general-purpose model.
- * One {@link GeneralModel} instance per unique API key string.
+ * Abstract base class for lazy-caching model providers.
  *
- * If `fallbackModelName` is provided, a separate fallback model instance is also
- * cached per key and returned via {@link getFallback}.
+ * Handles all caching logic so that concrete providers only need to implement
+ * {@link create}, which constructs a new model instance for a given API key and
+ * model name. Both primary and fallback instances share the same cache map,
+ * distinguished by the composite `[apiKey, modelName]` key.
+ *
+ * Subclasses must supply `primaryModelName` and optionally `fallbackModelName`
+ * to the super constructor.
+ *
+ * @template T - The concrete model client type (e.g. `ChatGoogle` with bound tools)
  */
-export class GeneralModelProvider implements IModelProvider<GeneralModel> {
-    private readonly cache = new Map<string, GeneralModel>();
-    private readonly fallbackCache = new Map<string, GeneralModel>();
-    readonly modelName: string;
+export abstract class ModelProvider<T> implements IModelProvider<T> {
+    private readonly cache = new Map<ModelCacheKey, T>();
 
     constructor(
-        private readonly config: {
-            modelName: string;
-            includeLLMThoughts: boolean;
-            fallbackModelName?: string;
-        },
-    ) {
-        this.modelName = config.modelName;
-    }
+        readonly modelName: string,
+        protected readonly fallbackModelName: string | undefined,
+    ) {}
 
-    /** Returns the general model for the given key, constructing and caching on first access. */
-    get(key: GeminiApiKey): GeneralModel {
-        const cached = this.cache.get(key.apiKey);
-        if (cached) return cached;
-        const model = createGeneralModel({
-            apiKey: key.apiKey,
-            modelName: this.config.modelName,
-            includeLLMThoughts: this.config.includeLLMThoughts,
-        });
-        this.cache.set(key.apiKey, model);
-        return model;
+    /**
+     * Constructs a new model instance for the given API key and model name.
+     * Called at most once per unique `[apiKey, modelName]` pair — subsequent
+     * calls for the same pair return the cached instance.
+     */
+    protected abstract create(apiKey: string, modelName: string): T;
+
+    /**
+     * Returns (or lazily constructs) the primary model client for the given key.
+     */
+    get(key: GeminiApiKey): T {
+        return this.getOrCreate(key.apiKey, this.modelName);
     }
 
     /**
-     * Returns the fallback general model for the given key, or `undefined` if no fallback
-     * model name was configured.
+     * Returns (or lazily constructs) the fallback model client for the given key,
+     * or `undefined` if no fallback model name was configured.
      */
-    getFallback(key: GeminiApiKey): GeneralModel | undefined {
-        if (!this.config.fallbackModelName) return undefined;
-        const cached = this.fallbackCache.get(key.apiKey);
+    getFallback(key: GeminiApiKey): T | undefined {
+        if (!this.fallbackModelName) return undefined;
+        return this.getOrCreate(key.apiKey, this.fallbackModelName);
+    }
+
+    protected getOrCreate(apiKey: string, modelName: string): T {
+        const cacheKey = toCacheKey(apiKey, modelName);
+        const cached = this.cache.get(cacheKey);
         if (cached) return cached;
-        const model = createGeneralModel({
-            apiKey: key.apiKey,
-            modelName: this.config.fallbackModelName,
-            includeLLMThoughts: this.config.includeLLMThoughts,
-        });
-        this.fallbackCache.set(key.apiKey, model);
+        const model = this.create(apiKey, modelName);
+        this.cache.set(cacheKey, model);
         return model;
-    }
-}
-
-/**
- * Single-instance model provider for the search model.
- *
- * The search model always uses the paid API key (Google Search grounding is
- * paid-only). A single instance is created at construction time — the `key`
- * argument to {@link get} is ignored since there is no key rotation for search.
- *
- * If `fallbackModelName` is provided, a single fallback instance is also created
- * at construction time and returned via {@link getFallback}.
- */
-export class SearchModelProvider implements IModelProvider<SearchModel> {
-    readonly modelName: string;
-    private readonly model: SearchModel;
-    private readonly fallbackModel: SearchModel | undefined;
-
-    constructor(
-        apiKey: string,
-        config: { modelName: string; includeLLMThoughts: boolean; fallbackModelName?: string },
-    ) {
-        this.modelName = config.modelName;
-        this.model = createSearchModel({
-            apiKey,
-            modelName: config.modelName,
-            includeLLMThoughts: config.includeLLMThoughts,
-        });
-        this.fallbackModel = config.fallbackModelName
-            ? createSearchModel({
-                  apiKey,
-                  modelName: config.fallbackModelName,
-                  includeLLMThoughts: config.includeLLMThoughts,
-              })
-            : undefined;
-    }
-
-    /** Returns the single search model instance (key argument is ignored). */
-    get(_key: GeminiApiKey): SearchModel {
-        return this.model;
-    }
-
-    /**
-     * Returns the fallback search model instance, or `undefined` if no fallback model
-     * name was configured. Key argument is ignored (search always uses a single paid key).
-     */
-    getFallback(_key: GeminiApiKey): SearchModel | undefined {
-        return this.fallbackModel;
     }
 }

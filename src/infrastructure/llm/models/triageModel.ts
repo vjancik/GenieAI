@@ -2,6 +2,7 @@ import { tool } from "@langchain/core/tools";
 import { ChatGoogle } from "@langchain/google/node";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
+import { ModelProvider } from "../ModelProvider.ts";
 import type { GetVideoTranscriptionTool } from "../tools/getVideoTranscriptionTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
 
@@ -45,12 +46,12 @@ export const TRIAGE_SYSTEM_PROMPT =
     "- If the question needs current/live information or very niche topics: call route_to_search\n" +
     "- For everything else: call route_to_general";
 
-/** Dependencies for constructing a triage model instance. */
-export interface TriageAgentDeps {
-    /** Google API key for this model instance. */
-    apiKey: string;
+/** Dependencies for constructing a triage model provider instance. */
+interface TriageModelOptions {
     /** Gemini model identifier (e.g. "gemini-3-flash-preview"). */
     modelName: string;
+    /** Fallback model name used on 503 or timeout errors. */
+    fallbackModelName?: string;
     /** Gemini reasoning effort level (e.g. "minimal", "medium", "high"). */
     triageThinkingLevel: string;
     /** Whether to include thought tokens in the model response. */
@@ -67,14 +68,11 @@ export interface TriageAgentDeps {
  *
  * Uses a low thinking budget to keep latency and cost minimal for classification.
  */
-export function createTriageModel({
-    apiKey,
-    modelName,
-    triageThinkingLevel,
-    includeLLMThoughts,
-    getWebsiteTool,
-    getVideoTranscriptionTool,
-}: TriageAgentDeps) {
+function createTriageModel(
+    apiKey: string,
+    modelName: string,
+    deps: Omit<TriageModelOptions, "modelName" | "fallbackModelName">,
+) {
     // automatic Sentry instrumentation doesn't work in Bun
     const sentryCallback =
         process.versions.bun && process.env.SENTRY_INITIALIZED ? [Sentry.createLangChainCallbackHandler()] : undefined;
@@ -83,14 +81,30 @@ export function createTriageModel({
         model: modelName,
         apiKey,
         thinkingConfig: {
-            thinkingLevel: triageThinkingLevel,
-            includeThoughts: includeLLMThoughts,
+            thinkingLevel: deps.triageThinkingLevel,
+            includeThoughts: deps.includeLLMThoughts,
         },
         callbacks: sentryCallback,
     });
 
-    const tools = [getWebsiteTool, getVideoTranscriptionTool, routeToSearchTool, routeToGeneralTool];
+    const tools = [deps.getWebsiteTool, deps.getVideoTranscriptionTool, routeToSearchTool, routeToGeneralTool];
     return llm.bindTools(tools);
 }
 
 export type TriageModel = ReturnType<typeof createTriageModel>;
+
+/**
+ * Lazy-caching provider for the triage model.
+ *
+ * Builds one {@link TriageModel} per unique `[apiKey, modelName]` pair.
+ * The fallback model (if configured) is cached in the same map under its own key.
+ */
+export class TriageModelProvider extends ModelProvider<TriageModel> {
+    constructor(private readonly options: TriageModelOptions) {
+        super(options.modelName, options.fallbackModelName);
+    }
+
+    protected create(apiKey: string, modelName: string): TriageModel {
+        return createTriageModel(apiKey, modelName, this.options);
+    }
+}

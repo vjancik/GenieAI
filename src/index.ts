@@ -27,7 +27,9 @@ import { PgMessageRepository } from "./infrastructure/db/repositories/PgMessageR
 import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
 import { StatusMessageUpdater } from "./infrastructure/discord/StatusMessageUpdater.ts";
 import { AgentOrchestrator, type ModelTimeouts } from "./infrastructure/llm/agents/geminiAgentOrchestrator.ts";
-import { GeneralModelProvider, SearchModelProvider, TriageModelProvider } from "./infrastructure/llm/ModelProvider.ts";
+import { GeneralModelProvider } from "./infrastructure/llm/models/generalModel.ts";
+import { SearchModelProvider } from "./infrastructure/llm/models/searchModel.ts";
+import { TriageModelProvider } from "./infrastructure/llm/models/triageModel.ts";
 import { RoundRobinFreeKeyProvider } from "./infrastructure/llm/RoundRobinFreeKeyProvider.ts";
 import { createGetVideoTranscriptionTool } from "./infrastructure/llm/tools/getVideoTranscriptionTool.ts";
 import { createGetWebsiteTool } from "./infrastructure/llm/tools/getWebsiteTool.ts";

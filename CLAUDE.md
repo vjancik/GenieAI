@@ -23,6 +23,7 @@
 - any type coercions must have a preceding comment explaining why they are necessary or acceptable in the format // TYPE COERCION: ..., this applies to project source code, tests are an exception
 - use type guards and type narrowing over type coercions where possible
 - prefer bind(this / instanceObj), when passing methods as callbacks, to lambda wrappers
+- do not export anything out of a file that isn't needed somewhere else. Not-exported should be the default.
 
 # Database Rules
 - prefer prepared statements for repeated queries
