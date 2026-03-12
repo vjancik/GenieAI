@@ -71,7 +71,7 @@ interface TriageModelOptions {
 function createTriageModel(
     apiKey: string,
     modelName: string,
-    deps: Omit<TriageModelOptions, "modelName" | "fallbackModelName">,
+    options: Omit<TriageModelOptions, "modelName" | "fallbackModelName">,
 ) {
     // automatic Sentry instrumentation doesn't work in Bun
     const sentryCallback =
@@ -81,13 +81,13 @@ function createTriageModel(
         model: modelName,
         apiKey,
         thinkingConfig: {
-            thinkingLevel: deps.triageThinkingLevel,
-            includeThoughts: deps.includeLLMThoughts,
+            thinkingLevel: options.triageThinkingLevel,
+            includeThoughts: options.includeLLMThoughts,
         },
         callbacks: sentryCallback,
     });
 
-    const tools = [deps.getWebsiteTool, deps.getVideoTranscriptionTool, routeToSearchTool, routeToGeneralTool];
+    const tools = [options.getWebsiteTool, options.getVideoTranscriptionTool, routeToSearchTool, routeToGeneralTool];
     return llm.bindTools(tools);
 }
 

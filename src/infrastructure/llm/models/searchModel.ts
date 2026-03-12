@@ -36,7 +36,7 @@ interface SearchModelOptions {
 function createSearchModel(
     apiKey: string,
     modelName: string,
-    deps: Omit<SearchModelOptions, "modelName" | "fallbackModelName">,
+    options: Omit<SearchModelOptions, "modelName" | "fallbackModelName">,
 ) {
     // automatic Sentry instrumentation doesn't work in Bun
     const sentryCallback =
@@ -47,7 +47,7 @@ function createSearchModel(
         apiKey,
         thinkingConfig: {
             thinkingLevel: "high",
-            includeThoughts: deps.includeLLMThoughts,
+            includeThoughts: options.includeLLMThoughts,
         },
         callbacks: sentryCallback,
     });

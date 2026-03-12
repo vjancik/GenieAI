@@ -28,7 +28,7 @@ interface GeneralModelOptions {
 function createGeneralModel(
     apiKey: string,
     modelName: string,
-    deps: Omit<GeneralModelOptions, "modelName" | "fallbackModelName">,
+    options: Omit<GeneralModelOptions, "modelName" | "fallbackModelName">,
 ) {
     // automatic Sentry instrumentation doesn't work in Bun
     const sentryCallback =
@@ -39,7 +39,7 @@ function createGeneralModel(
         apiKey,
         thinkingConfig: {
             thinkingLevel: "high",
-            includeThoughts: deps.includeLLMThoughts,
+            includeThoughts: options.includeLLMThoughts,
         },
         callbacks: sentryCallback,
     });
