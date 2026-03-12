@@ -26,4 +26,13 @@ export interface IModelProvider<T> {
      * @param key - The API key record whose `apiKey` string is used to construct the client
      */
     get(key: GeminiApiKey): T;
+
+    /**
+     * Returns a fallback model client for the given API key, or `undefined` if no
+     * fallback model is configured. The fallback is invoked on 503 or timeout errors
+     * in place of the primary model, using the same API key.
+     *
+     * @param key - The API key record to use for the fallback client
+     */
+    getFallback(key: GeminiApiKey): T | undefined;
 }

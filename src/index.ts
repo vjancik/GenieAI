@@ -26,16 +26,30 @@ import { PgGeminiFileRepository } from "./infrastructure/db/repositories/PgGemin
 import { PgMessageRepository } from "./infrastructure/db/repositories/PgMessageRepository.ts";
 import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
 import { StatusMessageUpdater } from "./infrastructure/discord/StatusMessageUpdater.ts";
-import { AgentOrchestrator } from "./infrastructure/llm/agents/geminiAgentOrchestrator.ts";
+import { AgentOrchestrator, type ModelTimeouts } from "./infrastructure/llm/agents/geminiAgentOrchestrator.ts";
 import { GeneralModelProvider, SearchModelProvider, TriageModelProvider } from "./infrastructure/llm/ModelProvider.ts";
 import { RoundRobinFreeKeyProvider } from "./infrastructure/llm/RoundRobinFreeKeyProvider.ts";
 import { createGetVideoTranscriptionTool } from "./infrastructure/llm/tools/getVideoTranscriptionTool.ts";
 import { createGetWebsiteTool } from "./infrastructure/llm/tools/getWebsiteTool.ts";
 import { createLogger } from "./infrastructure/logging/logger.ts";
 
-// All current models use this Gemini variant
+// Primary model names — used for triage, general, and search
 const TRIAGE_MODEL_NAME = "gemini-3.1-flash-lite-preview";
 const GENERAL_MODEL_NAME = "gemini-3.1-flash-lite-preview";
+const SEARCH_MODEL_NAME = "gemini-3.1-flash-lite-preview";
+
+// Fallback model names — activated on 503 or timeout (NOT on 429, which uses key rotation)
+const TRIAGE_FALLBACK_MODEL = "gemini-2.5-flash";
+const GENERAL_FALLBACK_MODEL = "gemini-2.5-flash";
+const SEARCH_FALLBACK_MODEL = "gemini-2.5-flash";
+
+// Per-model timeouts in ms — passed as RunnableConfig.timeout, which LangChain converts to
+// an AbortSignal that propagates all the way to the HTTP layer, cancelling the request.
+const MODEL_TIMEOUTS: ModelTimeouts = {
+    triageTimeoutMs: 60_000,
+    generalTimeoutMs: 120_000,
+    searchTimeoutMs: 120_000,
+};
 
 const logger = createLogger(config.logLevel, config.fileLog);
 logger.info("Starting GenieAI bot...");
@@ -68,6 +82,7 @@ const getVideoTranscriptionTool = createGetVideoTranscriptionTool(logger.child({
 const freeKeyProvider = new RoundRobinFreeKeyProvider(freeKeys);
 const triageProvider = new TriageModelProvider({
     modelName: TRIAGE_MODEL_NAME,
+    fallbackModelName: TRIAGE_FALLBACK_MODEL,
     triageThinkingLevel: config.triageThinkingLevel,
     includeLLMThoughts: config.includeLLMThoughts,
     getWebsiteTool,
@@ -75,10 +90,12 @@ const triageProvider = new TriageModelProvider({
 });
 const generalProvider = new GeneralModelProvider({
     modelName: GENERAL_MODEL_NAME,
+    fallbackModelName: GENERAL_FALLBACK_MODEL,
     includeLLMThoughts: config.includeLLMThoughts,
 });
 const searchProvider = new SearchModelProvider(paidKey.apiKey, {
-    modelName: GENERAL_MODEL_NAME,
+    modelName: SEARCH_MODEL_NAME,
+    fallbackModelName: SEARCH_FALLBACK_MODEL,
     includeLLMThoughts: config.includeLLMThoughts,
 });
 
@@ -103,6 +120,7 @@ const orchestrator = new AgentOrchestrator(
     logger.child({ module: "orchestrator" }),
     config,
     geminiFileRefreshService,
+    MODEL_TIMEOUTS,
 );
 
 // The primary uploader for new uploads in HandleDiscordMention uses the current free key.

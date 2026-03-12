@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { is429Error } from "../../../src/infrastructure/llm/is429Error.ts";
+import { is429Error } from "../../../src/infrastructure/llm/errors/is429Error.ts";
 
 describe("is429Error", () => {
     describe("detects rate-limit patterns", () => {

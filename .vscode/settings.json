@@ -12,6 +12,7 @@
         "genai",
         "humanmessage",
         "Idempotently",
+        "Invokable",
         "kwargs",
         "langchain",
         "langgraph",

@@ -67,6 +67,9 @@ function asProvider<T>(model: T) {
         get(_key: unknown): T {
             return model;
         },
+        getFallback(_key: unknown): T | undefined {
+            return undefined;
+        },
     };
 }
 

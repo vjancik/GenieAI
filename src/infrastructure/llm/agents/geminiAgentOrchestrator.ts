@@ -24,14 +24,17 @@ import type { GeminiApiKey } from "../../../domain/message/GeminiApiKey.ts";
 import type { DiscordMessage } from "../../../domain/message/Message.ts";
 import { MessageIntent } from "../../../domain/message/MessageIntent.ts";
 import type { AppConfig } from "../../config/config.ts";
+import { is429Error } from "../errors/is429Error.ts";
+import { isModelFallbackError } from "../errors/isModelFallbackError.ts";
 import { filterHistoryForInlineSize } from "../inlineAttachmentFilter.ts";
-import { is429Error } from "../is429Error.ts";
 import { GENERAL_SYSTEM_PROMPT, type GeneralModel } from "../models/generalModel.ts";
 import { SEARCH_SYSTEM_PROMPT, type SearchModel } from "../models/searchModel.ts";
 import type { TriageModel } from "../models/triageModel.ts";
 import { TRIAGE_SYSTEM_PROMPT } from "../models/triageModel.ts";
 import type { GetVideoTranscriptionTool } from "../tools/getVideoTranscriptionTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
+
+const GLOBAL_MODEL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes per invoke
 
 /**
  * Graph state schema: extends the prebuilt messages reducer with an `intent` field.
@@ -108,6 +111,7 @@ function deserializeMessage(json: Record<string, unknown>, logger: Logger): Base
     // arguments in LangChain's serialization format.
     const kwargs = json.kwargs as Record<string, unknown>;
 
+    // TODO: some potentially important properties might be missing from kwargs, see if this is the right way to deserialize
     switch (className) {
         case "HumanMessage":
             return new HumanMessage(kwargs);
@@ -233,6 +237,25 @@ export const OrchestratorNode = {
 export type OrchestratorNode = (typeof OrchestratorNode)[keyof typeof OrchestratorNode];
 
 /**
+ * Per-model timeout and fallback provider configuration.
+ * Each model type has an independent timeout and can surface a fallback model
+ * via its provider's getFallback() method.
+ */
+export interface ModelTimeouts {
+    /** Maximum ms to wait for a triage model response before aborting. */
+    triageTimeoutMs: number;
+    /** Maximum ms to wait for a general model response before aborting. */
+    generalTimeoutMs: number;
+    /** Maximum ms to wait for a search model response before aborting. */
+    searchTimeoutMs: number;
+}
+
+/** Minimal invokable model interface used by the rotation and fallback helpers. */
+type InvokableModel<T extends BaseMessage> = {
+    invoke(messages: BaseMessage[], options?: unknown): Promise<T>;
+};
+
+/**
  * Orchestrates the multi-agent triage routing pipeline as a LangGraph StateGraph.
  *
  * Graph topology:
@@ -269,6 +292,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         private readonly logger: Logger,
         config: Pick<AppConfig, "attachmentMode" | "maxInlineAttachmentSizeMb">,
         private readonly geminiFileRefreshService?: GeminiFileRefreshService,
+        private readonly modelTimeouts?: ModelTimeouts,
     ) {
         // Upload mode uses the Gemini Files API, which is only supported by Gemini models.
         // Guard here using modelName to catch wiring mistakes early.
@@ -361,15 +385,19 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      *
      * Inline attachment size filtering is applied after the refresh, on the refreshed copy.
      *
+     * On 503 or timeout errors, if `getFallbackModel` is provided, a single fallback attempt
+     * is made with the same key and the same timeout before propagating the error. 429 errors
+     * bypass the fallback and are handled exclusively by key rotation.
+     *
      * @throws {@link AllFreeKeysExhaustedError} if all keys return 429
-     * @throws The original error immediately for non-429 failures
+     * @throws The original error immediately for non-429 / non-fallback failures
      */
     private async invokeWithFreeKeyRotation<T extends BaseMessage>(
-        getModel: (key: GeminiApiKey) => {
-            invoke(messages: BaseMessage[], options?: unknown): Promise<T>;
-        },
+        getModel: (key: GeminiApiKey) => InvokableModel<T>,
+        getFallbackModel: ((key: GeminiApiKey) => InvokableModel<T> | undefined) | undefined,
         messages: BaseMessage[],
         refetcher: IDiscordAttachmentRefetcher | undefined,
+        timeoutMs?: number,
     ): Promise<T> {
         return Sentry.startSpan(
             {
@@ -386,6 +414,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     // currentKey here ensures each attempt starts with the live cursor.
                     const key = this.freeKeyProvider.currentKey;
 
+                    let filtered: BaseMessage[] = [];
                     try {
                         // Refresh Gemini file uploads for this specific API key before invoking
                         const refreshed =
@@ -393,12 +422,14 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                                 ? await this.geminiFileRefreshService.refreshHistory(messages, refetcher, key.id)
                                 : messages;
 
-                        const filtered =
+                        filtered =
                             this.attachmentMode === "inline"
                                 ? filterHistoryForInlineSize(refreshed, this.maxInlineBytes)
                                 : refreshed;
 
-                        const result = await getModel(key).invoke(filtered);
+                        const result = await getModel(key).invoke(filtered, {
+                            timeout: timeoutMs ?? GLOBAL_MODEL_TIMEOUT_MS,
+                        });
                         span.setAttributes({
                             "llm.attempt_count": attempt + 1,
                             "llm.api_key_id": key.id,
@@ -420,7 +451,29 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                             }
                             continue;
                         }
-                        // Non-429 error: propagate immediately without trying other keys
+
+                        // On 503 or timeout: try the fallback model with the same key and timeout.
+                        // If no fallback is configured, or the fallback also fails, propagate.
+                        if (isModelFallbackError(err) && getFallbackModel) {
+                            const fallbackModel = getFallbackModel(key);
+                            if (!fallbackModel) throw err;
+                            this.logger.warn(
+                                { attempt, apiKeyId: key.id, errName: (err as Error).name },
+                                "Primary model failed with 503/timeout; trying fallback model",
+                            );
+                            // Reuse filtered — same key, same messages, no re-refresh needed
+                            const fallbackResult = await fallbackModel.invoke(filtered, {
+                                timeout: timeoutMs ?? GLOBAL_MODEL_TIMEOUT_MS,
+                            });
+                            span.setAttributes({
+                                "llm.attempt_count": attempt + 1,
+                                "llm.api_key_id": key.id,
+                                "llm.used_fallback": true,
+                            });
+                            return fallbackResult;
+                        }
+
+                        // Non-429, non-fallback error: propagate immediately without trying other keys
                         throw err;
                     }
                 }
@@ -435,13 +488,16 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      *
      * Unlike the free-key variant, the search model uses a single paid key with no
      * rotation. Inline attachment filtering is applied after the refresh.
+     *
+     * On 503 or timeout errors, if `fallbackModel` is provided, a single fallback attempt
+     * is made with the same paid key and the same timeout.
      */
     private async invokePaidModelWithMiddleware<T extends BaseMessage>(
-        model: {
-            invoke(messages: BaseMessage[], options?: unknown): Promise<T>;
-        },
+        model: InvokableModel<T>,
+        fallbackModel: InvokableModel<T> | undefined,
         messages: BaseMessage[],
         refetcher: IDiscordAttachmentRefetcher | undefined,
+        timeoutMs?: number,
     ): Promise<T> {
         return Sentry.startSpan(
             {
@@ -449,7 +505,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 op: "llm.invoke.paid",
                 attributes: { "llm.api_key_id": this.paidApiKey.id },
             },
-            async () => {
+            async (span) => {
                 const refreshed =
                     this.geminiFileRefreshService && refetcher
                         ? await this.geminiFileRefreshService.refreshHistory(messages, refetcher, this.paidApiKey.id)
@@ -460,7 +516,20 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                         ? filterHistoryForInlineSize(refreshed, this.maxInlineBytes)
                         : refreshed;
 
-                return model.invoke(filtered);
+                const invokeOptions = timeoutMs !== undefined ? { timeout: timeoutMs } : undefined;
+                try {
+                    return await model.invoke(filtered, invokeOptions);
+                } catch (err) {
+                    if (isModelFallbackError(err) && fallbackModel) {
+                        this.logger.warn(
+                            { errName: (err as Error).name },
+                            "Paid model failed with 503/timeout; trying fallback model",
+                        );
+                        span.setAttribute("llm.used_fallback", true);
+                        return fallbackModel.invoke(filtered, invokeOptions);
+                    }
+                    throw err;
+                }
             },
         );
     }
@@ -541,8 +610,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
 
             const triageResponse = await this.invokeWithFreeKeyRotation(
                 this.triageProvider.get.bind(this.triageProvider),
+                this.triageProvider.getFallback.bind(this.triageProvider),
                 messages,
                 config.context?.attachmentRefetcher,
+                this.modelTimeouts?.triageTimeoutMs,
             );
 
             // TODO: we should check if there are more than 1 tool calls and add a log warning
@@ -663,8 +734,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
 
             const response = await this.invokeWithFreeKeyRotation(
                 this.generalProvider.get.bind(this.generalProvider),
+                this.generalProvider.getFallback.bind(this.generalProvider),
                 invokeMessages,
                 config.context?.attachmentRefetcher,
+                this.modelTimeouts?.generalTimeoutMs,
             );
             return { messages: [response] };
         });
@@ -682,8 +755,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             const messages: BaseMessage[] = [new SystemMessage(SEARCH_SYSTEM_PROMPT), ...state.messages];
             const response = await this.invokePaidModelWithMiddleware(
                 this.searchProvider.get(this.paidApiKey),
+                this.searchProvider.getFallback(this.paidApiKey),
                 messages,
                 config.context?.attachmentRefetcher,
+                this.modelTimeouts?.searchTimeoutMs,
             );
             return { messages: [response] };
         });
