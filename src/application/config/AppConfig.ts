@@ -1,4 +1,6 @@
 import { ConfigError } from "../../domain/errors/AppError.ts";
+import type { ThinkingLevel } from "../types/ThinkingLevel.ts";
+import { THINKING_LEVELS } from "../types/ThinkingLevel.ts";
 
 /** Controls how file attachments are included in LLM requests. */
 export type AttachmentMode = "inline" | "upload";
@@ -21,8 +23,8 @@ export interface AppConfig {
      */
     googlePaidApiKey: string;
     databaseUrl: string;
-    /** Gemini 3 Reasoning effort level */
-    triageThinkingLevel: string;
+    /** Gemini reasoning effort level for the triage model. */
+    triageThinkingLevel: ThinkingLevel;
     /** Whether to include LLM thoughts in the LLM responses for debugging purposes */
     includeLLMThoughts: boolean;
     /** Pino log level. Default: "info" */
@@ -54,6 +56,21 @@ export interface AppConfig {
      * Default: 60 (refresh when less than 1 hour of TTL remains)
      */
     geminiFileStaleThresholdMinutes: number;
+}
+
+/**
+ * Parses and validates the TRIAGE_THINKING_LEVEL environment variable.
+ * Accepts case-insensitive input and normalizes to uppercase.
+ * Throws {@link ConfigError} for unknown values.
+ */
+function parseThinkingLevel(raw: string | undefined): ThinkingLevel {
+    const normalized = (raw ?? "MINIMAL").toUpperCase();
+    if ((THINKING_LEVELS as readonly string[]).includes(normalized)) {
+        return normalized as ThinkingLevel;
+    }
+    throw new ConfigError(
+        `Invalid TRIAGE_THINKING_LEVEL value: "${raw}". Expected one of: ${THINKING_LEVELS.join(", ")}.`,
+    );
 }
 
 /**
@@ -122,7 +139,7 @@ export function loadConfig(): AppConfig {
         googleFreeApiKeys: parseFreeApiKeys(process.env.GOOGLE_FREE_API_KEYS),
         googlePaidApiKey: parsePaidApiKey(process.env.GOOGLE_PAID_API_KEY),
         databaseUrl,
-        triageThinkingLevel: process.env.TRIAGE_THINKING_LEVEL ?? "minimal",
+        triageThinkingLevel: parseThinkingLevel(process.env.TRIAGE_THINKING_LEVEL),
         includeLLMThoughts: process.env.INCLUDE_LLM_THOUGHTS === "true",
         logLevel: process.env.LOG_LEVEL ?? "info",
         fileLog: process.env.FILE_LOG === "true",

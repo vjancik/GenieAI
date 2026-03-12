@@ -2,6 +2,7 @@ import { tool } from "@langchain/core/tools";
 import { ChatGoogle } from "@langchain/google/node";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
+import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
 import type { GetVideoTranscriptionTool } from "../tools/getVideoTranscriptionTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
@@ -52,8 +53,8 @@ interface TriageModelOptions {
     modelName: string;
     /** Fallback model name used on 503 or timeout errors. */
     fallbackModelName?: string;
-    /** Gemini reasoning effort level (e.g. "minimal", "medium", "high"). */
-    triageThinkingLevel: string;
+    /** Gemini reasoning effort level (e.g. "MINIMAL", "MEDIUM", "HIGH"). */
+    triageThinkingLevel: ThinkingLevel;
     /** Whether to include thought tokens in the model response. */
     includeLLMThoughts: boolean;
     getWebsiteTool: GetWebsiteTool;

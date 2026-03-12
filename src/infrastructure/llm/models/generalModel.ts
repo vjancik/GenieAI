@@ -1,5 +1,6 @@
 import { ChatGoogle } from "@langchain/google/node";
 import * as Sentry from "@sentry/bun";
+import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
 
 /**
@@ -38,7 +39,7 @@ function createGeneralModel(
         model: modelName,
         apiKey,
         thinkingConfig: {
-            thinkingLevel: "high",
+            thinkingLevel: "HIGH" satisfies ThinkingLevel,
             includeThoughts: options.includeLLMThoughts,
         },
         callbacks: sentryCallback,
