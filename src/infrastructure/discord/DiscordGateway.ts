@@ -17,6 +17,7 @@ import { AgentStatusType, assertNever } from "../../application/types/AgentStatu
 import type { Logger } from "../../application/types/Logger.ts";
 import { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
+import { discordMessageToLlmText, llmTextToDiscordText } from "./textTransformers.ts";
 
 /** Custom ID for the Retry button attached to failed bot responses. */
 const RETRY_BUTTON_ID = "retry_mention";
@@ -356,22 +357,31 @@ export class DiscordGateway {
                         });
                     };
 
+                    // Resolve display name with guild-aware priority:
+                    // member.displayName = nickname ?? globalName ?? username (discord.js computed)
+                    // falls back to author.displayName (globalName ?? username) for DMs
+                    const userName = message.member?.displayName ?? message.author.displayName;
+
+                    // Enrich the stripped content with sender attribution for LLM context
+                    const llmContent = discordMessageToLlmText(userName, userContent);
+
                     // handle() never throws — errors are caught internally and returned as a response
                     const { response, newMessages, isFailure, isRetryable } = await this.mentionHandler.handle({
                         discordMessageId: message.id,
                         referencedMessageId: message.reference?.messageId ?? null,
                         channelId: message.channelId,
                         guildId: message.guildId,
-                        userContent,
+                        userContent: llmContent,
                         attachments,
                         intent,
                         onStatusUpdate,
                         attachmentRefetcher,
                     });
 
-                    // Truncate to Discord's 2000-character limit
-                    const truncated = response.length > 2000;
-                    const safeResponse = truncated ? `${response.slice(0, 1997)}...` : response;
+                    // Sanitize LLM output for Discord rendering, then truncate to the 2000-character limit
+                    const discordResponse = llmTextToDiscordText(response);
+                    const truncated = discordResponse.length > 2000;
+                    const safeResponse = truncated ? `${discordResponse.slice(0, 1997)}...` : discordResponse;
 
                     span.setAttributes({
                         "discord.response_truncated": truncated,
