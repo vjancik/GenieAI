@@ -161,4 +161,15 @@ async function shutdown() {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
+process.on("unhandledRejection", (reason) => {
+    Sentry.captureException(reason);
+    logger.error({ reason }, "Unhandled promise rejection");
+});
+
+process.on("uncaughtException", (error) => {
+    Sentry.captureException(error);
+    logger.error({ error }, "Uncaught exception");
+    process.exit(1);
+});
+
 await gateway.start();
