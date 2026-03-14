@@ -24,6 +24,7 @@ import type { Logger } from "../../application/types/Logger.ts";
 import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
 import { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { IMessagePageRepository } from "../../domain/message/MessagePage.ts";
+import { InteractionLock } from "./InteractionLock.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
 import { discordMessageToLlmText } from "./textTransformers.ts";
 
@@ -153,6 +154,7 @@ export function extractUserContent(message: Message, botUserId: string, botRoleI
  */
 export class DiscordGateway {
     private readonly client: Client;
+    private readonly interactionLock = new InteractionLock();
 
     constructor(
         private readonly token: string,
@@ -388,110 +390,121 @@ export class DiscordGateway {
      * In both scenarios, the old failed bot reply is deleted before sending a new response.
      */
     private async handleRetryButton(interaction: ButtonInteraction): Promise<void> {
-        const originalMessageId = interaction.message.reference?.messageId;
-        const channel = interaction.channel;
-
-        let originalMessage: Message | undefined;
-        if (originalMessageId && channel?.isTextBased()) {
-            try {
-                originalMessage = await channel.messages.fetch(originalMessageId);
-            } catch {
-                // fetch failed — original message was deleted
-            }
-        }
-
-        if (!originalMessage) {
-            // Original message is gone or unreachable — remove the button and notify ephemerally
-            await Promise.allSettled([
-                interaction.reply({
-                    content: "Original message is missing, retry is no longer possible.",
-                    ephemeral: true,
-                }),
-                interaction.message.edit({ components: [] }),
-            ]);
+        if (this.interactionLock.isLocked(interaction.message.id, interaction.customId)) {
+            await interaction.deferUpdate();
             return;
         }
+        this.interactionLock.setLocked(interaction.message.id, interaction.customId);
+        try {
+            const originalMessageId = interaction.message.reference?.messageId;
+            const channel = interaction.channel;
 
-        // Acknowledge the interaction immediately so Discord doesn't show "interaction failed"
-        await interaction.deferUpdate();
-
-        // Delete the old failed bot reply before sending a fresh response
-        await interaction.message.delete().catch((err) => {
-            this.logger.warn({ err }, "Failed to delete old failed bot reply on retry");
-        });
-
-        await Sentry.startSpan(
-            {
-                name: "Handle Retry button",
-                op: "discord.interaction.retry",
-                attributes: {
-                    "discord.original_message_id": originalMessage.id,
-                    "discord.channel_id": originalMessage.channelId,
-                },
-            },
-            async (span) => {
-                const intent = parseMessageIntent(originalMessage.content);
-
-                // Check whether the human message was already saved to DB.
-                // If it was, the failure was in the orchestrator (Scenario A).
-                // If not, the failure was earlier in the pipeline (Scenario B).
-                const humanRecord = await this.messageRepo.findByDiscordMessageId(originalMessage.id);
-
-                if (humanRecord) {
-                    // --- Scenario A: human message exists, re-run orchestration only ---
-                    span.setAttribute("discord.retry_scenario", "A");
-
-                    const attachmentRefetcher = this.createAttachmentRefetcher(originalMessage.channelId);
-
-                    // Send thinking placeholder — awaited so we have the message before
-                    // the first status update can arrive.
-                    let thinkingMessagePromise = originalMessage.reply({
-                        content: `*Retrying since <t:${Math.round(Date.now() / 1000)}:R>*`,
-                        allowedMentions: { repliedUser: false },
-                    });
-
-                    // Wrap thinkingMessage in a promise so onStatusUpdate can share the
-                    // same lazy-resolution pattern used in handleMessageCreate.
-
-                    const onStatusUpdate: OnStatusUpdate = (update) => {
-                        thinkingMessagePromise = thinkingMessagePromise.then((msg) => {
-                            this.statusUpdater.scheduleUpdate(
-                                originalMessage.channelId,
-                                msg.id,
-                                async (content) =>
-                                    void (await msg.edit({
-                                        content: `*${content} <t:${Math.round(Date.now() / 1000)}:R>*`,
-                                        allowedMentions: { repliedUser: false },
-                                    })),
-                                statusUpdateContent(update),
-                            );
-                            return msg;
-                        });
-                    };
-
-                    const { response, newMessages, isFailure, isRetryable } = await this.retryOrchestration.execute({
-                        humanDiscordMessageId: originalMessage.id,
-                        intent,
-                        onStatusUpdate,
-                        attachmentRefetcher,
-                    });
-
-                    await this.sendBotReply({
-                        replyTarget: originalMessage,
-                        response,
-                        newMessages,
-                        isFailure,
-                        isRetryable,
-                        thinkingMessagePromise,
-                        span,
-                    });
-                } else {
-                    // --- Scenario B: human message not in DB, run full pipeline ---
-                    span.setAttribute("discord.retry_scenario", "B");
-                    await this.handleMessageCreate(originalMessage);
+            let originalMessage: Message | undefined;
+            if (originalMessageId && channel?.isTextBased()) {
+                try {
+                    originalMessage = await channel.messages.fetch(originalMessageId);
+                } catch {
+                    // fetch failed — original message was deleted
                 }
-            },
-        );
+            }
+
+            if (!originalMessage) {
+                // Original message is gone or unreachable — remove the button and notify ephemerally
+                await Promise.allSettled([
+                    interaction.reply({
+                        content: "Original message is missing, retry is no longer possible.",
+                        ephemeral: true,
+                    }),
+                    interaction.message.edit({ components: [] }),
+                ]);
+                return;
+            }
+
+            // Acknowledge the interaction immediately so Discord doesn't show "interaction failed"
+            await interaction.deferUpdate();
+
+            // Delete the old failed bot reply before sending a fresh response
+            await interaction.message.delete().catch((err) => {
+                this.logger.warn({ err }, "Failed to delete old failed bot reply on retry");
+            });
+
+            await Sentry.startSpan(
+                {
+                    name: "Handle Retry button",
+                    op: "discord.interaction.retry",
+                    attributes: {
+                        "discord.original_message_id": originalMessage.id,
+                        "discord.channel_id": originalMessage.channelId,
+                    },
+                },
+                async (span) => {
+                    const intent = parseMessageIntent(originalMessage.content);
+
+                    // Check whether the human message was already saved to DB.
+                    // If it was, the failure was in the orchestrator (Scenario A).
+                    // If not, the failure was earlier in the pipeline (Scenario B).
+                    const humanRecord = await this.messageRepo.findByDiscordMessageId(originalMessage.id);
+
+                    if (humanRecord) {
+                        // --- Scenario A: human message exists, re-run orchestration only ---
+                        span.setAttribute("discord.retry_scenario", "A");
+
+                        const attachmentRefetcher = this.createAttachmentRefetcher(originalMessage.channelId);
+
+                        // Send thinking placeholder — awaited so we have the message before
+                        // the first status update can arrive.
+                        let thinkingMessagePromise = originalMessage.reply({
+                            content: `*Retrying since <t:${Math.round(Date.now() / 1000)}:R>*`,
+                            allowedMentions: { repliedUser: false },
+                        });
+
+                        // Wrap thinkingMessage in a promise so onStatusUpdate can share the
+                        // same lazy-resolution pattern used in handleMessageCreate.
+
+                        const onStatusUpdate: OnStatusUpdate = (update) => {
+                            thinkingMessagePromise = thinkingMessagePromise.then((msg) => {
+                                this.statusUpdater.scheduleUpdate(
+                                    originalMessage.channelId,
+                                    msg.id,
+                                    async (content) =>
+                                        void (await msg.edit({
+                                            content: `*${content} <t:${Math.round(Date.now() / 1000)}:R>*`,
+                                            allowedMentions: { repliedUser: false },
+                                        })),
+                                    statusUpdateContent(update),
+                                );
+                                return msg;
+                            });
+                        };
+
+                        const { response, newMessages, isFailure, isRetryable } = await this.retryOrchestration.execute(
+                            {
+                                humanDiscordMessageId: originalMessage.id,
+                                intent,
+                                onStatusUpdate,
+                                attachmentRefetcher,
+                            },
+                        );
+
+                        await this.sendBotReply({
+                            replyTarget: originalMessage,
+                            response,
+                            newMessages,
+                            isFailure,
+                            isRetryable,
+                            thinkingMessagePromise,
+                            span,
+                        });
+                    } else {
+                        // --- Scenario B: human message not in DB, run full pipeline ---
+                        span.setAttribute("discord.retry_scenario", "B");
+                        await this.handleMessageCreate(originalMessage);
+                    }
+                },
+            );
+        } finally {
+            this.interactionLock.clearLock(interaction.message.id, interaction.customId);
+        }
     }
 
     /**
@@ -504,114 +517,123 @@ export class DiscordGateway {
      * If the page state is missing (e.g. stale button), removes the button and returns.
      */
     private async handleNextPageButton(interaction: ButtonInteraction): Promise<void> {
-        // Acknowledge immediately to prevent Discord's "interaction failed" timeout
-        await interaction.deferUpdate();
+        if (this.interactionLock.isLocked(interaction.message.id, interaction.customId)) {
+            await interaction.deferUpdate();
+            return;
+        }
+        this.interactionLock.setLocked(interaction.message.id, interaction.customId);
+        try {
+            // Acknowledge immediately to prevent Discord's "interaction failed" timeout
+            await interaction.deferUpdate();
 
-        const currentBotMessageId = interaction.message.id;
+            const currentBotMessageId = interaction.message.id;
 
-        await Sentry.startSpan(
-            {
-                name: "Handle Next Page button",
-                op: "discord.interaction.next_page",
-                attributes: { "discord.message_id": currentBotMessageId },
-            },
-            async (span) => {
-                // Step 1: Compute next page content via use case
-                let result: Awaited<ReturnType<GetNextPage["execute"]>>;
-                try {
-                    result = await this.getNextPage.execute({ botDiscordMessageId: currentBotMessageId });
-                } catch (err) {
-                    this.logger.error({ err, currentBotMessageId }, "Failed to compute next page");
-                    Sentry.captureException(err);
-                    await interaction.message.edit({ components: [] }).catch(() => {});
-                    return;
-                }
+            await Sentry.startSpan(
+                {
+                    name: "Handle Next Page button",
+                    op: "discord.interaction.next_page",
+                    attributes: { "discord.message_id": currentBotMessageId },
+                },
+                async (span) => {
+                    // Step 1: Compute next page content via use case
+                    let result: Awaited<ReturnType<GetNextPage["execute"]>>;
+                    try {
+                        result = await this.getNextPage.execute({ botDiscordMessageId: currentBotMessageId });
+                    } catch (err) {
+                        this.logger.error({ err, currentBotMessageId }, "Failed to compute next page");
+                        Sentry.captureException(err);
+                        await interaction.message.edit({ components: [] }).catch(() => {});
+                        return;
+                    }
 
-                if (!result) {
-                    // No pending page state — stale button click
-                    await interaction.message.edit({ components: [] }).catch((err) => {
-                        this.logger.warn({ err, currentBotMessageId }, "Failed to remove stale Next Page button");
+                    if (!result) {
+                        // No pending page state — stale button click
+                        await interaction.message.edit({ components: [] }).catch((err) => {
+                            this.logger.warn({ err, currentBotMessageId }, "Failed to remove stale Next Page button");
+                        });
+                        return;
+                    }
+
+                    span.setAttributes({
+                        "discord.page": result.currentPage,
+                        "discord.total_pages": result.totalPages,
+                        "discord.is_last_page": result.isLast,
                     });
-                    return;
-                }
 
-                span.setAttributes({
-                    "discord.page": result.currentPage,
-                    "discord.total_pages": result.totalPages,
-                    "discord.is_last_page": result.isLast,
-                });
+                    // Step 2: Build component row for next message (omit button on last page)
+                    const nextPageRow = result.isLast
+                        ? undefined
+                        : new ActionRowBuilder<ButtonBuilder>().addComponents(
+                              new ButtonBuilder()
+                                  .setCustomId(NEXT_PAGE_BUTTON_ID)
+                                  .setLabel(`Next Page · Page ${result.currentPage} of ${result.totalPages}`)
+                                  .setStyle(ButtonStyle.Primary),
+                          );
 
-                // Step 2: Build component row for next message (omit button on last page)
-                const nextPageRow = result.isLast
-                    ? undefined
-                    : new ActionRowBuilder<ButtonBuilder>().addComponents(
-                          new ButtonBuilder()
-                              .setCustomId(NEXT_PAGE_BUTTON_ID)
-                              .setLabel(`Next Page · Page ${result.currentPage} of ${result.totalPages}`)
-                              .setStyle(ButtonStyle.Primary),
-                      );
+                    // Step 3: Send the next page as a reply to the current bot message
+                    let newBotMessage: Awaited<ReturnType<Message["reply"]>>;
+                    try {
+                        newBotMessage = await interaction.message.reply({
+                            content: result.content,
+                            ...(nextPageRow && { components: [nextPageRow] }),
+                        });
+                    } catch (err) {
+                        this.logger.error({ err, currentBotMessageId }, "Failed to send next page reply");
+                        Sentry.captureException(err);
+                        return;
+                    }
 
-                // Step 3: Send the next page as a reply to the current bot message
-                let newBotMessage: Awaited<ReturnType<Message["reply"]>>;
-                try {
-                    newBotMessage = await interaction.message.reply({
-                        content: result.content,
-                        ...(nextPageRow && { components: [nextPageRow] }),
+                    // Step 4: Persist the messages row first — messagePageRepo.save has a FK on it,
+                    // so if this throws the remaining cleanup is skipped entirely.
+                    await this.messageHandler.saveBotResponse({
+                        botDiscordMessageId: newBotMessage.id,
+                        repliesToDiscordId: currentBotMessageId,
+                        channelId: newBotMessage.channelId,
+                        guildId: newBotMessage.guildId,
+                        newMessages: [],
                     });
-                } catch (err) {
-                    this.logger.error({ err, currentBotMessageId }, "Failed to send next page reply");
-                    Sentry.captureException(err);
-                    return;
-                }
 
-                // Step 4: Persist the messages row first — messagePageRepo.save has a FK on it,
-                // so if this throws the remaining cleanup is skipped entirely.
-                await this.messageHandler.saveBotResponse({
-                    botDiscordMessageId: newBotMessage.id,
-                    repliesToDiscordId: currentBotMessageId,
-                    channelId: newBotMessage.channelId,
-                    guildId: newBotMessage.guildId,
-                    newMessages: [],
-                });
+                    await Promise.allSettled([
+                        // Save new pending page state if there are more pages after this one.
+                        // firstPageDiscordMessageId is propagated from the page state so all rows
+                        // in this response chain point to the same first-page messages row.
+                        !result.isLast
+                            ? this.messagePageRepo
+                                  .save({
+                                      botDiscordMessageId: newBotMessage.id,
+                                      firstPageDiscordMessageId: result.firstPageDiscordMessageId,
+                                      endOffset: result.newOffset,
+                                      currentPage: result.currentPage,
+                                      totalPages: result.totalPages,
+                                  })
+                                  .catch((err) => {
+                                      this.logger.error({ err }, "Failed to save next message page state");
+                                  })
+                            : Promise.resolve(),
 
-                await Promise.allSettled([
-                    // Save new pending page state if there are more pages after this one.
-                    // firstPageDiscordMessageId is propagated from the page state so all rows
-                    // in this response chain point to the same first-page messages row.
-                    !result.isLast
-                        ? this.messagePageRepo
-                              .save({
-                                  botDiscordMessageId: newBotMessage.id,
-                                  firstPageDiscordMessageId: result.firstPageDiscordMessageId,
-                                  endOffset: result.newOffset,
-                                  currentPage: result.currentPage,
-                                  totalPages: result.totalPages,
-                              })
-                              .catch((err) => {
-                                  this.logger.error({ err }, "Failed to save next message page state");
-                              })
-                        : Promise.resolve(),
+                        // Remove the Next Page button from the OLD bot message
+                        interaction.message.edit({ components: [] }).catch((err) => {
+                            this.logger.warn(
+                                { err, currentBotMessageId },
+                                "Failed to remove Next Page button from old message",
+                            );
+                        }),
+                    ]);
 
-                    // Remove the Next Page button from the OLD bot message
-                    interaction.message.edit({ components: [] }).catch((err) => {
-                        this.logger.warn(
-                            { err, currentBotMessageId },
-                            "Failed to remove Next Page button from old message",
-                        );
-                    }),
-                ]);
-
-                this.logger.info(
-                    {
-                        currentBotMessageId,
-                        newBotMessageId: newBotMessage.id,
-                        page: result.currentPage,
-                        totalPages: result.totalPages,
-                    },
-                    "Sent next page",
-                );
-            },
-        );
+                    this.logger.info(
+                        {
+                            currentBotMessageId,
+                            newBotMessageId: newBotMessage.id,
+                            page: result.currentPage,
+                            totalPages: result.totalPages,
+                        },
+                        "Sent next page",
+                    );
+                },
+            );
+        } finally {
+            this.interactionLock.clearLock(interaction.message.id, interaction.customId);
+        }
     }
 
     private async handleMessageCreate(message: Message): Promise<void> {
