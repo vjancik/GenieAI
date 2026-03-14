@@ -15,6 +15,7 @@
 import * as Sentry from "@sentry/bun";
 import { GeminiApiKeySyncService } from "./application/GeminiApiKeySyncService.ts";
 import { GeminiFileRefreshService } from "./application/GeminiFileRefreshService.ts";
+import { GetNextPage } from "./application/GetNextPage.ts";
 import { HandleDiscordMessage } from "./application/HandleDiscordMessage.ts";
 import { FetchAttachmentDownloader } from "./infrastructure/attachments/FetchAttachmentDownloader.ts";
 import { FetchDiskAttachmentDownloader } from "./infrastructure/attachments/FetchDiskAttachmentDownloader.ts";
@@ -23,6 +24,7 @@ import { config } from "./infrastructure/config/config.ts";
 import { createDb } from "./infrastructure/db/connection.ts";
 import { PgGeminiApiKeyRepository } from "./infrastructure/db/repositories/PgGeminiApiKeyRepository.ts";
 import { PgGeminiFileRepository } from "./infrastructure/db/repositories/PgGeminiFileRepository.ts";
+import { PgMessagePageRepository } from "./infrastructure/db/repositories/PgMessagePageRepository.ts";
 import { PgMessageRepository } from "./infrastructure/db/repositories/PgMessageRepository.ts";
 import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
 import { StatusMessageUpdater } from "./infrastructure/discord/StatusMessageUpdater.ts";
@@ -37,8 +39,8 @@ import { createLogger } from "./infrastructure/logging/logger.ts";
 
 // Primary model names — used for triage, general, and search
 const TRIAGE_MODEL_NAME = "gemini-3.1-flash-lite-preview";
-const GENERAL_MODEL_NAME = "gemini-3.1-flash-lite-preview";
-const SEARCH_MODEL_NAME = "gemini-3.1-flash-lite-preview";
+const GENERAL_MODEL_NAME = "gemini-3-flash-preview";
+const SEARCH_MODEL_NAME = "gemini-3-flash-preview";
 
 // Fallback model names — activated on 503 or timeout (NOT on 429, which uses key rotation)
 const TRIAGE_FALLBACK_MODEL = "gemini-2.5-flash";
@@ -141,6 +143,14 @@ const handleDiscordMention = new HandleDiscordMessage(
     geminiFileRepository,
 );
 
+// Pagination
+const messagePageRepository = new PgMessagePageRepository(db, logger.child({ module: "repository:message-pages" }));
+const getNextPage = new GetNextPage(
+    messageRepository,
+    messagePageRepository,
+    logger.child({ module: "get-next-page" }),
+);
+
 // Discord gateway
 const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
 const gateway = new DiscordGateway(
@@ -148,6 +158,8 @@ const gateway = new DiscordGateway(
     handleDiscordMention,
     logger.child({ module: "discord" }),
     statusUpdater,
+    messagePageRepository,
+    getNextPage,
 );
 
 // Graceful shutdown

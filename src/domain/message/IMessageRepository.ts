@@ -22,4 +22,12 @@ export interface IMessageRepository {
      * @returns Messages ordered chronologically (oldest first), or [] if not found
      */
     fetchChain(startDiscordMessageId: string): Promise<DiscordMessage[]>;
+
+    /**
+     * Fetch a single message by its Discord message ID.
+     *
+     * @param discordMessageId - The Discord snowflake ID to look up
+     * @returns The message, or null if not found
+     */
+    findByDiscordMessageId(discordMessageId: string): Promise<DiscordMessage | null>;
 }

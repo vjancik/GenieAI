@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { discordMessageToLlmText, llmTextToDiscordText } from "../../../src/infrastructure/discord/textTransformers.ts";
+import { llmTextToDiscordText } from "../../../src/application/textTransformers.ts";
+import { discordMessageToLlmText } from "../../../src/infrastructure/discord/textTransformers.ts";
 
 describe("discordMessageToLlmText", () => {
     it("wraps content with attribution header", () => {

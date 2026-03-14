@@ -34,6 +34,7 @@ function makeRepo(chainMessages: DiscordMessage[] = []): IMessageRepository {
             createdAt: new Date(),
         })),
         fetchChain: mock(async () => chainMessages),
+        findByDiscordMessageId: mock(async () => null),
     };
 }
 

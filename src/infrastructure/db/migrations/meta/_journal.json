@@ -36,6 +36,13 @@
             "when": 1773085878345,
             "tag": "0004_jittery_dakota_north",
             "breakpoints": true
+        },
+        {
+            "idx": 5,
+            "version": "7",
+            "when": 1773440106465,
+            "tag": "0005_groovy_shadowcat",
+            "breakpoints": true
         }
     ]
 }

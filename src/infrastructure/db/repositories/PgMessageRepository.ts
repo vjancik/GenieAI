@@ -1,11 +1,21 @@
 import * as Sentry from "@sentry/bun";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { Logger } from "../../../application/types/Logger.ts";
 import { DatabaseError } from "../../../domain/errors/AppError.ts";
 import type { IMessageRepository } from "../../../domain/message/IMessageRepository.ts";
 import type { DiscordMessage } from "../../../domain/message/Message.ts";
 import type { Db } from "../connection.ts";
 import { messages } from "../schema.ts";
+
+/** Prepared statement: fetch a single message by its Discord message ID. */
+function buildFindByDiscordMessageIdStmt(db: Db) {
+    return db
+        .select()
+        .from(messages)
+        .where(eq(messages.discordMessageId, sql.placeholder("discordMessageId")))
+        .limit(1)
+        .prepare("message_find_by_discord_id");
+}
 
 /** Prepared statement: insert a new message row and return it. */
 function buildInsertMessageStmt(db: Db) {
@@ -35,12 +45,14 @@ function buildInsertMessageStmt(db: Db) {
  */
 export class PgMessageRepository implements IMessageRepository {
     private readonly stmtInsertMessage: ReturnType<typeof buildInsertMessageStmt>;
+    private readonly stmtFindByDiscordMessageId: ReturnType<typeof buildFindByDiscordMessageIdStmt>;
 
     constructor(
         private readonly db: Db,
         private readonly logger: Logger,
     ) {
         this.stmtInsertMessage = buildInsertMessageStmt(db);
+        this.stmtFindByDiscordMessageId = buildFindByDiscordMessageIdStmt(db);
     }
 
     async save(msg: Omit<DiscordMessage, "id" | "createdAt">): Promise<DiscordMessage> {
@@ -82,6 +94,48 @@ export class PgMessageRepository implements IMessageRepository {
                     if (err instanceof DatabaseError) throw err;
                     Sentry.captureException(err);
                     throw new DatabaseError("Failed to save message", err);
+                }
+            },
+        );
+    }
+
+    async findByDiscordMessageId(discordMessageId: string): Promise<DiscordMessage | null> {
+        return Sentry.startSpan(
+            {
+                name: "Find message by Discord ID",
+                op: "db.query",
+                attributes: {
+                    "db.table": "messages",
+                    "discord.message_id": discordMessageId,
+                },
+            },
+            async () => {
+                try {
+                    const [result] = await this.stmtFindByDiscordMessageId.execute({ discordMessageId });
+
+                    if (!result) return null;
+
+                    this.logger.debug({ discordMessageId }, "Found message by Discord ID");
+
+                    return {
+                        id: result.id,
+                        discordMessageId: result.discordMessageId,
+                        repliesToDiscordId: result.repliesToDiscordId ?? null,
+                        channelId: result.channelId,
+                        guildId: result.guildId ?? null,
+                        role: result.role,
+                        // langchain_messages is a JSON column; Bun's SQL driver may return it as either a
+                        // pre-parsed JS value or a raw JSON string — handle both cases defensively.
+                        // TYPE COERCION: the parsed value's shape matches DiscordMessage["langchainMessages"]
+                        // by construction (it was stored from BaseMessage.toJSON()), but TS cannot verify it.
+                        langchainMessages: (typeof result.langchainMessages === "string"
+                            ? JSON.parse(result.langchainMessages)
+                            : result.langchainMessages) as DiscordMessage["langchainMessages"],
+                        createdAt: result.createdAt,
+                    };
+                } catch (err) {
+                    Sentry.captureException(err);
+                    throw new DatabaseError("Failed to find message by Discord ID", err);
                 }
             },
         );

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, index, json, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, integer, json, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import type { DiscordMessage } from "../../domain/message/Message.ts";
 
 /**
@@ -26,6 +26,31 @@ export const messages = pgTable("messages", {
     role: text("role", { enum: ["human", "assistant"] }).notNull(),
     /** Serialized LangChain BaseMessage objects stored as JSON array */
     langchainMessages: json("langchain_messages").notNull().$type<DiscordMessage["langchainMessages"]>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+/**
+ * Tracks the pending "next page" state for a paginated bot response.
+ *
+ * One row exists per bot message that currently has a Next Page button displayed.
+ * Rows are deleted immediately after the next page is successfully delivered.
+ *
+ * ON DELETE CASCADE ensures that if the originating messages row is removed,
+ * the pending page state is also cleaned up automatically.
+ */
+export const messagePages = pgTable("message_pages", {
+    id: uuid("id").primaryKey().default(sql`uuidv7()`),
+    /** Discord snowflake of the bot message that currently shows the Next Page button */
+    botDiscordMessageId: text("bot_discord_message_id")
+        .notNull()
+        .unique()
+        .references(() => messages.discordMessageId, { onDelete: "cascade" }),
+    /** Character offset in the full transformed response text where the next page begins */
+    endOffset: integer("end_offset").notNull(),
+    /** 1-based page number currently displayed to the user */
+    currentPage: integer("current_page").notNull(),
+    /** Total number of pages in this response */
+    totalPages: integer("total_pages").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

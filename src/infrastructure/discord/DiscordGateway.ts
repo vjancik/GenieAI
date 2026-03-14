@@ -9,18 +9,25 @@ import {
     GatewayIntentBits,
     type Message,
 } from "discord.js";
+import type { GetNextPage } from "../../application/GetNextPage.ts";
 import type { HandleDiscordMessage } from "../../application/HandleDiscordMessage.ts";
+import { splitMarkdown } from "../../application/markdownSplitter.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { IDiscordAttachmentRefetcher } from "../../application/ports/IDiscordAttachmentRefetcher.ts";
+import { llmTextToDiscordText } from "../../application/textTransformers.ts";
 import type { AgentStatusUpdate, OnStatusUpdate } from "../../application/types/AgentStatus.ts";
 import { AgentStatusType, assertNever } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import { MessageIntent } from "../../domain/message/MessageIntent.ts";
+import type { IMessagePageRepository } from "../../domain/message/MessagePage.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
-import { discordMessageToLlmText, llmTextToDiscordText } from "./textTransformers.ts";
+import { discordMessageToLlmText } from "./textTransformers.ts";
 
 /** Custom ID for the Retry button attached to failed bot responses. */
 const RETRY_BUTTON_ID = "retry_mention";
+
+/** Custom ID for the Next Page button attached to paginated bot responses. */
+const NEXT_PAGE_BUTTON_ID = "next_page";
 
 /**
  * Maps each recognized bot command prefix to its corresponding {@link MessageIntent}.
@@ -148,6 +155,8 @@ export class DiscordGateway {
         private readonly mentionHandler: HandleDiscordMessage,
         private readonly logger: Logger,
         private readonly statusUpdater: StatusMessageUpdater,
+        private readonly messagePageRepo: IMessagePageRepository,
+        private readonly getNextPage: GetNextPage,
     ) {
         this.client = new Client({
             intents: [
@@ -185,8 +194,11 @@ export class DiscordGateway {
 
         this.client.on(Events.InteractionCreate, (interaction) => {
             if (!interaction.isButton()) return;
-            if (interaction.customId !== RETRY_BUTTON_ID) return;
-            void this.handleRetryButton(interaction);
+            if (interaction.customId === RETRY_BUTTON_ID) {
+                void this.handleRetryButton(interaction);
+            } else if (interaction.customId === NEXT_PAGE_BUTTON_ID) {
+                void this.handleNextPageButton(interaction);
+            }
         });
 
         this.client.on(Events.Error, (err) => {
@@ -202,6 +214,11 @@ export class DiscordGateway {
      * the message handler as if the user had sent that message again. If the original
      * message no longer exists, removes the Retry button and replies ephemerally.
      */
+    // TODO: this is totally busted because it tries to save the human message again in the use case
+    //       and it creates a new response message, which is fine but we need to delete the original one
+    //       make a separate use-case, sigh, which only calls the orchestrator with full history
+    //       if there is no db entry for human message, then send an ephemeral full failure response and remove the button
+    //       except we can't use the orchestrator with just the history, we need intent too, sigh
     private async handleRetryButton(interaction: ButtonInteraction): Promise<void> {
         const originalMessageId = interaction.message.reference?.messageId;
         const channel = interaction.channel;
@@ -228,9 +245,132 @@ export class DiscordGateway {
         }
 
         // Acknowledge the interaction immediately so Discord doesn't show "interaction failed"
+        // TODO: deferReply? which one should be used to show the wheel as spinning
         await interaction.deferUpdate();
 
         await this.handleMessageCreate(originalMessage);
+    }
+
+    /**
+     * Handles a Next Page button click on a paginated bot response.
+     *
+     * Retrieves the pending page state from the DB via the GetNextPage use case,
+     * sends the next page as a Discord reply to the current bot message, updates
+     * the DB state, and removes the button from the old message.
+     *
+     * If the page state is missing (e.g. stale button), removes the button and returns.
+     */
+    private async handleNextPageButton(interaction: ButtonInteraction): Promise<void> {
+        // Acknowledge immediately to prevent Discord's "interaction failed" timeout
+        await interaction.deferUpdate();
+
+        const currentBotMessageId = interaction.message.id;
+
+        await Sentry.startSpan(
+            {
+                name: "Handle Next Page button",
+                op: "discord.interaction.next_page",
+                attributes: { "discord.message_id": currentBotMessageId },
+            },
+            async (span) => {
+                // Step 1: Compute next page content via use case
+                let result: Awaited<ReturnType<GetNextPage["execute"]>>;
+                try {
+                    result = await this.getNextPage.execute({ botDiscordMessageId: currentBotMessageId });
+                } catch (err) {
+                    this.logger.error({ err, currentBotMessageId }, "Failed to compute next page");
+                    Sentry.captureException(err);
+                    await interaction.message.edit({ components: [] }).catch(() => {});
+                    return;
+                }
+
+                if (!result) {
+                    // No pending page state — stale button click
+                    await interaction.message.edit({ components: [] }).catch((err) => {
+                        this.logger.warn({ err, currentBotMessageId }, "Failed to remove stale Next Page button");
+                    });
+                    return;
+                }
+
+                span.setAttributes({
+                    "discord.page": result.currentPage,
+                    "discord.total_pages": result.totalPages,
+                    "discord.is_last_page": result.isLast,
+                });
+
+                // Step 2: Build component row for next message (omit button on last page)
+                const nextPageRow = result.isLast
+                    ? undefined
+                    : new ActionRowBuilder<ButtonBuilder>().addComponents(
+                          new ButtonBuilder()
+                              .setCustomId(NEXT_PAGE_BUTTON_ID)
+                              .setLabel(`Next Page · Page ${result.currentPage} of ${result.totalPages}`)
+                              .setStyle(ButtonStyle.Primary),
+                      );
+
+                // Step 3: Send the next page as a reply to the current bot message
+                let newBotMessage: Awaited<ReturnType<Message["reply"]>>;
+                try {
+                    newBotMessage = await interaction.message.reply({
+                        content: result.content,
+                        ...(nextPageRow && { components: [nextPageRow] }),
+                    });
+                } catch (err) {
+                    this.logger.error({ err, currentBotMessageId }, "Failed to send next page reply");
+                    Sentry.captureException(err);
+                    return;
+                }
+
+                // Step 4: Persist the messages row first — messagePageRepo.save has a FK on it,
+                // so if this throws the remaining cleanup is skipped entirely.
+                await this.mentionHandler.saveBotResponse({
+                    botDiscordMessageId: newBotMessage.id,
+                    repliesToDiscordId: currentBotMessageId,
+                    channelId: newBotMessage.channelId,
+                    guildId: newBotMessage.guildId,
+                    newMessages: [],
+                });
+
+                await Promise.allSettled([
+                    // Delete the consumed page state row
+                    this.messagePageRepo.delete(result.pageStateId).catch((err) => {
+                        this.logger.error({ err, id: result.pageStateId }, "Failed to delete old message page state");
+                    }),
+
+                    // Save new pending page state if there are more pages after this one
+                    !result.isLast
+                        ? this.messagePageRepo
+                              .save({
+                                  botDiscordMessageId: newBotMessage.id,
+                                  endOffset: result.newOffset,
+                                  currentPage: result.currentPage,
+                                  totalPages: result.totalPages,
+                              })
+                              .catch((err) => {
+                                  this.logger.error({ err }, "Failed to save next message page state");
+                              })
+                        : Promise.resolve(),
+
+                    // Remove the Next Page button from the OLD bot message
+                    interaction.message.edit({ components: [] }).catch((err) => {
+                        this.logger.warn(
+                            { err, currentBotMessageId },
+                            "Failed to remove Next Page button from old message",
+                        );
+                    }),
+                ]);
+
+                this.logger.info(
+                    {
+                        currentBotMessageId,
+                        newBotMessageId: newBotMessage.id,
+                        page: result.currentPage,
+                        totalPages: result.totalPages,
+                    },
+                    "Sent next page",
+                );
+            },
+        );
     }
 
     private async handleMessageCreate(message: Message): Promise<void> {
@@ -378,16 +518,8 @@ export class DiscordGateway {
                         attachmentRefetcher,
                     });
 
-                    // Sanitize LLM output for Discord rendering, then truncate to the 2000-character limit
+                    // Sanitize LLM output for Discord rendering
                     const discordResponse = llmTextToDiscordText(response);
-                    const truncated = discordResponse.length > 2000;
-                    const safeResponse = truncated ? `${discordResponse.slice(0, 1997)}...` : discordResponse;
-
-                    span.setAttributes({
-                        "discord.response_truncated": truncated,
-                        "discord.response_length": response.length,
-                        "discord.is_failure": isFailure ?? false,
-                    });
 
                     // Resolve the thinking message and cancel any pending status edit
                     thinkingMessagePromise.then((thinkingMessage) => {
@@ -408,18 +540,75 @@ export class DiscordGateway {
                               )
                             : undefined;
 
-                    const botReply = await message.reply({
-                        content: safeResponse,
-                        ...(retryRow && { components: [retryRow] }),
-                    });
+                    let botReply: Awaited<ReturnType<Message["reply"]>>;
 
-                    // Persist only after the final response is successfully sent
-                    await this.mentionHandler.saveBotResponse({
-                        botDiscordMessageId: botReply.id,
-                        repliesToDiscordId: message.id,
-                        channelId: botReply.channelId,
-                        guildId: botReply.guildId,
-                        newMessages,
+                    if (discordResponse.length > 2000) {
+                        // --- PAGINATED PATH ---
+                        const {
+                            content: page1Content,
+                            newOffset,
+                            pageCount: totalPages,
+                        } = splitMarkdown(discordResponse, 0, 2000, { pageCount: true });
+
+                        if (!totalPages) {
+                            throw new Error("splitMarkdown did not return pageCount for paginated content");
+                        }
+
+                        const nextPageRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                            new ButtonBuilder()
+                                .setCustomId(NEXT_PAGE_BUTTON_ID)
+                                .setLabel(`Next Page · Page 1 of ${totalPages}`)
+                                .setStyle(ButtonStyle.Primary),
+                        );
+
+                        const components: ActionRowBuilder<ButtonBuilder>[] = [nextPageRow];
+                        if (retryRow) components.push(retryRow);
+
+                        botReply = await message.reply({
+                            content: page1Content,
+                            components,
+                        });
+
+                        span.setAttributes({
+                            "discord.paginated": true,
+                            "discord.total_pages": totalPages,
+                        });
+
+                        // messages row must exist before messagePageRepo.save (FK constraint)
+                        await this.mentionHandler.saveBotResponse({
+                            botDiscordMessageId: botReply.id,
+                            repliesToDiscordId: message.id,
+                            channelId: botReply.channelId,
+                            guildId: botReply.guildId,
+                            newMessages,
+                        });
+                        await this.messagePageRepo.save({
+                            botDiscordMessageId: botReply.id,
+                            endOffset: newOffset,
+                            currentPage: 1,
+                            totalPages,
+                        });
+                    } else {
+                        // --- NON-PAGINATED PATH ---
+                        botReply = await message.reply({
+                            content: discordResponse,
+                            ...(retryRow && { components: [retryRow] }),
+                        });
+
+                        span.setAttributes({ "discord.paginated": false });
+
+                        await this.mentionHandler.saveBotResponse({
+                            botDiscordMessageId: botReply.id,
+                            repliesToDiscordId: message.id,
+                            channelId: botReply.channelId,
+                            guildId: botReply.guildId,
+                            newMessages,
+                        });
+                    }
+
+                    span.setAttributes({
+                        "discord.response_length": response.length,
+                        "discord.is_failure": isFailure ?? false,
                     });
                 } catch (err) {
                     this.logger.error({ err, discordMessageId: message.id }, "Failed to send or persist bot reply");

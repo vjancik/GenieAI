@@ -64,7 +64,7 @@ export interface AppConfig {
  * Throws {@link ConfigError} for unknown values.
  */
 function parseThinkingLevel(raw: string | undefined): ThinkingLevel {
-    const normalized = (raw ?? "MINIMAL").toUpperCase();
+    const normalized = (raw ?? "LOW").toUpperCase();
     if ((THINKING_LEVELS as readonly string[]).includes(normalized)) {
         return normalized as ThinkingLevel;
     }

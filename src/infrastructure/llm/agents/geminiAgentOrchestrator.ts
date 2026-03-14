@@ -461,6 +461,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                                 { attempt, apiKeyId: key.id, errName: (err as Error).name },
                                 "Primary model failed with 503/timeout; trying fallback model",
                             );
+                            // TODO: if fallback model is used, response should be isRetriable
                             // Reuse filtered — same key, same messages, no re-refresh needed
                             const fallbackResult = await fallbackModel.invoke(filtered, {
                                 timeout: timeoutMs ?? GLOBAL_MODEL_TIMEOUT_MS,
