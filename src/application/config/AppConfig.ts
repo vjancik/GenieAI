@@ -56,6 +56,17 @@ export interface AppConfig {
      * Default: 60 (refresh when less than 1 hour of TTL remains)
      */
     geminiFileStaleThresholdMinutes: number;
+    /**
+     * Optional HTTP/HTTPS proxy URL passed to yt-dlp and used for caption fetches.
+     * Must use the http:// or https:// scheme. Sourced from YT_DLP_HTTP_PROXY.
+     */
+    ytDlpHttpProxy: string | undefined;
+    /**
+     * Number of times to retry yt-dlp metadata and caption fetches when the proxy
+     * rotates on bot-detection errors or 429 responses. Only meaningful when
+     * YT_DLP_HTTP_PROXY is set. Default: 5.
+     */
+    proxyRetries: number;
 }
 
 /**
@@ -146,5 +157,7 @@ export function loadConfig(): AppConfig {
         attachmentMode: parseAttachmentMode(process.env.UPLOAD_ATTACHMENT_MODE),
         maxInlineAttachmentSizeMb: Number(process.env.MAX_INLINE_ATTACHMENT_SZ_MB ?? "100"),
         geminiFileStaleThresholdMinutes: Number(process.env.GEMINI_FILE_STALE_THRESHOLD_MINUTES ?? "15"),
+        ytDlpHttpProxy: process.env.YT_DLP_HTTP_PROXY?.trim() || undefined,
+        proxyRetries: Number(process.env.PROXY_RETRIES ?? "5"),
     };
 }

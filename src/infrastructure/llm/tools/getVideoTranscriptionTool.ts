@@ -148,6 +148,10 @@ async function verifyYtDlp(): Promise<void> {
  * Verifies yt-dlp is available in PATH before returning the tool. Throws if not
  * found, since it is a hard runtime requirement with no fallback.
  *
+ * If `proxy` is provided, validates it uses http:// or https:// (the only schemes
+ * yt-dlp's --proxy flag and Bun's fetch support) and passes it to all yt-dlp
+ * invocations and caption fetch requests.
+ *
  * TODO: support configurable yt-dlp binary path for Windows compatibility
  * TODO: use dynamic tool registration to gracefully omit the tool when yt-dlp is unavailable
  *
@@ -157,8 +161,16 @@ async function verifyYtDlp(): Promise<void> {
  * returns a successful response, handling transient 429s gracefully.
  *
  * @param logger - Injectable logger for testability
+ * @param proxy - Optional HTTP/HTTPS proxy URL (from YT_DLP_HTTP_PROXY)
+ * @param proxyRetries - Number of proxy rotation retries for bot-detection and 429 errors
  */
-export async function createGetVideoTranscriptionTool(logger: Logger) {
+export async function createGetVideoTranscriptionTool(logger: Logger, proxy?: string, proxyRetries = 5) {
+    if (proxy !== undefined) {
+        const scheme = new URL(proxy).protocol;
+        if (scheme !== "http:" && scheme !== "https:") {
+            throw new ToolError(`YT_DLP_HTTP_PROXY must use http:// or https://, got: ${scheme}`);
+        }
+    }
     await verifyYtDlp();
     return tool(
         async ({ urls }) => {
@@ -166,7 +178,9 @@ export async function createGetVideoTranscriptionTool(logger: Logger) {
             const unique = [...new Set(urls)];
             logger.debug({ urls: unique }, "Extracting video transcriptions");
 
-            const results = await Promise.allSettled(unique.map((url) => extractTranscription(url, logger)));
+            const results = await Promise.allSettled(
+                unique.map((url) => extractTranscription(url, logger, proxy, proxyRetries)),
+            );
 
             return results
                 .map((result, i) => {
@@ -197,34 +211,52 @@ export async function createGetVideoTranscriptionTool(logger: Logger) {
  * (output does not contain "yt-dlp is up to date"), retries the metadata
  * command once before throwing.
  */
-async function fetchYtDlpMetadata(url: string, logger: Logger): Promise<string> {
+const BOT_DETECTION_MSG = "Sign in to confirm you're not a bot.";
+
+/**
+ * Runs `yt-dlp --flat-playlist -J` for the given URL and returns stdout.
+ *
+ * On non-zero exit:
+ * - If stderr contains the bot-detection message and a proxy is set, retries
+ *   up to `proxyRetries` times (rotating proxy IPs on each attempt).
+ * - Otherwise, attempts `yt-dlp --update`; if an update was applied retries once.
+ */
+async function fetchYtDlpMetadata(url: string, logger: Logger, proxy?: string, proxyRetries = 5): Promise<string> {
+    const proxyArgs = proxy ? ["--proxy", proxy] : [];
     const runMeta = async () => {
         // --flat-playlist: fail fast on playlists rather than fetching all entries
-        const proc = Bun.spawn(["yt-dlp", "--no-warnings", "--flat-playlist", "-J", url], {
+        const proc = Bun.spawn(["yt-dlp", "--no-warnings", "--flat-playlist", ...proxyArgs, "-J", url], {
             stderr: "pipe",
             stdout: "pipe",
         });
-        const [stdout] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-        return { stdout, exitCode: proc.exitCode, stderr: proc.stderr };
+        const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+        return { stdout, exitCode: proc.exitCode, stderr };
     };
 
     let result = await runMeta();
 
     if (result.exitCode !== 0) {
-        const stderr = await new Response(result.stderr).text();
-        logger.warn({ url, stderr: stderr.trim() }, "yt-dlp metadata fetch failed, attempting update");
+        logger.warn({ url, proxied: proxy !== undefined, stderr: result.stderr.trim() }, "yt-dlp metadata fetch failed, attempting update");
 
-        const updateProc = Bun.spawn(["yt-dlp", "--update"], { stderr: "pipe", stdout: "pipe" });
-        const [updateOutput] = await Promise.all([new Response(updateProc.stdout).text(), updateProc.exited]);
+        // Bot detection with a proxy: retry to rotate the proxy IP
+        if (proxy && result.stderr.includes(BOT_DETECTION_MSG)) {
+            for (let attempt = 1; attempt <= proxyRetries && result.exitCode !== 0; attempt++) {
+                logger.info({ url, attempt, proxyRetries }, "Bot detection hit, retrying with rotated proxy IP");
+                result = await runMeta();
+            }
+        } else {
+            // Non-bot failure: try updating yt-dlp, then retry once if updated
+            const updateProc = Bun.spawn(["yt-dlp", "--update"], { stderr: "pipe", stdout: "pipe" });
+            const [updateOutput] = await Promise.all([new Response(updateProc.stdout).text(), updateProc.exited]);
 
-        if (!updateOutput.includes("yt-dlp is up to date")) {
-            logger.info({ url }, "yt-dlp was updated, retrying metadata fetch");
-            result = await runMeta();
+            if (!updateOutput.includes("yt-dlp is up to date")) {
+                logger.info({ url }, "yt-dlp was updated, retrying metadata fetch");
+                result = await runMeta();
+            }
         }
 
         if (result.exitCode !== 0) {
-            const retryStderr = await new Response(result.stderr).text();
-            throw new ToolError(`yt-dlp failed (exit ${result.exitCode}) for URL: ${url}: ${retryStderr.trim()}`);
+            throw new ToolError(`yt-dlp failed (exit ${result.exitCode}) for URL: ${url}: ${result.stderr.trim()}`);
         }
     }
 
@@ -239,10 +271,10 @@ async function fetchYtDlpMetadata(url: string, logger: Logger): Promise<string> 
  * @param url - The video URL to process
  * @param logger - Logger instance for progress tracking
  */
-async function extractTranscription(url: string, logger: Logger): Promise<string> {
+async function extractTranscription(url: string, logger: Logger, proxy?: string, proxyRetries = 5): Promise<string> {
     logger.debug({ url }, "Fetching video metadata via yt-dlp -J");
 
-    const stdout = await fetchYtDlpMetadata(url, logger);
+    const stdout = await fetchYtDlpMetadata(url, logger, proxy, proxyRetries);
 
     let raw: unknown;
     try {
@@ -265,19 +297,25 @@ async function extractTranscription(url: string, logger: Logger): Promise<string
 
     logger.debug({ url, count: captionUrls.length }, "Trying caption URLs in priority order");
 
-    // Try each URL in priority order, skipping on HTTP errors (e.g. 429)
+    // Try each URL in priority order; on 429 retry up to proxyRetries times to
+    // rotate the proxy IP, then fall through to the next URL on persistent failure
     for (const captionUrl of captionUrls) {
-        let response: Response;
-        try {
-            response = await fetch(captionUrl, { signal: AbortSignal.timeout(30_000) });
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            logger.debug({ captionUrl, error: msg }, "Caption fetch threw, trying next");
-            continue;
+        let response: Response | undefined;
+        for (let attempt = 0; attempt <= (proxy ? proxyRetries : 0); attempt++) {
+            try {
+                response = await fetch(captionUrl, { signal: AbortSignal.timeout(30_000), proxy });
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                logger.debug({ captionUrl, error: msg }, "Caption fetch threw, trying next URL");
+                break;
+            }
+
+            if (response.status !== 429) break;
+            logger.debug({ captionUrl, attempt, proxyRetries }, "Caption fetch 429, retrying with rotated proxy IP");
         }
 
-        if (!response.ok) {
-            logger.debug({ captionUrl, status: response.status }, "Caption fetch non-OK, trying next");
+        if (!response?.ok) {
+            logger.debug({ captionUrl, status: response?.status }, "Caption fetch non-OK, trying next URL");
             continue;
         }
 

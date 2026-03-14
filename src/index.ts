@@ -81,7 +81,7 @@ const uploaderRegistry = new GenaiFileUploaderRegistry(
 
 // LLM tools
 const getWebsiteTool = createGetWebsiteTool(logger.child({ module: "tool:website" }));
-const getVideoTranscriptionTool = await createGetVideoTranscriptionTool(logger.child({ module: "tool:video" }));
+const getVideoTranscriptionTool = await createGetVideoTranscriptionTool(logger.child({ module: "tool:video" }), config.ytDlpHttpProxy, config.proxyRetries);
 
 // Lazy model providers — one ChatGoogle client per (provider, apiKey) pair
 const freeKeyProvider = new RoundRobinFreeKeyProvider(freeKeys);
