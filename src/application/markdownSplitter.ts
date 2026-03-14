@@ -110,7 +110,8 @@ function extractPage(
     continuationCodeBlock?: string | null,
 ): Omit<SplitMarkdownResult, "pageCount"> {
     const slice = text.slice(offset);
-    const lines = slice.split("\n");
+    // Output: ["First line", "\nSecond line", "\r\nThird line"]
+    const lines = slice.split(/(?=\r?\n)/);
 
     // If we are continuing inside a code block from the previous page, start as already
     // inside a code block. The continuation header is prepended to content for display
@@ -132,8 +133,6 @@ function extractPage(
         const line = lines[i];
         // Bounds are guaranteed by the loop condition — this branch is unreachable
         if (line === undefined) break;
-        // First line has no preceding newline separator; subsequent lines do
-        const addition = i === 0 ? line : `\n${line}`;
 
         // Record the safe split point BEFORE updating block state for this line.
         // This ensures that if this line opens a protected block (opening fence or first
@@ -143,7 +142,7 @@ function extractPage(
         }
 
         // Detect code fence toggle. A fence always starts with ``` (up to 3 leading spaces).
-        const fenceMatch = CODE_FENCE_RE.exec(line);
+        const fenceMatch = CODE_FENCE_RE.exec(line.trimStart());
         // Whether this line is a closing fence (block was open before this line).
         const isClosingFence = !!(fenceMatch && inCodeBlock);
         // Preserve the block type before a closing fence clears it, so the over-limit
@@ -171,7 +170,7 @@ function extractPage(
         // After accumulating the opening fence line, record how far we are so that any
         // intra-block newline split must be strictly after this position.
         if (inCodeBlock && codeBlockStartLength === -1) {
-            codeBlockStartLength = accumulated.length + addition.length;
+            codeBlockStartLength = accumulated.length + line.length;
         }
 
         // Detect table context: a line starting with | (content row) or a separator line,
@@ -179,7 +178,7 @@ function extractPage(
         inTable = !inCodeBlock && (line.trimStart().startsWith("|") || TABLE_SEPARATOR_RE.test(line.trim()));
 
         // Check whether adding this line would exceed the limit
-        if (accumulated.length + addition.length > limit) {
+        if (accumulated.length + line.length > limit) {
             // Special case: the closing fence itself doesn't fit. The block body is already
             // in `accumulated` but without the fence it would render as unterminated.
             // Treat it the same as a mid-block split: backtrack to the last newline inside
@@ -288,7 +287,7 @@ function extractPage(
             break;
         }
 
-        accumulated += addition;
+        accumulated += line;
     }
 
     // We fell through the loop — either the whole slice fits, or we broke out normally.
