@@ -25,6 +25,16 @@ export interface MessagePage {
     currentPage: number;
     /** Total number of pages in this response */
     totalPages: number;
+    /**
+     * True when the page whose offset is stored in `endOffset` ended mid-way through a
+     * fenced code block. The next page must prepend a matching ``` opener.
+     */
+    endedInCodeBlock: boolean;
+    /**
+     * The syntax label of the open code block at the page boundary (e.g. `"typescript"`),
+     * or an empty string for an unlabelled block. `null` when `endedInCodeBlock` is false.
+     */
+    codeBlockType: string | null;
     createdAt: Date;
 }
 

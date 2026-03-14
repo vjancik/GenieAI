@@ -30,6 +30,17 @@ export interface GetNextPageResult {
      * all reference the first page's messages row (where the LangChain content lives).
      */
     firstPageDiscordMessageId: string;
+    /**
+     * True when this page ended mid-way through a fenced code block.
+     * The next page's state row must record this so the following page can prepend
+     * the matching ``` opener via {@link SplitMarkdownOptions.continuationCodeBlock}.
+     */
+    endedInCodeBlock: boolean;
+    /**
+     * Syntax label of the open code block at the boundary (e.g. `"typescript"`), or an
+     * empty string for an unlabelled block. `null` when `endedInCodeBlock` is false.
+     */
+    codeBlockType: string | null;
 }
 
 /**
@@ -122,12 +133,18 @@ export class GetNextPage {
         // Re-apply the same transformation used when the original response was sent
         const fullDiscordText = llmTextToDiscordText(rawText);
 
-        // Step 4: Extract the next page
-        const { currentPage, totalPages, endOffset } = pageState;
+        // Step 4: Extract the next page, continuing any open code block from the previous page
+        const { currentPage, totalPages, endOffset, endedInCodeBlock, codeBlockType } = pageState;
         const nextPage = currentPage + 1;
         const isLast = nextPage >= totalPages;
 
-        const { content, newOffset } = splitMarkdown(fullDiscordText, endOffset, 2000);
+        const continuationCodeBlock = endedInCodeBlock ? (codeBlockType ?? "") : null;
+        const {
+            content,
+            newOffset,
+            endedInCodeBlock: nextEndedInCodeBlock,
+            codeBlockType: nextCodeBlockType,
+        } = splitMarkdown(fullDiscordText, endOffset, 2000, { continuationCodeBlock });
 
         this.logger.debug({ botDiscordMessageId, page: nextPage, totalPages, isLast }, "Computed next page content");
 
@@ -139,6 +156,8 @@ export class GetNextPage {
             isLast,
             pageStateId: pageState.id,
             firstPageDiscordMessageId: pageState.firstPageDiscordMessageId,
+            endedInCodeBlock: nextEndedInCodeBlock,
+            codeBlockType: nextCodeBlockType,
         };
     }
 }

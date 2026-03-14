@@ -61,6 +61,16 @@ export const messagePages = pgTable("message_pages", {
     currentPage: integer("current_page").notNull(),
     /** Total number of pages in this response */
     totalPages: integer("total_pages").notNull(),
+    /**
+     * True when the stored page ended mid-way through a fenced code block and was closed
+     * with a synthetic ``` fence. The next page must prepend a matching ``` opener.
+     */
+    endedInCodeBlock: boolean("ended_in_code_block").notNull().default(false),
+    /**
+     * The syntax label of the open code block at the page boundary (e.g. `"typescript"`),
+     * or an empty string for an unlabelled block. NULL when endedInCodeBlock is false.
+     */
+    codeBlockType: text("code_block_type"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

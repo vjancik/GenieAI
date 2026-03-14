@@ -310,6 +310,8 @@ export class DiscordGateway {
                 content: page1Content,
                 newOffset,
                 pageCount: totalPages,
+                endedInCodeBlock: page1EndedInCodeBlock,
+                codeBlockType: page1CodeBlockType,
             } = splitMarkdown(discordResponse, 0, 2000, { pageCount: true });
 
             if (!totalPages) {
@@ -351,6 +353,8 @@ export class DiscordGateway {
                 endOffset: newOffset,
                 currentPage: 1,
                 totalPages,
+                endedInCodeBlock: page1EndedInCodeBlock,
+                codeBlockType: page1CodeBlockType,
             });
         } else {
             // --- NON-PAGINATED PATH ---
@@ -605,6 +609,8 @@ export class DiscordGateway {
                                       endOffset: result.newOffset,
                                       currentPage: result.currentPage,
                                       totalPages: result.totalPages,
+                                      endedInCodeBlock: result.endedInCodeBlock,
+                                      codeBlockType: result.codeBlockType,
                                   })
                                   .catch((err) => {
                                       this.logger.error({ err }, "Failed to save next message page state");

@@ -68,6 +68,8 @@ function pagePayload(
         endOffset: 1800,
         currentPage: 1,
         totalPages: 3,
+        endedInCodeBlock: false,
+        codeBlockType: null,
         ...overrides,
     };
 }

@@ -16,6 +16,8 @@ function buildInsertPageStmt(db: Db) {
             endOffset: sql.placeholder("endOffset"),
             currentPage: sql.placeholder("currentPage"),
             totalPages: sql.placeholder("totalPages"),
+            endedInCodeBlock: sql.placeholder("endedInCodeBlock"),
+            codeBlockType: sql.placeholder("codeBlockType"),
         })
         .returning()
         .prepare("message_page_insert");
@@ -72,6 +74,8 @@ export class PgMessagePageRepository implements IMessagePageRepository {
                         endOffset: page.endOffset,
                         currentPage: page.currentPage,
                         totalPages: page.totalPages,
+                        endedInCodeBlock: page.endedInCodeBlock,
+                        codeBlockType: page.codeBlockType,
                     });
 
                     if (!result) {
