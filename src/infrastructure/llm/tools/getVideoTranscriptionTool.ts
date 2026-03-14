@@ -1,21 +1,164 @@
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod/v4";
 import type { Logger } from "../../../application/types/Logger.ts";
 import { ToolError } from "../../../domain/errors/AppError.ts";
 
 /**
+ * Zod schema for a single caption track entry from yt-dlp's info JSON.
+ * `protocol` is only present on streaming entries (e.g. m3u8_native).
+ */
+const CaptionEntrySchema = z.object({
+    ext: z.string(),
+    url: z.string(),
+    name: z.string().optional(),
+    protocol: z.string().optional(),
+});
+
+/**
+ * Zod schema for the yt-dlp --dump-single-json output fields we consume.
+ * Exported for use in tests to validate fixture files against the same schema.
+ * Only the fields needed for caption URL selection are validated; the rest
+ * of the (large) info JSON is ignored. Both caption maps default to empty
+ * objects to handle providers that omit one or both fields.
+ */
+export const InfoJsonSchema = z.object({
+    id: z.string(),
+    title: z.string().optional(),
+    subtitles: z.record(z.string(), z.array(CaptionEntrySchema)).default({}),
+    automatic_captions: z.record(z.string(), z.array(CaptionEntrySchema)).default({}),
+});
+
+/** Shape of a single caption track entry from yt-dlp's info JSON. */
+export type YtDlpCaptionEntry = z.infer<typeof CaptionEntrySchema>;
+
+/** Relevant subset of the yt-dlp --dump-single-json output. */
+export type YtDlpInfoJson = z.infer<typeof InfoJsonSchema>;
+
+/**
+ * Priority-ordered list of language prefixes (most preferred first).
+ * Any language matching these prefixes is preferred over unlisted ones.
+ */
+const LANG_PRIORITY_PREFIXES = ["en", "de", "fr", "it", "es", "ko", "zh", "hi"];
+
+/**
+ * Caption formats in preference order.
+ * srt/vtt are plain-text with timestamps; ttml is XML but structured;
+ * srv3/srv2/srv1 are YouTube XML variants (srv3 has word-level timing, srv1 is simplest);
+ * json3 is raw JSON requiring custom parsing — least useful as a transcript.
+ */
+const FORMAT_PRIORITY = ["srt", "vtt", "ttml", "srv3", "srv2", "srv1", "json3"];
+
+/**
+ * Returns a numeric priority score for a language code (lower = higher priority).
+ * Languages matching LANG_PRIORITY_PREFIXES are scored by their index;
+ * all others get a fallback score after the list.
+ */
+function langScore(lang: string): number {
+    const idx = LANG_PRIORITY_PREFIXES.findIndex(
+        (prefix) => lang === prefix || lang.startsWith(`${prefix}-`) || lang.startsWith(`${prefix}_`),
+    );
+    return idx === -1 ? LANG_PRIORITY_PREFIXES.length : idx;
+}
+
+/**
+ * Returns a numeric priority score for a caption format (lower = higher priority).
+ * Formats not in FORMAT_PRIORITY get a fallback score after the list.
+ */
+function formatScore(ext: string): number {
+    const idx = FORMAT_PRIORITY.indexOf(ext);
+    return idx === -1 ? FORMAT_PRIORITY.length : idx;
+}
+
+/**
+ * Builds a priority-ordered list of caption URLs from yt-dlp info JSON.
+ *
+ * Ordering rules (ascending priority = earlier in result = preferred):
+ *   1. Manual subtitles before automatic captions
+ *   2. Language priority: en.* > de.*, fr.*, it.*, es.*, ko.*, zh.*, hi.* > any
+ *   3. Format priority: srt > vtt > any
+ *
+ * Excludes entries using non-HTTP protocols (e.g. m3u8_native HLS streams),
+ * as those cannot be fetched directly with a simple HTTP request.
+ *
+ * @param info - Parsed yt-dlp info JSON object
+ * @returns Ordered array of URLs to try (most preferred first)
+ */
+export function selectCaptionUrls(info: YtDlpInfoJson): string[] {
+    interface Candidate {
+        url: string;
+        isAuto: number; // 0 = manual, 1 = auto
+        lang: string;
+        ext: string;
+    }
+
+    const candidates: Candidate[] = [];
+
+    const collect = (map: Record<string, YtDlpCaptionEntry[]>, isAuto: number) => {
+        for (const [lang, entries] of Object.entries(map)) {
+            for (const entry of entries) {
+                // Skip HLS/DASH streaming protocols — not directly fetchable
+                if (entry.protocol && entry.protocol !== "https" && entry.protocol !== "http") continue;
+                candidates.push({ url: entry.url, isAuto, lang, ext: entry.ext });
+            }
+        }
+    };
+
+    collect(info.subtitles, 0);
+    collect(info.automatic_captions, 1);
+
+    candidates.sort((a, b) => {
+        if (a.isAuto !== b.isAuto) return a.isAuto - b.isAuto;
+        const langDiff = langScore(a.lang) - langScore(b.lang);
+        if (langDiff !== 0) return langDiff;
+        return formatScore(a.ext) - formatScore(b.ext);
+    });
+
+    // Deduplicate by URL then cap at top 5 manual + top 5 auto to avoid
+    // excessive fallback attempts across hundreds of translated tracks
+    const seen = new Set<string>();
+    let manualCount = 0;
+    let autoCount = 0;
+    return candidates.reduce<string[]>((acc, c) => {
+        const count = c.isAuto === 0 ? manualCount : autoCount;
+        if (!seen.has(c.url) && count < 5) {
+            seen.add(c.url);
+            if (c.isAuto === 0) manualCount++; else autoCount++;
+            acc.push(c.url);
+        }
+        return acc;
+    }, []);
+}
+
+/**
+ * Verifies yt-dlp is available in PATH by running `yt-dlp --version`.
+ * Throws a ToolError if the command is not found or exits non-zero.
+ */
+async function verifyYtDlp(): Promise<void> {
+    const proc = Bun.spawn(["yt-dlp", "--version"], { stderr: "pipe", stdout: "pipe" });
+    await proc.exited;
+    if (proc.exitCode !== 0) {
+        throw new ToolError("yt-dlp is not available in PATH and is required for video transcription");
+    }
+}
+
+/**
  * Creates a LangChain tool that extracts transcriptions from video URLs using yt-dlp.
  *
- * For each URL, yt-dlp downloads auto-generated subtitles in VTT format to a temporary
- * directory. The VTT content is then parsed into clean plain text and returned.
- * Duplicate URLs are deduplicated, and individual failures are reported inline.
+ * Verifies yt-dlp is available in PATH before returning the tool. Throws if not
+ * found, since it is a hard runtime requirement with no fallback.
+ *
+ * TODO: support configurable yt-dlp binary path for Windows compatibility
+ * TODO: use dynamic tool registration to gracefully omit the tool when yt-dlp is unavailable
+ *
+ * For each URL, yt-dlp dumps the video metadata JSON (-J) to stdout. The metadata
+ * is parsed to build a priority-ordered list of caption URLs (manual > auto,
+ * preferred languages first, srt > vtt). URLs are tried in order until one
+ * returns a successful response, handling transient 429s gracefully.
  *
  * @param logger - Injectable logger for testability
  */
-export function createGetVideoTranscriptionTool(logger: Logger) {
+export async function createGetVideoTranscriptionTool(logger: Logger) {
+    await verifyYtDlp();
     return tool(
         async ({ urls }) => {
             // Deduplicate URLs to avoid redundant yt-dlp invocations
@@ -48,92 +191,101 @@ export function createGetVideoTranscriptionTool(logger: Logger) {
 }
 
 /**
- * Runs yt-dlp for a single video URL, downloads auto-subtitles to a temp dir,
- * reads the resulting VTT file, and returns formatted transcript text.
+ * Runs `yt-dlp --flat-playlist -J` for the given URL and returns stdout.
+ * On non-zero exit, attempts `yt-dlp --update`; if an update was applied
+ * (output does not contain "yt-dlp is up to date"), retries the metadata
+ * command once before throwing.
+ */
+async function fetchYtDlpMetadata(url: string, logger: Logger): Promise<string> {
+    const runMeta = async () => {
+        // --flat-playlist: fail fast on playlists rather than fetching all entries
+        const proc = Bun.spawn(["yt-dlp", "--no-warnings", "--flat-playlist", "-J", url], {
+            stderr: "pipe",
+            stdout: "pipe",
+        });
+        const [stdout] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+        return { stdout, exitCode: proc.exitCode, stderr: proc.stderr };
+    };
+
+    let result = await runMeta();
+
+    if (result.exitCode !== 0) {
+        const stderr = await new Response(result.stderr).text();
+        logger.warn({ url, stderr: stderr.trim() }, "yt-dlp metadata fetch failed, attempting update");
+
+        const updateProc = Bun.spawn(["yt-dlp", "--update"], { stderr: "pipe", stdout: "pipe" });
+        const [updateOutput] = await Promise.all([new Response(updateProc.stdout).text(), updateProc.exited]);
+
+        if (!updateOutput.includes("yt-dlp is up to date")) {
+            logger.info({ url }, "yt-dlp was updated, retrying metadata fetch");
+            result = await runMeta();
+        }
+
+        if (result.exitCode !== 0) {
+            const retryStderr = await new Response(result.stderr).text();
+            throw new ToolError(`yt-dlp failed (exit ${result.exitCode}) for URL: ${url}: ${retryStderr.trim()}`);
+        }
+    }
+
+    return result.stdout;
+}
+
+/**
+ * Runs yt-dlp -J for a single video URL to get metadata, selects the best
+ * available caption URL by priority, fetches it (retrying on 429), and returns
+ * the raw caption content formatted with the video URL as a heading.
  *
  * @param url - The video URL to process
  * @param logger - Logger instance for progress tracking
  */
 async function extractTranscription(url: string, logger: Logger): Promise<string> {
-    const tmpDir = await mkdtemp(join(tmpdir(), "genie-yt-"));
+    logger.debug({ url }, "Fetching video metadata via yt-dlp -J");
 
+    const stdout = await fetchYtDlpMetadata(url, logger);
+
+    let raw: unknown;
     try {
-        const proc = Bun.spawn(
-            [
-                "yt-dlp",
-                "--skip-download",
-                "--write-auto-sub",
-                "--sub-lang",
-                "en",
-                "--sub-format",
-                "vtt",
-                "--no-warnings",
-                "-o",
-                join(tmpDir, "%(id)s"),
-                url,
-            ],
-            { stderr: "pipe", stdout: "pipe" },
-        );
-
-        await proc.exited;
-
-        if (proc.exitCode !== 0) {
-            throw new ToolError(`yt-dlp exited with code ${proc.exitCode} for URL: ${url}`);
-        }
-
-        // Locate the downloaded VTT file
-        const files = await readdir(tmpDir);
-        const vttFile = files.find((f) => f.endsWith(".vtt"));
-
-        if (!vttFile) {
-            throw new ToolError(
-                `No subtitle file found for URL: ${url}. The video may not have auto-generated captions.`,
-            );
-        }
-
-        const content = await readFile(join(tmpDir, vttFile), "utf-8");
-        const transcript = parseVtt(content);
-
-        logger.debug({ url, vttFile }, "Successfully extracted transcription");
-
-        return `## ${url}\n\n${transcript}`;
-    } finally {
-        // Always clean up the temp directory
-        await rm(tmpDir, { recursive: true, force: true });
+        raw = JSON.parse(stdout);
+    } catch {
+        throw new ToolError(`Failed to parse yt-dlp JSON output for URL: ${url}`);
     }
+
+    const parsed = InfoJsonSchema.safeParse(raw);
+    if (!parsed.success) {
+        throw new ToolError(`Unexpected yt-dlp info JSON structure for URL: ${url}: ${parsed.error.message}`);
+    }
+    const info = parsed.data;
+
+    const captionUrls = selectCaptionUrls(info);
+
+    if (captionUrls.length === 0) {
+        throw new ToolError(`No caption tracks found for URL: ${url}`);
+    }
+
+    logger.debug({ url, count: captionUrls.length }, "Trying caption URLs in priority order");
+
+    // Try each URL in priority order, skipping on HTTP errors (e.g. 429)
+    for (const captionUrl of captionUrls) {
+        let response: Response;
+        try {
+            response = await fetch(captionUrl, { signal: AbortSignal.timeout(30_000) });
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            logger.debug({ captionUrl, error: msg }, "Caption fetch threw, trying next");
+            continue;
+        }
+
+        if (!response.ok) {
+            logger.debug({ captionUrl, status: response.status }, "Caption fetch non-OK, trying next");
+            continue;
+        }
+
+        const content = await response.text();
+        logger.debug({ url, captionUrl }, "Successfully fetched captions");
+        return `## ${url}\n\n${content}`;
+    }
+
+    throw new ToolError(`All ${captionUrls.length} caption URLs failed for: ${url}`);
 }
 
-/**
- * Parses WebVTT content into clean plain text.
- *
- * Removes the WEBVTT header, cue identifiers (numeric lines), timestamp lines
- * (lines containing "-->"), and deduplicates consecutive identical lines
- * (which appear frequently in auto-generated captions due to rolling display).
- *
- * @param vtt - Raw VTT file content
- * @returns Clean, deduplicated transcript text
- */
-export function parseVtt(vtt: string): string {
-    return (
-        vtt
-            .split("\n")
-            .filter((line) => {
-                const trimmed = line.trim();
-                // Remove WEBVTT header
-                if (trimmed.startsWith("WEBVTT")) return false;
-                // Remove timestamp lines (e.g. "00:00:01.000 --> 00:00:03.000")
-                if (trimmed.includes("-->")) return false;
-                // Remove pure numeric cue identifiers
-                if (/^\d+$/.test(trimmed)) return false;
-                // Remove empty lines
-                if (trimmed.length === 0) return false;
-                return true;
-            })
-            .map((line) => line.trim())
-            // Deduplicate consecutive identical lines (common in rolling captions)
-            .filter((line, i, arr) => line !== arr[i - 1])
-            .join(" ")
-    );
-}
-
-export type GetVideoTranscriptionTool = ReturnType<typeof createGetVideoTranscriptionTool>;
+export type GetVideoTranscriptionTool = Awaited<ReturnType<typeof createGetVideoTranscriptionTool>>;
