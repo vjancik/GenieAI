@@ -608,9 +608,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 type: AgentStatusType.TRIAGE,
             });
             // Triage only needs the current turn to classify — pass just the messages
-            // since the second-to-last HumanMessage (i.e. everything after the prior
-            // user turn: last AI response + any tool messages + the new user message).
-            // This keeps triage fast and cheap without sacrificing routing accuracy.
+            // starting from the second-to-last HumanMessage (i.e. the prior user turn
+            // plus: last AI response, any tool messages, and the new user message).
+            // Slicing from that index (inclusive) ensures the window always starts with
+            // a HumanMessage, satisfying Gemini's turn-ordering requirement.
             // Falls back to full history if there is no prior HumanMessage.
             const secondToLastHumanIdx = state.messages.reduceRight(
                 (found, msg, i) =>
@@ -618,9 +619,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 -1,
             );
             const triageWindow =
-                secondToLastHumanIdx === -1
-                    ? state.messages
-                    : state.messages.slice(secondToLastHumanIdx + 1);
+                secondToLastHumanIdx === -1 ? state.messages : state.messages.slice(secondToLastHumanIdx);
             const messages: BaseMessage[] = [new SystemMessage(TRIAGE_SYSTEM_PROMPT), ...triageWindow];
 
             const triageResponse = await this.invokeWithFreeKeyRotation(
