@@ -214,6 +214,19 @@ export class HandleDiscordMessage {
                         params.attachmentRefetcher,
                     );
 
+                    if (!content) {
+                        this.logger.warn(
+                            { discordMessageId: params.discordMessageId },
+                            "Orchestrator returned empty content",
+                        );
+                        return {
+                            response: "Sorry, I encountered an error processing your request.",
+                            newMessages,
+                            isFailure: true,
+                            isRetryable: true,
+                        };
+                    }
+
                     return { response: content, newMessages };
                 },
             );

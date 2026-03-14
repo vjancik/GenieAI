@@ -119,6 +119,19 @@ export class RetryOrchestration {
                         params.attachmentRefetcher,
                     );
 
+                    if (!content) {
+                        this.logger.warn(
+                            { humanDiscordMessageId: params.humanDiscordMessageId },
+                            "Orchestrator returned empty content on retry",
+                        );
+                        return {
+                            response: "Sorry, I encountered an error processing your request.",
+                            newMessages,
+                            isFailure: true,
+                            isRetryable: true,
+                        };
+                    }
+
                     return { response: content, newMessages };
                 },
             );
