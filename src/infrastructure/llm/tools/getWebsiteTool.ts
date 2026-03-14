@@ -5,18 +5,88 @@ import type { Logger } from "../../../application/types/Logger.ts";
 import { ToolError } from "../../../domain/errors/AppError.ts";
 
 /**
+ * Browser-like request headers to improve compatibility with sites that
+ * block bots or return degraded responses to unrecognized user agents.
+ */
+const BROWSER_HEADERS: Record<string, string> = {
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    "Accept-Encoding": "gzip, deflate",
+    Dnt: "1",
+    Priority: "u=0, i",
+    "Sec-Ch-Ua": '"Chromium";v="134", "Not:A-Brand";v="24", "Google Chrome";v="134"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+};
+
+const turndown = new TurndownService();
+turndown.remove("script");
+turndown.remove("style");
+// Strip href/src from links and media to keep output concise — only preserve visible text
+turndown.addRule("linksWithoutHrefs", {
+    filter: ["a", "img", "video", "audio"],
+    replacement: (_content, node) => {
+        const text = node.textContent?.trim();
+        return text ? `[${text}]()` : "";
+    },
+});
+
+/**
+ * Fetches a URL and returns its body as text, enforcing that the
+ * Content-Type is a text/* MIME type. Non-text responses (images,
+ * binaries, etc.) are rejected with a ToolError.
+ */
+export async function fetchTextBody(url: string): Promise<{ body: string; contentType: string }> {
+    const res = await fetch(url, {
+        headers: BROWSER_HEADERS,
+        signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!res.ok) {
+        throw new ToolError(`HTTP ${res.status} fetching ${url}`);
+    }
+
+    const contentType = res.headers.get("content-type") ?? "";
+    const mimeType = (contentType.split(";")[0] ?? "").trim();
+
+    if (!mimeType.startsWith("text/")) {
+        throw new ToolError(`Unsupported content type "${mimeType}" for ${url} — only text/* responses are supported`);
+    }
+
+    const body = await res.text();
+    return { body, contentType: mimeType };
+}
+
+/**
+ * Converts a fetched page body to a readable string for the LLM:
+ * - text/html → converted to Markdown via Turndown
+ * - other text/* → returned as-is (plain text, JSON, CSV, etc.)
+ */
+export function bodyToContent(body: string, contentType: string): string {
+    if (contentType === "text/html") {
+        return turndown.turndown(body);
+    }
+    return body;
+}
+
+/**
  * Creates a LangChain tool that fetches one or more URLs and returns their
- * content converted to Markdown.
+ * content as text. HTML pages are converted to Markdown; other text/* types
+ * are returned verbatim. Non-text content types are rejected.
  *
  * Duplicate URLs are deduplicated before fetching. Individual URL failures
- * are handled gracefully — the error is included inline in the result
- * so the LLM is aware of what could not be retrieved.
+ * are handled gracefully — the error is included inline so the LLM knows
+ * what could not be retrieved.
  *
  * @param logger - Injectable logger for testability
  */
 export function createGetWebsiteTool(logger: Logger) {
-    const turndown = new TurndownService();
-
     return tool(
         async ({ urls }) => {
             // Deduplicate URLs to avoid redundant fetches
@@ -25,13 +95,9 @@ export function createGetWebsiteTool(logger: Logger) {
 
             const results = await Promise.allSettled(
                 unique.map(async (url) => {
-                    const res = await fetch(url);
-                    if (!res.ok) {
-                        throw new ToolError(`HTTP ${res.status} fetching ${url}`);
-                    }
-                    const html = await res.text();
-                    const markdown = turndown.turndown(html);
-                    return `## ${url}\n\n${markdown}`;
+                    const { body, contentType } = await fetchTextBody(url);
+                    const content = bodyToContent(body, contentType);
+                    return `## ${url}\n\n${content}`;
                 }),
             );
 

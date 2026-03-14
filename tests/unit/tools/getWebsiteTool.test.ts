@@ -1,19 +1,23 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import pino from "pino";
 
-// We need to mock fetch before importing the module under test
 const originalFetch = globalThis.fetch;
 let mockFetch: ReturnType<typeof mock>;
 
 const testLogger = pino({ level: "silent" });
 
+function makeMockResponse(opts: { ok?: boolean; status?: number; body?: string; contentType?: string }) {
+    return {
+        ok: opts.ok ?? true,
+        status: opts.status ?? 200,
+        headers: { get: (key: string) => (key === "content-type" ? (opts.contentType ?? "text/html") : null) },
+        text: async () => opts.body ?? "<html><body><h1>Hello</h1><p>World</p></body></html>",
+    };
+}
+
 describe("createGetWebsiteTool", () => {
     beforeEach(() => {
-        mockFetch = mock(async (_url: string) => ({
-            ok: true,
-            status: 200,
-            text: async () => "<html><body><h1>Hello</h1><p>World</p></body></html>",
-        }));
+        mockFetch = mock(async (_url: string, _opts?: unknown) => makeMockResponse({}));
         globalThis.fetch = mockFetch as unknown as typeof fetch;
     });
 
@@ -28,37 +32,40 @@ describe("createGetWebsiteTool", () => {
         const result = await tool.invoke({ urls: ["https://example.com"] });
 
         expect(mockFetch).toHaveBeenCalledTimes(1);
-        expect(mockFetch).toHaveBeenCalledWith("https://example.com");
         expect(result).toContain("## https://example.com");
         expect(result).toContain("Hello");
         expect(result).toContain("World");
+    });
+
+    test("sends browser-like headers", async () => {
+        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+        const tool = createGetWebsiteTool(testLogger);
+
+        await tool.invoke({ urls: ["https://example.com"] });
+
+        const callHeaders = (mockFetch.mock.calls[0] as [string, RequestInit])[1]?.headers as Record<string, string>;
+        expect(callHeaders?.["User-Agent"]).toContain("Chrome");
     });
 
     test("deduplicates URLs before fetching", async () => {
         const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
         const tool = createGetWebsiteTool(testLogger);
 
-        await tool.invoke({
-            urls: ["https://example.com", "https://example.com"],
-        });
+        await tool.invoke({ urls: ["https://example.com", "https://example.com"] });
 
         expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
     test("handles multiple distinct URLs", async () => {
-        mockFetch = mock(async (url: string) => ({
-            ok: true,
-            status: 200,
-            text: async () => `<html><body><p>Content from ${url}</p></body></html>`,
-        }));
+        mockFetch = mock(async (url: string, _opts?: unknown) =>
+            makeMockResponse({ body: `<html><body><p>Content from ${url}</p></body></html>` }),
+        );
         globalThis.fetch = mockFetch as unknown as typeof fetch;
 
         const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
         const tool = createGetWebsiteTool(testLogger);
 
-        const result = await tool.invoke({
-            urls: ["https://example.com", "https://other.com"],
-        });
+        const result = await tool.invoke({ urls: ["https://example.com", "https://other.com"] });
 
         expect(mockFetch).toHaveBeenCalledTimes(2);
         expect(result).toContain("## https://example.com");
@@ -66,12 +73,10 @@ describe("createGetWebsiteTool", () => {
         expect(result).toContain("---");
     });
 
-    test("includes error message inline when a URL fails", async () => {
-        mockFetch = mock(async (_url: string) => ({
-            ok: false,
-            status: 404,
-            text: async () => "Not Found",
-        }));
+    test("includes error message inline when a URL returns HTTP error", async () => {
+        mockFetch = mock(async (_url: string, _opts?: unknown) =>
+            makeMockResponse({ ok: false, status: 404, body: "Not Found" }),
+        );
         globalThis.fetch = mockFetch as unknown as typeof fetch;
 
         const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
@@ -84,27 +89,49 @@ describe("createGetWebsiteTool", () => {
         expect(result).toContain("404");
     });
 
+    test("rejects non-text content types", async () => {
+        mockFetch = mock(async (_url: string, _opts?: unknown) => makeMockResponse({ contentType: "image/png" }));
+        globalThis.fetch = mockFetch as unknown as typeof fetch;
+
+        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+        const tool = createGetWebsiteTool(testLogger);
+
+        const result = await tool.invoke({ urls: ["https://example.com/image.png"] });
+
+        expect(result).toContain("Error:");
+        expect(result).toContain("image/png");
+    });
+
+    test("returns plain text as-is for non-HTML text content types", async () => {
+        const plainText = "line one\nline two\nline three";
+        mockFetch = mock(async (_url: string, _opts?: unknown) =>
+            makeMockResponse({ contentType: "text/plain", body: plainText }),
+        );
+        globalThis.fetch = mockFetch as unknown as typeof fetch;
+
+        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+        const tool = createGetWebsiteTool(testLogger);
+
+        const result = await tool.invoke({ urls: ["https://example.com/data.txt"] });
+
+        expect(result).toContain(plainText);
+    });
+
     test("continues processing other URLs when one fails", async () => {
         let callCount = 0;
-        mockFetch = mock(async (_url: string) => {
+        mockFetch = mock(async (_url: string, _opts?: unknown) => {
             callCount++;
             if (callCount === 1) {
-                return { ok: false, status: 500, text: async () => "Error" };
+                return makeMockResponse({ ok: false, status: 500, body: "Error" });
             }
-            return {
-                ok: true,
-                status: 200,
-                text: async () => "<html><body><p>Good content</p></body></html>",
-            };
+            return makeMockResponse({ body: "<html><body><p>Good content</p></body></html>" });
         });
         globalThis.fetch = mockFetch as unknown as typeof fetch;
 
         const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
         const tool = createGetWebsiteTool(testLogger);
 
-        const result = await tool.invoke({
-            urls: ["https://bad.com", "https://good.com"],
-        });
+        const result = await tool.invoke({ urls: ["https://bad.com", "https://good.com"] });
 
         expect(result).toContain("Error:");
         expect(result).toContain("Good content");

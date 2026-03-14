@@ -122,7 +122,8 @@ export function selectCaptionUrls(info: YtDlpInfoJson): string[] {
         const count = c.isAuto === 0 ? manualCount : autoCount;
         if (!seen.has(c.url) && count < 5) {
             seen.add(c.url);
-            if (c.isAuto === 0) manualCount++; else autoCount++;
+            if (c.isAuto === 0) manualCount++;
+            else autoCount++;
             acc.push(c.url);
         }
         return acc;
