@@ -101,6 +101,7 @@ export class GetNextPage {
 
         // Step 3: Extract visible text from the last LangChain message in the stored array.
         // The last message is the final AI response (triage → tool → final or direct general).
+        // TODO: bug, this is reading the previous page message from the db, not the first page
         const lastMsgJson = msgRecord.langchainMessages.at(-1);
         if (!lastMsgJson) {
             this.logger.warn({ botDiscordMessageId }, "langchainMessages array is empty for bot message");

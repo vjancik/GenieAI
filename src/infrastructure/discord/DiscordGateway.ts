@@ -1,4 +1,6 @@
+import type { BaseMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
+import type { Span } from "@sentry/core";
 import {
     ActionRowBuilder,
     ButtonBuilder,
@@ -14,10 +16,12 @@ import type { HandleDiscordMessage } from "../../application/HandleDiscordMessag
 import { splitMarkdown } from "../../application/markdownSplitter.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { IDiscordAttachmentRefetcher } from "../../application/ports/IDiscordAttachmentRefetcher.ts";
+import type { RetryOrchestration } from "../../application/RetryOrchestration.ts";
 import { llmTextToDiscordText } from "../../application/textTransformers.ts";
 import type { AgentStatusUpdate, OnStatusUpdate } from "../../application/types/AgentStatus.ts";
 import { AgentStatusType, assertNever } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";
+import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
 import { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { IMessagePageRepository } from "../../domain/message/MessagePage.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
@@ -157,6 +161,8 @@ export class DiscordGateway {
         private readonly statusUpdater: StatusMessageUpdater,
         private readonly messagePageRepo: IMessagePageRepository,
         private readonly getNextPage: GetNextPage,
+        private readonly retryOrchestration: RetryOrchestration,
+        private readonly messageRepo: IMessageRepository,
     ) {
         this.client = new Client({
             intents: [
@@ -208,17 +214,175 @@ export class DiscordGateway {
     }
 
     /**
+     * Creates an {@link IDiscordAttachmentRefetcher} bound to a specific Discord channel.
+     *
+     * Fetches fresh CDN URLs for Discord attachments by re-fetching the message from the
+     * API. Used by GeminiFileRefreshService in upload mode when a Gemini file URI has expired.
+     * All messages in a reply chain share the same channel, so a single refetcher per request
+     * is sufficient.
+     *
+     * @param channelId - The Discord channel snowflake to fetch messages from
+     */
+    private createAttachmentRefetcher(channelId: string): IDiscordAttachmentRefetcher {
+        const client = this.client;
+        return {
+            async fetchAttachment(
+                messageDiscordId: string,
+                attachmentId: string,
+            ): Promise<DiscordAttachmentInfo | null> {
+                try {
+                    const channel = await client.channels.fetch(channelId);
+                    if (!channel?.isTextBased()) return null;
+                    const msg = await channel.messages.fetch(messageDiscordId);
+                    const att = msg.attachments.get(attachmentId);
+                    if (!att) return null;
+                    return {
+                        id: att.id,
+                        url: att.url,
+                        proxyURL: att.proxyURL,
+                        name: att.name ?? "attachment",
+                        size: att.size,
+                        contentType: att.contentType,
+                    };
+                } catch {
+                    return null;
+                }
+            },
+        };
+    }
+
+    /**
+     * Shared post-processing step after the LLM produces a response.
+     *
+     * Handles: cancelling/deleting the thinking placeholder, applying the LLM→Discord
+     * text transform, splitting paginated responses, building action row buttons,
+     * sending the bot reply, saving it to the database, and persisting page state.
+     *
+     * Called by both {@link handleMessageCreate} and {@link handleRetryButton} so neither
+     * duplicates the pagination or persistence logic.
+     *
+     * @param params.replyTarget - The user's original Discord message to reply to
+     * @param params.response - Raw LLM response string (before Discord text transform)
+     * @param params.newMessages - All LangChain messages generated during this turn
+     * @param params.isFailure - Whether the response represents a failure
+     * @param params.isRetryable - Whether a Retry button should be attached
+     * @param params.thinkingMessage - Thinking placeholder to cancel and delete before sending
+     * @param params.span - Active Sentry span for attribute recording
+     */
+    private async sendBotReply(params: {
+        replyTarget: Message;
+        response: string;
+        newMessages: BaseMessage[];
+        isFailure?: boolean;
+        isRetryable?: boolean;
+        thinkingMessagePromise: ReturnType<Message["reply"]>;
+        span: Span;
+    }): Promise<void> {
+        const { replyTarget, response, newMessages, isFailure, isRetryable, thinkingMessagePromise, span } = params;
+
+        // Cancel any pending status edit and delete the thinking placeholder before sending
+        // the real response so the user is pinged on the final message, not the placeholder.
+        thinkingMessagePromise.then((thinkingMessage) => { 
+            this.statusUpdater.cancel(thinkingMessage.id);
+            thinkingMessage.delete()
+        }).catch((err) => {
+            this.logger.warn({ err }, "Failed to delete thinking message");
+        });
+
+        // Sanitize LLM output for Discord rendering
+        const discordResponse = llmTextToDiscordText(response);
+
+        // Attach a Retry button when the use case signals a retryable failure
+        const retryRow =
+            isFailure && isRetryable
+                ? new ActionRowBuilder<ButtonBuilder>().addComponents(
+                      new ButtonBuilder().setCustomId(RETRY_BUTTON_ID).setLabel("Retry").setStyle(ButtonStyle.Primary),
+                  )
+                : undefined;
+
+        if (discordResponse.length > 2000) {
+            // --- PAGINATED PATH ---
+            const {
+                content: page1Content,
+                newOffset,
+                pageCount: totalPages,
+            } = splitMarkdown(discordResponse, 0, 2000, { pageCount: true });
+
+            if (!totalPages) {
+                throw new Error("splitMarkdown did not return pageCount for paginated content");
+            }
+
+            const nextPageRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                new ButtonBuilder()
+                    .setCustomId(NEXT_PAGE_BUTTON_ID)
+                    .setLabel(`Next Page · Page 1 of ${totalPages}`)
+                    .setStyle(ButtonStyle.Primary),
+            );
+
+            const components: ActionRowBuilder<ButtonBuilder>[] = [nextPageRow];
+            if (retryRow) components.push(retryRow);
+
+            const botReply = await replyTarget.reply({
+                content: page1Content,
+                components,
+            });
+
+            span.setAttributes({
+                "discord.paginated": true,
+                "discord.total_pages": totalPages,
+            });
+
+            // messages row must exist before messagePageRepo.save (FK constraint)
+            await this.mentionHandler.saveBotResponse({
+                botDiscordMessageId: botReply.id,
+                repliesToDiscordId: replyTarget.id,
+                channelId: botReply.channelId,
+                guildId: botReply.guildId,
+                newMessages,
+            });
+            await this.messagePageRepo.save({
+                botDiscordMessageId: botReply.id,
+                endOffset: newOffset,
+                currentPage: 1,
+                totalPages,
+            });
+        } else {
+            // --- NON-PAGINATED PATH ---
+            const botReply = await replyTarget.reply({
+                content: discordResponse,
+                ...(retryRow && { components: [retryRow] }),
+            });
+
+            span.setAttributes({ "discord.paginated": false });
+
+            await this.mentionHandler.saveBotResponse({
+                botDiscordMessageId: botReply.id,
+                repliesToDiscordId: replyTarget.id,
+                channelId: botReply.channelId,
+                guildId: botReply.guildId,
+                newMessages,
+            });
+        }
+
+        span.setAttributes({
+            "discord.response_length": response.length,
+            "discord.is_failure": isFailure ?? false,
+        });
+    }
+
+    /**
      * Handles a Retry button click on a failed bot response.
      *
-     * Fetches the original user message the bot was replying to, then re-invokes
-     * the message handler as if the user had sent that message again. If the original
-     * message no longer exists, removes the Retry button and replies ephemerally.
+     * Two scenarios:
+     * - **Scenario A** (human message in DB): the failure occurred in the orchestrator.
+     *   Re-runs only the orchestration using the saved conversation chain. Skips
+     *   attachment re-download/re-upload and human message re-save.
+     * - **Scenario B** (human message NOT in DB): the failure occurred before or during
+     *   the human message save (e.g. attachment download/upload failure, DB error).
+     *   Falls back to the full message handling pipeline.
+     *
+     * In both scenarios, the old failed bot reply is deleted before sending a new response.
      */
-    // TODO: this is totally busted because it tries to save the human message again in the use case
-    //       and it creates a new response message, which is fine but we need to delete the original one
-    //       make a separate use-case, sigh, which only calls the orchestrator with full history
-    //       if there is no db entry for human message, then send an ephemeral full failure response and remove the button
-    //       except we can't use the orchestrator with just the history, we need intent too, sigh
     private async handleRetryButton(interaction: ButtonInteraction): Promise<void> {
         const originalMessageId = interaction.message.reference?.messageId;
         const channel = interaction.channel;
@@ -245,10 +409,85 @@ export class DiscordGateway {
         }
 
         // Acknowledge the interaction immediately so Discord doesn't show "interaction failed"
-        // TODO: deferReply? which one should be used to show the wheel as spinning
         await interaction.deferUpdate();
 
-        await this.handleMessageCreate(originalMessage);
+        // Delete the old failed bot reply before sending a fresh response
+        await interaction.message.delete().catch((err) => {
+            this.logger.warn({ err }, "Failed to delete old failed bot reply on retry");
+        });
+
+        await Sentry.startSpan(
+            {
+                name: "Handle Retry button",
+                op: "discord.interaction.retry",
+                attributes: {
+                    "discord.original_message_id": originalMessage.id,
+                    "discord.channel_id": originalMessage.channelId,
+                },
+            },
+            async (span) => {
+                const intent = parseMessageIntent(originalMessage.content);
+
+                // Check whether the human message was already saved to DB.
+                // If it was, the failure was in the orchestrator (Scenario A).
+                // If not, the failure was earlier in the pipeline (Scenario B).
+                const humanRecord = await this.messageRepo.findByDiscordMessageId(originalMessage.id);
+
+                if (humanRecord) {
+                    // --- Scenario A: human message exists, re-run orchestration only ---
+                    span.setAttribute("discord.retry_scenario", "A");
+
+                    const attachmentRefetcher = this.createAttachmentRefetcher(originalMessage.channelId);
+
+                    // Send thinking placeholder — awaited so we have the message before
+                    // the first status update can arrive.
+                    let thinkingMessagePromise = originalMessage.reply({
+                        content: `*Retrying since <t:${Math.round(Date.now() / 1000)}:R>*`,
+                        allowedMentions: { repliedUser: false },
+                    });
+
+                    // Wrap thinkingMessage in a promise so onStatusUpdate can share the
+                    // same lazy-resolution pattern used in handleMessageCreate.
+
+                    const onStatusUpdate: OnStatusUpdate = (update) => {
+                        thinkingMessagePromise = thinkingMessagePromise.then((msg) => {
+                            this.statusUpdater.scheduleUpdate(
+                                originalMessage.channelId,
+                                msg.id,
+                                async (content) =>
+                                    void (await msg.edit({
+                                        content: `*${content} <t:${Math.round(Date.now() / 1000)}:R>*`,
+                                        allowedMentions: { repliedUser: false },
+                                    })),
+                                statusUpdateContent(update),
+                            );
+                            return msg;
+                        });
+                    };
+
+                    const { response, newMessages, isFailure, isRetryable } = await this.retryOrchestration.execute({
+                        humanDiscordMessageId: originalMessage.id,
+                        intent,
+                        onStatusUpdate,
+                        attachmentRefetcher,
+                    });
+
+                    await this.sendBotReply({
+                        replyTarget: originalMessage,
+                        response,
+                        newMessages,
+                        isFailure,
+                        isRetryable,
+                        thinkingMessagePromise,
+                        span,
+                    });
+                } else {
+                    // --- Scenario B: human message not in DB, run full pipeline ---
+                    span.setAttribute("discord.retry_scenario", "B");
+                    await this.handleMessageCreate(originalMessage);
+                }
+            },
+        );
     }
 
     /**
@@ -414,7 +653,7 @@ export class DiscordGateway {
 
         // Declared outside the span so the catch handler can access it even if the
         // span callback threw before the thinking message was sent.
-        let thinkingMessagePromise: Promise<Message> | undefined;
+        let thinkingMessagePromise: ReturnType<Message["reply"]>;
 
         await Sentry.startSpan(
             {
@@ -440,39 +679,7 @@ export class DiscordGateway {
                         allowedMentions: { repliedUser: false },
                     });
 
-                    /**
-                     * Per-request attachment refetcher: closes over the discord.js client and
-                     * the current channelId. All messages in a reply chain share the same channel,
-                     * so this is valid for refetching any historical message in the chain.
-                     * Used by GeminiFileRefreshService in upload mode to get fresh CDN URLs.
-                     */
-                    const channelId = message.channelId;
-                    const client = this.client;
-                    // TODO: wouldn't this be cleaner as a lambda instead of a module? Unsure
-                    const attachmentRefetcher: IDiscordAttachmentRefetcher = {
-                        async fetchAttachment(
-                            messageDiscordId: string,
-                            attachmentId: string,
-                        ): Promise<DiscordAttachmentInfo | null> {
-                            try {
-                                const channel = await client.channels.fetch(channelId);
-                                if (!channel?.isTextBased()) return null;
-                                const msg = await channel.messages.fetch(messageDiscordId);
-                                const att = msg.attachments.get(attachmentId);
-                                if (!att) return null;
-                                return {
-                                    id: att.id,
-                                    url: att.url,
-                                    proxyURL: att.proxyURL,
-                                    name: att.name ?? "attachment",
-                                    size: att.size,
-                                    contentType: att.contentType,
-                                };
-                            } catch {
-                                return null;
-                            }
-                        },
-                    };
+                    const attachmentRefetcher = this.createAttachmentRefetcher(message.channelId);
 
                     const onStatusUpdate: OnStatusUpdate = (update) => {
                         // Await the thinking message promise so we have the message ID before
@@ -518,97 +725,14 @@ export class DiscordGateway {
                         attachmentRefetcher,
                     });
 
-                    // Sanitize LLM output for Discord rendering
-                    const discordResponse = llmTextToDiscordText(response);
-
-                    // Resolve the thinking message and cancel any pending status edit
-                    thinkingMessagePromise.then((thinkingMessage) => {
-                        this.statusUpdater.cancel(thinkingMessage.id);
-                        // Delete the thinking placeholder and reply with the final response so
-                        // the user is pinged when the response is actually ready.
-                        thinkingMessage.delete();
-                    });
-
-                    // Attach a Retry button when the use case signals a retryable failure
-                    const retryRow =
-                        isFailure && isRetryable
-                            ? new ActionRowBuilder<ButtonBuilder>().addComponents(
-                                  new ButtonBuilder()
-                                      .setCustomId(RETRY_BUTTON_ID)
-                                      .setLabel("Retry")
-                                      .setStyle(ButtonStyle.Primary),
-                              )
-                            : undefined;
-
-                    let botReply: Awaited<ReturnType<Message["reply"]>>;
-
-                    if (discordResponse.length > 2000) {
-                        // --- PAGINATED PATH ---
-                        const {
-                            content: page1Content,
-                            newOffset,
-                            pageCount: totalPages,
-                        } = splitMarkdown(discordResponse, 0, 2000, { pageCount: true });
-
-                        if (!totalPages) {
-                            throw new Error("splitMarkdown did not return pageCount for paginated content");
-                        }
-
-                        const nextPageRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-                            new ButtonBuilder()
-                                .setCustomId(NEXT_PAGE_BUTTON_ID)
-                                .setLabel(`Next Page · Page 1 of ${totalPages}`)
-                                .setStyle(ButtonStyle.Primary),
-                        );
-
-                        const components: ActionRowBuilder<ButtonBuilder>[] = [nextPageRow];
-                        if (retryRow) components.push(retryRow);
-
-                        botReply = await message.reply({
-                            content: page1Content,
-                            components,
-                        });
-
-                        span.setAttributes({
-                            "discord.paginated": true,
-                            "discord.total_pages": totalPages,
-                        });
-
-                        // messages row must exist before messagePageRepo.save (FK constraint)
-                        await this.mentionHandler.saveBotResponse({
-                            botDiscordMessageId: botReply.id,
-                            repliesToDiscordId: message.id,
-                            channelId: botReply.channelId,
-                            guildId: botReply.guildId,
-                            newMessages,
-                        });
-                        await this.messagePageRepo.save({
-                            botDiscordMessageId: botReply.id,
-                            endOffset: newOffset,
-                            currentPage: 1,
-                            totalPages,
-                        });
-                    } else {
-                        // --- NON-PAGINATED PATH ---
-                        botReply = await message.reply({
-                            content: discordResponse,
-                            ...(retryRow && { components: [retryRow] }),
-                        });
-
-                        span.setAttributes({ "discord.paginated": false });
-
-                        await this.mentionHandler.saveBotResponse({
-                            botDiscordMessageId: botReply.id,
-                            repliesToDiscordId: message.id,
-                            channelId: botReply.channelId,
-                            guildId: botReply.guildId,
-                            newMessages,
-                        });
-                    }
-
-                    span.setAttributes({
-                        "discord.response_length": response.length,
-                        "discord.is_failure": isFailure ?? false,
+                    await this.sendBotReply({
+                        replyTarget: message,
+                        response,
+                        newMessages,
+                        isFailure,
+                        isRetryable,
+                        thinkingMessagePromise,
+                        span,
                     });
                 } catch (err) {
                     this.logger.error({ err, discordMessageId: message.id }, "Failed to send or persist bot reply");

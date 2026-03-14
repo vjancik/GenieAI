@@ -17,6 +17,7 @@ import { GeminiApiKeySyncService } from "./application/GeminiApiKeySyncService.t
 import { GeminiFileRefreshService } from "./application/GeminiFileRefreshService.ts";
 import { GetNextPage } from "./application/GetNextPage.ts";
 import { HandleDiscordMessage } from "./application/HandleDiscordMessage.ts";
+import { RetryOrchestration } from "./application/RetryOrchestration.ts";
 import { FetchAttachmentDownloader } from "./infrastructure/attachments/FetchAttachmentDownloader.ts";
 import { FetchDiskAttachmentDownloader } from "./infrastructure/attachments/FetchDiskAttachmentDownloader.ts";
 import { GenaiFileUploaderRegistry } from "./infrastructure/attachments/GenaiFileUploaderRegistry.ts";
@@ -151,6 +152,13 @@ const getNextPage = new GetNextPage(
     logger.child({ module: "get-next-page" }),
 );
 
+// Retry orchestration use case
+const retryOrchestration = new RetryOrchestration(
+    messageRepository,
+    orchestrator,
+    logger.child({ module: "retryOrchestration" }),
+);
+
 // Discord gateway
 const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
 const gateway = new DiscordGateway(
@@ -160,6 +168,8 @@ const gateway = new DiscordGateway(
     statusUpdater,
     messagePageRepository,
     getNextPage,
+    retryOrchestration,
+    messageRepository,
 );
 
 // Graceful shutdown
