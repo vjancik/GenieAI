@@ -40,10 +40,20 @@ export const messages = pgTable("messages", {
  */
 export const messagePages = pgTable("message_pages", {
     id: uuid("id").primaryKey().default(sql`uuidv7()`),
-    /** Discord snowflake of the bot message that currently shows the Next Page button */
-    botDiscordMessageId: text("bot_discord_message_id")
+    /**
+     * Discord snowflake of the bot message currently showing the Next Page button.
+     * Unique — used to look up the pending page state when the button is clicked.
+     */
+    botDiscordMessageId: text("bot_discord_message_id").notNull().unique(),
+    /**
+     * Discord snowflake of the FIRST page bot message for this paginated response.
+     * All page rows for the same response share this ID — the LangChain content is
+     * stored on the first page's messages row and must be referenced for all subsequent pages.
+     * Not unique: multiple page rows can point to the same first page message.
+     * FK → messages(discord_message_id) with CASCADE so page rows are cleaned up automatically.
+     */
+    firstPageDiscordMessageId: text("first_page_discord_message_id")
         .notNull()
-        .unique()
         .references(() => messages.discordMessageId, { onDelete: "cascade" }),
     /** Character offset in the full transformed response text where the next page begins */
     endOffset: integer("end_offset").notNull(),

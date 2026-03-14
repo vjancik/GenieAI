@@ -12,6 +12,7 @@ function buildInsertPageStmt(db: Db) {
         .insert(messagePages)
         .values({
             botDiscordMessageId: sql.placeholder("botDiscordMessageId"),
+            firstPageDiscordMessageId: sql.placeholder("firstPageDiscordMessageId"),
             endOffset: sql.placeholder("endOffset"),
             currentPage: sql.placeholder("currentPage"),
             totalPages: sql.placeholder("totalPages"),
@@ -20,7 +21,7 @@ function buildInsertPageStmt(db: Db) {
         .prepare("message_page_insert");
 }
 
-/** Prepared statement: find a message page by its bot Discord message ID. */
+/** Prepared statement: find a message page by the bot Discord message ID currently showing the button. */
 function buildFindByBotMessageIdStmt(db: Db) {
     return db
         .select()
@@ -30,25 +31,17 @@ function buildFindByBotMessageIdStmt(db: Db) {
         .prepare("message_page_find_by_bot_message_id");
 }
 
-/** Prepared statement: delete a message page by its primary key. */
-function buildDeleteByIdStmt(db: Db) {
-    return db
-        .delete(messagePages)
-        .where(eq(messagePages.id, sql.placeholder("id")))
-        .prepare("message_page_delete_by_id");
-}
-
 /**
  * PostgreSQL implementation of {@link IMessagePageRepository} using Drizzle ORM.
  *
  * Tracks pending "next page" state for paginated bot responses.
- * Each row corresponds to one bot message that currently displays a Next Page button.
- * Rows are deleted after the next page is successfully delivered.
+ * Each row corresponds to one bot message currently displaying a Next Page button.
+ * firstPageDiscordMessageId always points to the first page's messages row, where the
+ * LangChain content is stored, regardless of which page number this row represents.
  */
 export class PgMessagePageRepository implements IMessagePageRepository {
     private readonly stmtInsertPage: ReturnType<typeof buildInsertPageStmt>;
     private readonly stmtFindByBotMessageId: ReturnType<typeof buildFindByBotMessageIdStmt>;
-    private readonly stmtDeleteById: ReturnType<typeof buildDeleteByIdStmt>;
 
     constructor(
         db: Db,
@@ -56,7 +49,6 @@ export class PgMessagePageRepository implements IMessagePageRepository {
     ) {
         this.stmtInsertPage = buildInsertPageStmt(db);
         this.stmtFindByBotMessageId = buildFindByBotMessageIdStmt(db);
-        this.stmtDeleteById = buildDeleteByIdStmt(db);
     }
 
     async save(page: Omit<MessagePage, "id" | "createdAt">): Promise<MessagePage> {
@@ -67,6 +59,7 @@ export class PgMessagePageRepository implements IMessagePageRepository {
                 attributes: {
                     "db.table": "message_pages",
                     "discord.message_id": page.botDiscordMessageId,
+                    "discord.first_page_message_id": page.firstPageDiscordMessageId,
                     "app.current_page": page.currentPage,
                     "app.total_pages": page.totalPages,
                 },
@@ -75,6 +68,7 @@ export class PgMessagePageRepository implements IMessagePageRepository {
                 try {
                     const [result] = await this.stmtInsertPage.execute({
                         botDiscordMessageId: page.botDiscordMessageId,
+                        firstPageDiscordMessageId: page.firstPageDiscordMessageId,
                         endOffset: page.endOffset,
                         currentPage: page.currentPage,
                         totalPages: page.totalPages,
@@ -85,7 +79,11 @@ export class PgMessagePageRepository implements IMessagePageRepository {
                     }
 
                     this.logger.debug(
-                        { botDiscordMessageId: page.botDiscordMessageId, page: page.currentPage },
+                        {
+                            botDiscordMessageId: page.botDiscordMessageId,
+                            firstPageDiscordMessageId: page.firstPageDiscordMessageId,
+                            page: page.currentPage,
+                        },
                         "Saved message page",
                     );
 
@@ -116,25 +114,6 @@ export class PgMessagePageRepository implements IMessagePageRepository {
                 } catch (err) {
                     Sentry.captureException(err);
                     throw new DatabaseError("Failed to find message page", err);
-                }
-            },
-        );
-    }
-
-    async delete(id: string): Promise<void> {
-        return Sentry.startSpan(
-            {
-                name: "Delete message page",
-                op: "db.query",
-                attributes: { "db.table": "message_pages", "db.id": id },
-            },
-            async () => {
-                try {
-                    await this.stmtDeleteById.execute({ id });
-                    this.logger.debug({ id }, "Deleted message page");
-                } catch (err) {
-                    Sentry.captureException(err);
-                    throw new DatabaseError("Failed to delete message page", err);
                 }
             },
         );

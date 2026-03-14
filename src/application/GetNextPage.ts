@@ -22,8 +22,14 @@ export interface GetNextPageResult {
     totalPages: number;
     /** True when this is the final page (no more Next Page button needed). */
     isLast: boolean;
-    /** Primary key of the {@link MessagePage} row that was looked up — delete after send. */
+    /** Primary key of the {@link MessagePage} row that was looked up. */
     pageStateId: string;
+    /**
+     * Discord snowflake of the first page bot message for this paginated response.
+     * Must be passed to {@link IMessagePageRepository.save} for subsequent pages so they
+     * all reference the first page's messages row (where the LangChain content lives).
+     */
+    firstPageDiscordMessageId: string;
 }
 
 /**
@@ -92,16 +98,20 @@ export class GetNextPage {
             return null;
         }
 
-        // Step 2: Fetch the stored messages row to get the LangChain message JSON
-        const msgRecord = await this.messageRepo.findByDiscordMessageId(botDiscordMessageId);
+        // Step 2: Fetch the stored messages row to get the LangChain message JSON.
+        // firstPageDiscordMessageId always points to the first page's messages row regardless
+        // of which page number this page state represents — the LangChain content lives there.
+        const msgRecord = await this.messageRepo.findByDiscordMessageId(pageState.firstPageDiscordMessageId);
         if (!msgRecord) {
-            this.logger.warn({ botDiscordMessageId }, "Message record not found for paginated bot message");
+            this.logger.warn(
+                { botDiscordMessageId, firstPageDiscordMessageId: pageState.firstPageDiscordMessageId },
+                "Message record not found for first page of paginated bot message",
+            );
             return null;
         }
 
         // Step 3: Extract visible text from the last LangChain message in the stored array.
         // The last message is the final AI response (triage → tool → final or direct general).
-        // TODO: bug, this is reading the previous page message from the db, not the first page
         const lastMsgJson = msgRecord.langchainMessages.at(-1);
         if (!lastMsgJson) {
             this.logger.warn({ botDiscordMessageId }, "langchainMessages array is empty for bot message");
@@ -128,6 +138,7 @@ export class GetNextPage {
             totalPages,
             isLast,
             pageStateId: pageState.id,
+            firstPageDiscordMessageId: pageState.firstPageDiscordMessageId,
         };
     }
 }

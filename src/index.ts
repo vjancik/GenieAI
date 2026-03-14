@@ -128,12 +128,12 @@ const orchestrator = new AgentOrchestrator(
     MODEL_TIMEOUTS,
 );
 
-// The primary uploader for new uploads in HandleDiscordMention uses the current free key.
+// The primary uploader for new uploads in HandleDiscordMessage uses the current free key.
 // The refresh service handles uploading for other keys internally during orchestration.
 const primaryUploader = uploaderRegistry.get(freeKeyProvider.currentKey.id);
 
 // Application use case
-const handleDiscordMention = new HandleDiscordMessage(
+const handleDiscordMessage = new HandleDiscordMessage(
     messageRepository,
     orchestrator,
     attachmentDownloader,
@@ -163,7 +163,7 @@ const retryOrchestration = new RetryOrchestration(
 const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
 const gateway = new DiscordGateway(
     config.discordToken,
-    handleDiscordMention,
+    handleDiscordMessage,
     logger.child({ module: "discord" }),
     statusUpdater,
     messagePageRepository,

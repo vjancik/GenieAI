@@ -156,7 +156,7 @@ export class DiscordGateway {
 
     constructor(
         private readonly token: string,
-        private readonly mentionHandler: HandleDiscordMessage,
+        private readonly messageHandler: HandleDiscordMessage,
         private readonly logger: Logger,
         private readonly statusUpdater: StatusMessageUpdater,
         private readonly messagePageRepo: IMessagePageRepository,
@@ -282,12 +282,14 @@ export class DiscordGateway {
 
         // Cancel any pending status edit and delete the thinking placeholder before sending
         // the real response so the user is pinged on the final message, not the placeholder.
-        thinkingMessagePromise.then((thinkingMessage) => { 
-            this.statusUpdater.cancel(thinkingMessage.id);
-            thinkingMessage.delete()
-        }).catch((err) => {
-            this.logger.warn({ err }, "Failed to delete thinking message");
-        });
+        thinkingMessagePromise
+            .then((thinkingMessage) => {
+                this.statusUpdater.cancel(thinkingMessage.id);
+                thinkingMessage.delete();
+            })
+            .catch((err) => {
+                this.logger.warn({ err }, "Failed to delete thinking message");
+            });
 
         // Sanitize LLM output for Discord rendering
         const discordResponse = llmTextToDiscordText(response);
@@ -333,15 +335,17 @@ export class DiscordGateway {
             });
 
             // messages row must exist before messagePageRepo.save (FK constraint)
-            await this.mentionHandler.saveBotResponse({
+            await this.messageHandler.saveBotResponse({
                 botDiscordMessageId: botReply.id,
                 repliesToDiscordId: replyTarget.id,
                 channelId: botReply.channelId,
                 guildId: botReply.guildId,
                 newMessages,
             });
+            // firstPageDiscordMessageId = botReply.id for the first page (same message)
             await this.messagePageRepo.save({
                 botDiscordMessageId: botReply.id,
+                firstPageDiscordMessageId: botReply.id,
                 endOffset: newOffset,
                 currentPage: 1,
                 totalPages,
@@ -355,7 +359,7 @@ export class DiscordGateway {
 
             span.setAttributes({ "discord.paginated": false });
 
-            await this.mentionHandler.saveBotResponse({
+            await this.messageHandler.saveBotResponse({
                 botDiscordMessageId: botReply.id,
                 repliesToDiscordId: replyTarget.id,
                 channelId: botReply.channelId,
@@ -562,7 +566,7 @@ export class DiscordGateway {
 
                 // Step 4: Persist the messages row first — messagePageRepo.save has a FK on it,
                 // so if this throws the remaining cleanup is skipped entirely.
-                await this.mentionHandler.saveBotResponse({
+                await this.messageHandler.saveBotResponse({
                     botDiscordMessageId: newBotMessage.id,
                     repliesToDiscordId: currentBotMessageId,
                     channelId: newBotMessage.channelId,
@@ -571,16 +575,14 @@ export class DiscordGateway {
                 });
 
                 await Promise.allSettled([
-                    // Delete the consumed page state row
-                    this.messagePageRepo.delete(result.pageStateId).catch((err) => {
-                        this.logger.error({ err, id: result.pageStateId }, "Failed to delete old message page state");
-                    }),
-
-                    // Save new pending page state if there are more pages after this one
+                    // Save new pending page state if there are more pages after this one.
+                    // firstPageDiscordMessageId is propagated from the page state so all rows
+                    // in this response chain point to the same first-page messages row.
                     !result.isLast
                         ? this.messagePageRepo
                               .save({
                                   botDiscordMessageId: newBotMessage.id,
+                                  firstPageDiscordMessageId: result.firstPageDiscordMessageId,
                                   endOffset: result.newOffset,
                                   currentPage: result.currentPage,
                                   totalPages: result.totalPages,
@@ -713,7 +715,7 @@ export class DiscordGateway {
                     const llmContent = discordMessageToLlmText(userName, userContent);
 
                     // handle() never throws — errors are caught internally and returned as a response
-                    const { response, newMessages, isFailure, isRetryable } = await this.mentionHandler.handle({
+                    const { response, newMessages, isFailure, isRetryable } = await this.messageHandler.handle({
                         discordMessageId: message.id,
                         referencedMessageId: message.reference?.messageId ?? null,
                         channelId: message.channelId,
