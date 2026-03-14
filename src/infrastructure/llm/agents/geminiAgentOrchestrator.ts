@@ -27,7 +27,7 @@ import type { AppConfig } from "../../config/config.ts";
 import { is429Error } from "../errors/is429Error.ts";
 import { isModelFallbackError } from "../errors/isModelFallbackError.ts";
 import { filterHistoryForInlineSize } from "../inlineAttachmentFilter.ts";
-import { GENERAL_SYSTEM_PROMPT, type GeneralModel } from "../models/generalModel.ts";
+import { buildGeneralSystemPrompt, type GeneralModel } from "../models/generalModel.ts";
 import { SEARCH_SYSTEM_PROMPT, type SearchModel } from "../models/searchModel.ts";
 import type { TriageModel } from "../models/triageModel.ts";
 import { TRIAGE_SYSTEM_PROMPT } from "../models/triageModel.ts";
@@ -607,7 +607,21 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             config.context?.onStatusUpdate?.({
                 type: AgentStatusType.TRIAGE,
             });
-            const messages: BaseMessage[] = [new SystemMessage(TRIAGE_SYSTEM_PROMPT), ...state.messages];
+            // Triage only needs the current turn to classify — pass just the messages
+            // since the second-to-last HumanMessage (i.e. everything after the prior
+            // user turn: last AI response + any tool messages + the new user message).
+            // This keeps triage fast and cheap without sacrificing routing accuracy.
+            // Falls back to full history if there is no prior HumanMessage.
+            const secondToLastHumanIdx = state.messages.reduceRight(
+                (found, msg, i) =>
+                    found === -1 && i < state.messages.length - 1 && msg instanceof HumanMessage ? i : found,
+                -1,
+            );
+            const triageWindow =
+                secondToLastHumanIdx === -1
+                    ? state.messages
+                    : state.messages.slice(secondToLastHumanIdx + 1);
+            const messages: BaseMessage[] = [new SystemMessage(TRIAGE_SYSTEM_PROMPT), ...triageWindow];
 
             const triageResponse = await this.invokeWithFreeKeyRotation(
                 this.triageProvider.get.bind(this.triageProvider),
@@ -634,13 +648,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 case "get_video_transcription": {
                     // Real tool call: add triage AIMessage to state so the ToolMessage
                     // created in executeToolNode has a valid tool_call_id in history.
-                    //
-                    // Workaround for a bug in @langchain/google's legacy message converter:
-                    // convertLegacyContentMessageToGeminiContent looks up the AIMessage by
-                    // tool_call_id, then reads aiMessage.name (not the individual tool_call.name)
-                    // when building functionResponse.name — so it always produces "unknown".
-                    // Setting name on the AIMessage here makes the lookup return the correct name.
-                    triageResponse.name = toolCall.name;
                     return new Command({
                         goto: OrchestratorNode.EXECUTE_TOOL,
                         update: { messages: [triageResponse] },
@@ -721,17 +728,16 @@ export class AgentOrchestrator implements IAgentOrchestrator {
 
             span.setAttribute("agent.has_tool_result", hasToolResult);
 
-            const invokeMessages: BaseMessage[] = [new SystemMessage(GENERAL_SYSTEM_PROMPT), ...state.messages];
-
-            if (hasToolResult) {
-                // Transient instruction: not added to state, only to the invoke call
-                invokeMessages.push(
-                    new HumanMessage(
-                        "Based on the retrieved content above, please answer the original question. " +
-                            "Keep your response under 1500 characters.",
-                    ),
-                );
-            }
+            const dateStr = new Date().toLocaleDateString("en-US", {
+                weekday: "long",
+                year: "numeric",
+                month: "long",
+                day: "numeric",
+            });
+            const invokeMessages: BaseMessage[] = [
+                new SystemMessage(buildGeneralSystemPrompt(dateStr)),
+                ...state.messages,
+            ];
 
             const response = await this.invokeWithFreeKeyRotation(
                 this.generalProvider.get.bind(this.generalProvider),
