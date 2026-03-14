@@ -22,6 +22,56 @@ describe("splitMarkdown — regression: production over-limit page", () => {
     it("splitMarkdown produces at least 2 pages for the production payload", () => {
         const result = splitMarkdown(PROD_CONTENT, 0, 2000, { pageCount: true });
         expect(result.pageCount).toBeGreaterThanOrEqual(2);
+        expect(result).toMatchInlineSnapshot(`
+          {
+            "codeBlockType": "typescript",
+            "content": 
+          "Implementing a PNG decoder from scratch is complex because it requires a **DEFLATE** decompressor. In modern environments (Node 18+ or Browsers), you can use the native \`DecompressionStream\` to handle the compression, allowing us to focus on the **PNG-specific chunk parsing and unfiltering algorithm.**
+          Here is a simplified implementation:
+          \`\`\`typescript
+          async function decodePng(buffer: Uint8Array) {
+            const view = new DataView(buffer.buffer);
+            let offset = 8; // Skip PNG signature
+            let idatData = new Uint8Array(0);
+            let width = 0, height = 0;
+            while (offset < buffer.length) {
+              const length = view.getUint32(offset);
+              const type = String.fromCharCode(...buffer.slice(offset + 4, offset + 8));
+              const data = buffer.slice(offset + 8, offset + 8 + length);
+              if (type === 'IHDR') {
+                width = view.getUint32(offset + 8);
+                height = view.getUint32(offset + 12);
+              } else if (type === 'IDAT') {
+                const combined = new Uint8Array(idatData.length + data.length);
+                combined.set(idatData);
+                combined.set(data, idatData.length);
+                idatData = combined;
+              }
+              offset += 12 + length;
+            }
+            // 1. Decompress IDAT (Zlib) using native API
+            const ds = new DecompressionStream("deflate");
+            const writer = ds.writable.getWriter();
+            writer.write(idatData.slice(2, -4)); // Strip zlib header/footer
+            writer.close();
+            const inflated = new Uint8Array(await new Response(ds.readable).arrayBuffer());
+            // 2. Unfilter (Algorithm logic)
+            const bpp = 4; // Assuming RGBA8
+            const rowLen = width * bpp;
+            const pixels = new Uint8Array(width * height * bpp);
+            for (let y = 0; y < height; y++) {
+              const filterType = inflated[y * (rowLen + 1)];
+              const scanline = inflated.slice(y * (rowLen + 1) + 1, (y + 1) * (rowLen + 1));
+              for (let x = 0; x < rowLen; x++) {
+                const left = x >= bpp ? pixels[y * rowLen + x - bpp] : 0;
+                const up = y > 0 ? pixels[(y - 1) * rowLen + x] : 0;
+          \`\`\`"
+          ,
+            "endedInCodeBlock": true,
+            "newOffset": 1919,
+            "pageCount": 2,
+          }
+        `);
     });
 });
 

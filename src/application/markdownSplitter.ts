@@ -9,6 +9,8 @@
  * each Discord message is a self-contained, valid markdown document.
  */
 
+// TODO: refactor as a formal state machine parser
+
 /** Options for {@link splitMarkdown}. */
 export interface SplitMarkdownOptions {
     /**
@@ -121,6 +123,10 @@ function extractPage(
 
     // Last accumulated length at which a split is safe (outside code/table regions)
     let lastSafeLength = 0;
+    // accumulated length at the point the current code block opened (i.e. after the opening
+    // fence line was added). Any newline-boundary split inside the block must be after this
+    // position to guarantee we make forward progress past the opening fence.
+    let codeBlockStartLength = continuationCodeBlock != null ? 0 : -1;
 
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
@@ -130,14 +136,20 @@ function extractPage(
         const addition = i === 0 ? line : `\n${line}`;
 
         // Record the safe split point BEFORE updating block state for this line.
-        // This ensures that if this line opens a protected block, we can back up to
-        // just before it (i.e. to the end of the previously accumulated safe content).
+        // This ensures that if this line opens a protected block (opening fence or first
+        // table row), we can back up to just before it.
         if (!inCodeBlock && !inTable) {
             lastSafeLength = accumulated.length;
         }
 
         // Detect code fence toggle. A fence always starts with ``` (up to 3 leading spaces).
         const fenceMatch = CODE_FENCE_RE.exec(line);
+        // Whether this line is a closing fence (block was open before this line).
+        const isClosingFence = !!(fenceMatch && inCodeBlock);
+        // Preserve the block type before a closing fence clears it, so the over-limit
+        // closing-fence branch below can still report the correct syntax label.
+        const closingFenceBlockType = isClosingFence ? currentCodeBlockType : null;
+
         if (fenceMatch) {
             if (!inCodeBlock) {
                 // Opening fence — record the syntax label (may be empty string)
@@ -145,10 +157,21 @@ function extractPage(
                 // fenceMatch[1] is the captured label, trimmed of trailing whitespace
                 currentCodeBlockType = (fenceMatch[1] ?? "").trimEnd();
             } else {
-                // Closing fence — exiting the block; record safe position after this line
+                // Closing fence — exiting the block. Update lastSafeLength here so that
+                // the closing fence line itself is a valid split point: if the next line
+                // would exceed the limit, we can include up to and including this fence
+                // rather than backing all the way up to before the opening fence.
                 inCodeBlock = false;
                 currentCodeBlockType = "";
+                codeBlockStartLength = -1;
+                lastSafeLength = accumulated.length;
             }
+        }
+
+        // After accumulating the opening fence line, record how far we are so that any
+        // intra-block newline split must be strictly after this position.
+        if (inCodeBlock && codeBlockStartLength === -1) {
+            codeBlockStartLength = accumulated.length + addition.length;
         }
 
         // Detect table context: a line starting with | (content row) or a separator line,
@@ -157,6 +180,33 @@ function extractPage(
 
         // Check whether adding this line would exceed the limit
         if (accumulated.length + addition.length > limit) {
+            // Special case: the closing fence itself doesn't fit. The block body is already
+            // in `accumulated` but without the fence it would render as unterminated.
+            // Treat it the same as a mid-block split: backtrack to the last newline inside
+            // the block that still leaves room for the synthetic closing fence.
+            if (isClosingFence) {
+                const fenceRoom = limit - CODE_FENCE_CLOSE.length;
+                const searchRegion = accumulated.slice(0, fenceRoom);
+                const lastNl = searchRegion.lastIndexOf("\n");
+                // codeBlockStartLength was reset to -1 by the closing fence branch above,
+                // so reconstruct the floor: any position > 0 inside the block is fine.
+                if (lastNl > 0) {
+                    return {
+                        content: accumulated.slice(0, lastNl) + CODE_FENCE_CLOSE,
+                        newOffset: offset + lastNl,
+                        endedInCodeBlock: true,
+                        codeBlockType: closingFenceBlockType,
+                    };
+                }
+                // No viable newline inside the block — hard split
+                return {
+                    content: text.slice(offset, offset + limit),
+                    newOffset: offset + limit,
+                    endedInCodeBlock: false,
+                    codeBlockType: null,
+                };
+            }
+
             if (inTable || (lastSafeLength < accumulated.length && !inCodeBlock)) {
                 // Inside a table or just entered one — back up to last safe position.
                 if (lastSafeLength === 0) {
@@ -199,8 +249,24 @@ function extractPage(
                         codeBlockType: currentCodeBlockType,
                     };
                 }
-                // Closing fence does not fit in the budget — back up to the last safe position
-                // outside the block so the fence can be emitted cleanly on the next attempt.
+                // Closing fence does not fit — find the last newline within the budget
+                // that leaves room for the fence, and that is still inside the code block
+                // (i.e. after the opening fence line, so we always make forward progress).
+                const fenceRoom = limit - CODE_FENCE_CLOSE.length;
+                const searchRegion = accumulated.slice(0, fenceRoom);
+                const lastNl = searchRegion.lastIndexOf("\n");
+                if (lastNl > codeBlockStartLength) {
+                    // There is a line boundary inside the block within budget — split there.
+                    const splitContent = accumulated.slice(0, lastNl) + CODE_FENCE_CLOSE;
+                    return {
+                        content: splitContent,
+                        newOffset: offset + lastNl,
+                        endedInCodeBlock: true,
+                        codeBlockType: currentCodeBlockType,
+                    };
+                }
+                // No viable newline found inside the block — fall back to the last safe
+                // position before the block opened (same as the table backup path).
                 if (lastSafeLength === 0) {
                     return {
                         content: text.slice(offset, offset + limit),
