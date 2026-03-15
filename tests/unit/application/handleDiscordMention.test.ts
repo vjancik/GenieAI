@@ -136,7 +136,11 @@ describe("HandleDiscordMention.handle", () => {
             intent: MessageIntent.UNKNOWN,
         });
 
-        expect(repo.fetchChain).toHaveBeenCalledWith("discord-123");
+        expect(repo.fetchChain).toHaveBeenCalledWith({
+            startDiscordMessageId: "discord-123",
+            channelId: "ch-1",
+            guildId: "guild-1",
+        });
     });
 
     test("passes fetched history to orchestrator as LangChain messages", async () => {

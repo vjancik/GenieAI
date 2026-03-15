@@ -99,14 +99,22 @@ describe("PgMessageRepository.save", () => {
 
 describe("PgMessageRepository.fetchChain", () => {
     test("returns empty array for non-existent discordMessageId", async () => {
-        const result = await repo.fetchChain("nonexistent-id");
+        const result = await repo.fetchChain({
+            startDiscordMessageId: "nonexistent-id",
+            channelId: "ch-001",
+            guildId: "guild-001",
+        });
         expect(result).toHaveLength(0);
     });
 
     test("returns single message for chain with no parents", async () => {
         const _saved = await repo.save(messagePayload({ discordMessageId: "single-001" }));
 
-        const chain = await repo.fetchChain("single-001");
+        const chain = await repo.fetchChain({
+            startDiscordMessageId: "single-001",
+            channelId: "ch-001",
+            guildId: "guild-001",
+        });
 
         expect(chain).toHaveLength(1);
         expect(chain[0]?.discordMessageId).toBe("single-001");
@@ -137,7 +145,11 @@ describe("PgMessageRepository.fetchChain", () => {
             }),
         );
 
-        const chain = await repo.fetchChain(child.discordMessageId);
+        const chain = await repo.fetchChain({
+            startDiscordMessageId: child.discordMessageId,
+            channelId: "ch-001",
+            guildId: "guild-001",
+        });
 
         expect(chain).toHaveLength(2);
         // Chronological: root first, then child
@@ -197,7 +209,7 @@ describe("PgMessageRepository.fetchChain", () => {
         );
 
         // Fetch starting from the leaf — the new user message would reference the last bot reply
-        const chain = await repo.fetchChain(id4);
+        const chain = await repo.fetchChain({ startDiscordMessageId: id4, channelId: "ch-001", guildId: "guild-001" });
 
         expect(chain).toHaveLength(4);
         expect(chain.map((m) => m.discordMessageId)).toEqual(ids);
@@ -227,7 +239,11 @@ describe("PgMessageRepository.fetchChain", () => {
             }),
         );
 
-        const chain = await repo.fetchChain("sub-B");
+        const chain = await repo.fetchChain({
+            startDiscordMessageId: "sub-B",
+            channelId: "ch-001",
+            guildId: "guild-001",
+        });
 
         expect(chain).toHaveLength(2);
         expect(chain.map((m) => m.discordMessageId)).toEqual(["sub-A", "sub-B"]);
@@ -242,7 +258,11 @@ describe("PgMessageRepository.fetchChain", () => {
             }),
         );
 
-        const chain = await repo.fetchChain(saved.discordMessageId);
+        const chain = await repo.fetchChain({
+            startDiscordMessageId: saved.discordMessageId,
+            channelId: "ch-001",
+            guildId: "guild-001",
+        });
 
         expect(chain).toHaveLength(1);
         expect(chain[0]?.langchainMessages).toHaveLength(1);
@@ -268,7 +288,11 @@ describe("PgMessageRepository.fetchChain", () => {
             }),
         );
 
-        const chain = await repo.fetchChain(saved.discordMessageId);
+        const chain = await repo.fetchChain({
+            startDiscordMessageId: saved.discordMessageId,
+            channelId: "ch-001",
+            guildId: "guild-001",
+        });
 
         expect(chain[0]?.langchainMessages).toHaveLength(2);
 

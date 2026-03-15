@@ -144,7 +144,11 @@ export class HandleDiscordMessageUseCase {
                     // Fetch existing reply chain if this message is a reply
                     const dbHistory =
                         params.referencedMessageId !== null
-                            ? await this.messageRepo.fetchChain(params.referencedMessageId)
+                            ? await this.messageRepo.fetchChain({
+                                  startDiscordMessageId: params.referencedMessageId,
+                                  channelId: params.channelId,
+                                  guildId: params.guildId,
+                              })
                             : [];
 
                     const history = this.orchestrator.buildHistory(dbHistory);

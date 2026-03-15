@@ -31,12 +31,16 @@ export class RetryDiscordMessageUseCase {
      * the given human message.
      *
      * @param params.humanDiscordMessageId - Discord snowflake of the human message to retry from
+     * @param params.channelId - Discord channel snowflake
+     * @param params.guildId - Discord guild snowflake, or `"@me"` for DMs
      * @param params.intent - The message intent (re-derived by the caller from the original Discord message)
      * @param params.onStatusUpdate - Optional callback for live status updates
      * @param params.attachmentFetcher - Optional Discord attachment fetcher for Gemini file refresh
      */
     async execute(params: {
         humanDiscordMessageId: string;
+        channelId: string;
+        guildId: string;
         intent: MessageIntent;
         onStatusUpdate?: OnStatusUpdate;
         attachmentFetcher?: IDiscordAttachmentFetcher;
@@ -56,7 +60,11 @@ export class RetryDiscordMessageUseCase {
                 async (span) => {
                     // Fetch the full chain up to and including the human message.
                     // The recursive CTE walks upward, so the human message is the last (most recent) row.
-                    const chain = await this.messageRepo.fetchChain(params.humanDiscordMessageId);
+                    const chain = await this.messageRepo.fetchChain({
+                        startDiscordMessageId: params.humanDiscordMessageId,
+                        channelId: params.channelId,
+                        guildId: params.guildId,
+                    });
 
                     if (chain.length === 0) {
                         this.logger.warn(

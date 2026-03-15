@@ -203,24 +203,34 @@ export class PgMessageRepository implements IMessageRepository {
         );
     }
 
-    async fetchChain(startDiscordMessageId: string): Promise<DiscordMessage[]> {
+    async fetchChain(lookup: {
+        startDiscordMessageId: string;
+        channelId: string;
+        guildId: string;
+    }): Promise<DiscordMessage[]> {
         return Sentry.startSpan(
             {
                 name: "Fetch message chain",
                 op: "db.query",
                 attributes: {
                     "db.table": "messages",
-                    "discord.message_id": startDiscordMessageId,
+                    "discord.message_id": lookup.startDiscordMessageId,
+                    "discord.channel_id": lookup.channelId,
+                    "discord.guild_id": lookup.guildId,
                 },
             },
             async (span) => {
                 /**
                  * Recursive CTE that walks UP the reply chain from the given Discord message ID.
                  *
-                 * Base case: the message with discord_message_id = startDiscordMessageId.
-                 * Recursive case: for each row in message_chain, find the message whose
-                 *   discord_message_id equals the current row's replies_to_discord_id.
-                 *   This traverses upward until replies_to_discord_id IS NULL (chain root).
+                 * Base case: the message identified by the (guild_id, channel_id, discord_message_id)
+                 *   triple, which matches the composite unique index for an efficient index seek.
+                 * Recursive case: for each row in message_chain, find the parent message whose
+                 *   discord_message_id equals the current row's replies_to_discord_id, constrained
+                 *   to the same guild_id and channel_id. In practice reply chains are always within
+                 *   the same channel, so this constraint is always satisfied and allows the recursive
+                 *   join to use the same composite index rather than a sequential scan.
+                 *   Traversal stops when replies_to_discord_id IS NULL (chain root).
                  *
                  * The collected rows are then ordered by created_at ASC to produce
                  * chronological conversation history.
@@ -236,17 +246,22 @@ export class PgMessageRepository implements IMessageRepository {
                     const rows = await this.db.execute(sql`
                         WITH RECURSIVE message_chain AS (
                             SELECT * FROM messages
-                            WHERE discord_message_id = ${startDiscordMessageId}
+                            WHERE guild_id    = ${lookup.guildId}
+                              AND channel_id  = ${lookup.channelId}
+                              AND discord_message_id = ${lookup.startDiscordMessageId}
                             UNION ALL
                             SELECT m.* FROM messages m
-                            INNER JOIN message_chain mc ON m.discord_message_id = mc.replies_to_discord_id
+                            INNER JOIN message_chain mc
+                              ON  m.guild_id   = mc.guild_id
+                              AND m.channel_id = mc.channel_id
+                              AND m.discord_message_id = mc.replies_to_discord_id
                         )
                         SELECT * FROM message_chain ORDER BY created_at ASC
                     `);
 
                     span.setAttribute("db.result_count", rows.length);
 
-                    this.logger.debug({ startDiscordMessageId, chainLength: rows.length }, "Fetched message chain");
+                    this.logger.debug({ ...lookup, chainLength: rows.length }, "Fetched message chain");
 
                     // TYPE COERCION: Drizzle's db.execute() returns Record<string, unknown>[] for raw SQL —
                     // column types cannot be inferred statically, so each field is asserted from the known schema.

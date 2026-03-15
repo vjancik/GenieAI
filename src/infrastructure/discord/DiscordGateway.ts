@@ -491,6 +491,8 @@ export class DiscordGateway {
                         const { response, newMessages, isFailure, isRetryable } =
                             await this.retryDiscordMessageUseCase.execute({
                                 humanDiscordMessageId: originalMessage.id,
+                                channelId: originalMessage.channelId,
+                                guildId: originalMessage.guildId ?? DM_GUILD_TOKEN,
                                 intent,
                                 onStatusUpdate,
                                 attachmentFetcher,
