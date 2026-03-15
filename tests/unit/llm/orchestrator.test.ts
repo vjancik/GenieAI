@@ -444,8 +444,8 @@ describe("Orchestrator.process", () => {
         expect(result.newMessages).toHaveLength(3);
     });
 
-    test("calls get_video_transcription tool and passes result to general model, returning 3 messages", async () => {
-        const triageModel = makeTriageWithToolCall("get_video_transcription", {
+    test("calls get_video_captions tool and passes result to general model, returning 3 messages", async () => {
+        const triageModel = makeTriageWithToolCall("get_video_captions", {
             urls: ["https://youtube.com/watch?v=abc"],
         });
         const generalModel = makeModel("video summary");

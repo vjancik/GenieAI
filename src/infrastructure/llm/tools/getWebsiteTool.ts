@@ -49,14 +49,14 @@ export async function fetchTextBody(url: string): Promise<{ body: string; conten
     });
 
     if (!res.ok) {
-        throw new ToolError(`HTTP ${res.status} fetching ${url}`);
+        throw new ToolError(`HTTP ${res.status}`);
     }
 
     const contentType = res.headers.get("content-type") ?? "";
     const mimeType = (contentType.split(";")[0] ?? "").trim();
 
     if (!mimeType.startsWith("text/")) {
-        throw new ToolError(`Unsupported content type "${mimeType}" for ${url} — only text/* responses are supported`);
+        throw new ToolError(`Unsupported content type "${mimeType}" — only text/* responses are supported`);
     }
 
     const body = await res.text();
@@ -75,42 +75,47 @@ export function bodyToContent(body: string, contentType: string): string {
     return body;
 }
 
+/** Successful result for a single URL fetch. */
+export type WebsiteResult = { url: string; pageContents: string };
+/** Error result for a single URL fetch. */
+export type WebsiteError = { url: string; error: string };
+/** Union result type returned per URL by the website tool. */
+export type WebsiteResultEntry = WebsiteResult | WebsiteError;
+
 /**
  * Creates a LangChain tool that fetches one or more URLs and returns their
- * content as text. HTML pages are converted to Markdown; other text/* types
- * are returned verbatim. Non-text content types are rejected.
+ * content as a structured array, one entry per URL. HTML pages are converted
+ * to Markdown; other text/* types are returned verbatim. Non-text content
+ * types are rejected. Individual URL failures are co-located with the URL
+ * in an error entry so the LLM knows what could not be retrieved.
  *
- * Duplicate URLs are deduplicated before fetching. Individual URL failures
- * are handled gracefully — the error is included inline so the LLM knows
- * what could not be retrieved.
+ * Duplicate URLs are deduplicated before fetching.
  *
  * @param logger - Injectable logger for testability
  */
 export function createGetWebsiteTool(logger: Logger) {
     return tool(
-        async ({ urls }) => {
+        async ({ urls }): Promise<WebsiteResultEntry[]> => {
             // Deduplicate URLs to avoid redundant fetches
             const unique = [...new Set(urls)];
             logger.debug({ urls: unique }, "Fetching websites");
 
             const results = await Promise.allSettled(
-                unique.map(async (url) => {
+                unique.map(async (url): Promise<WebsiteResult> => {
                     const { body, contentType } = await fetchTextBody(url);
-                    const content = bodyToContent(body, contentType);
-                    return `## ${url}\n\n${content}`;
+                    const pageContents = bodyToContent(body, contentType);
+                    return { url, pageContents };
                 }),
             );
 
-            return results
-                .map((result, i) => {
-                    if (result.status === "fulfilled") {
-                        return result.value;
-                    }
-                    const err = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
-                    logger.warn({ url: unique[i], error: err.message }, "Failed to fetch URL");
-                    return `## ${unique[i]}\n\nError: ${err.message}`;
-                })
-                .join("\n\n---\n\n");
+            return results.map((result, i) => {
+                if (result.status === "fulfilled") {
+                    return result.value;
+                }
+                const err = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
+                logger.warn({ url: unique[i], error: err.message }, "Failed to fetch URL");
+                return { url: unique[i] ?? "unknown", error: err.message };
+            });
         },
         {
             name: "get_website",

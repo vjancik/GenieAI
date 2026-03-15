@@ -32,9 +32,10 @@ describe("createGetWebsiteTool", () => {
         const result = await tool.invoke({ urls: ["https://example.com"] });
 
         expect(mockFetch).toHaveBeenCalledTimes(1);
-        expect(result).toContain("## https://example.com");
-        expect(result).toContain("Hello");
-        expect(result).toContain("World");
+        expect(result).toHaveLength(1);
+        expect(result[0]).toMatchObject({ url: "https://example.com" });
+        expect((result[0] as { pageContents: string }).pageContents).toContain("Hello");
+        expect((result[0] as { pageContents: string }).pageContents).toContain("World");
     });
 
     test("sends browser-like headers", async () => {
@@ -51,9 +52,10 @@ describe("createGetWebsiteTool", () => {
         const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
         const tool = createGetWebsiteTool(testLogger);
 
-        await tool.invoke({ urls: ["https://example.com", "https://example.com"] });
+        const result = await tool.invoke({ urls: ["https://example.com", "https://example.com"] });
 
         expect(mockFetch).toHaveBeenCalledTimes(1);
+        expect(result).toHaveLength(1);
     });
 
     test("handles multiple distinct URLs", async () => {
@@ -68,12 +70,12 @@ describe("createGetWebsiteTool", () => {
         const result = await tool.invoke({ urls: ["https://example.com", "https://other.com"] });
 
         expect(mockFetch).toHaveBeenCalledTimes(2);
-        expect(result).toContain("## https://example.com");
-        expect(result).toContain("## https://other.com");
-        expect(result).toContain("---");
+        expect(result).toHaveLength(2);
+        expect(result[0]).toMatchObject({ url: "https://example.com" });
+        expect(result[1]).toMatchObject({ url: "https://other.com" });
     });
 
-    test("includes error message inline when a URL returns HTTP error", async () => {
+    test("returns error entry when a URL returns HTTP error", async () => {
         mockFetch = mock(async (_url: string, _opts?: unknown) =>
             makeMockResponse({ ok: false, status: 404, body: "Not Found" }),
         );
@@ -84,12 +86,11 @@ describe("createGetWebsiteTool", () => {
 
         const result = await tool.invoke({ urls: ["https://bad.example.com"] });
 
-        expect(result).toContain("## https://bad.example.com");
-        expect(result).toContain("Error:");
-        expect(result).toContain("404");
+        expect(result).toHaveLength(1);
+        expect(result[0]).toMatchObject({ url: "https://bad.example.com", error: expect.stringContaining("404") });
     });
 
-    test("rejects non-text content types", async () => {
+    test("rejects non-text content types with an error entry", async () => {
         mockFetch = mock(async (_url: string, _opts?: unknown) => makeMockResponse({ contentType: "image/png" }));
         globalThis.fetch = mockFetch as unknown as typeof fetch;
 
@@ -98,8 +99,8 @@ describe("createGetWebsiteTool", () => {
 
         const result = await tool.invoke({ urls: ["https://example.com/image.png"] });
 
-        expect(result).toContain("Error:");
-        expect(result).toContain("image/png");
+        expect(result).toHaveLength(1);
+        expect(result[0]).toMatchObject({ error: expect.stringContaining("image/png") });
     });
 
     test("returns plain text as-is for non-HTML text content types", async () => {
@@ -114,10 +115,10 @@ describe("createGetWebsiteTool", () => {
 
         const result = await tool.invoke({ urls: ["https://example.com/data.txt"] });
 
-        expect(result).toContain(plainText);
+        expect((result[0] as { pageContents: string }).pageContents).toContain(plainText);
     });
 
-    test("continues processing other URLs when one fails", async () => {
+    test("co-locates error and success entries when one URL fails", async () => {
         let callCount = 0;
         mockFetch = mock(async (_url: string, _opts?: unknown) => {
             callCount++;
@@ -133,7 +134,8 @@ describe("createGetWebsiteTool", () => {
 
         const result = await tool.invoke({ urls: ["https://bad.com", "https://good.com"] });
 
-        expect(result).toContain("Error:");
-        expect(result).toContain("Good content");
+        expect(result).toHaveLength(2);
+        expect(result[0]).toMatchObject({ url: "https://bad.com", error: expect.any(String) });
+        expect((result[1] as { pageContents: string }).pageContents).toContain("Good content");
     });
 });

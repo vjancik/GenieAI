@@ -24,6 +24,8 @@ const CaptionEntrySchema = z.object({
 export const InfoJsonSchema = z.object({
     id: z.string(),
     title: z.string().optional(),
+    channel: z.string().optional(),
+    uploader: z.string().optional(),
     subtitles: z.record(z.string(), z.array(CaptionEntrySchema)).default({}),
     automatic_captions: z.record(z.string(), z.array(CaptionEntrySchema)).default({}),
 });
@@ -33,6 +35,13 @@ export type YtDlpCaptionEntry = z.infer<typeof CaptionEntrySchema>;
 
 /** Relevant subset of the yt-dlp --dump-single-json output. */
 export type YtDlpInfoJson = z.infer<typeof InfoJsonSchema>;
+
+/** Successful result for a single video URL captions fetch. */
+export type VideoCaptionsResult = { url: string; videoCaptions: string; title?: string; author?: string };
+/** Error result for a single video URL captions fetch. */
+export type VideoCaptionsError = { url: string; error: string };
+/** Union result type returned per URL by the video captions tool. */
+export type VideoCaptionsResultEntry = VideoCaptionsResult | VideoCaptionsError;
 
 /**
  * Priority-ordered list of language prefixes (most preferred first).
@@ -138,12 +147,12 @@ async function verifyYtDlp(): Promise<void> {
     const proc = Bun.spawn(["yt-dlp", "--version"], { stderr: "pipe", stdout: "pipe" });
     await proc.exited;
     if (proc.exitCode !== 0) {
-        throw new ToolError("yt-dlp is not available in PATH and is required for video transcription");
+        throw new ToolError("yt-dlp is not available in PATH and is required for video captions");
     }
 }
 
 /**
- * Creates a LangChain tool that extracts transcriptions from video URLs using yt-dlp.
+ * Creates a LangChain tool that fetches captions from video URLs using yt-dlp.
  *
  * Verifies yt-dlp is available in PATH before returning the tool. Throws if not
  * found, since it is a hard runtime requirement with no fallback.
@@ -164,7 +173,7 @@ async function verifyYtDlp(): Promise<void> {
  * @param proxy - Optional HTTP/HTTPS proxy URL (from YT_DLP_HTTP_PROXY)
  * @param proxyRetries - Number of proxy rotation retries for bot-detection and 429 errors
  */
-export async function createGetVideoTranscriptionTool(logger: Logger, proxy?: string, proxyRetries = 5) {
+export async function createGetVideoCaptionsTool(logger: Logger, proxy?: string, proxyRetries = 5) {
     if (proxy !== undefined) {
         const scheme = new URL(proxy).protocol;
         if (scheme !== "http:" && scheme !== "https:") {
@@ -173,33 +182,31 @@ export async function createGetVideoTranscriptionTool(logger: Logger, proxy?: st
     }
     await verifyYtDlp();
     return tool(
-        async ({ urls }) => {
+        async ({ urls }): Promise<VideoCaptionsResultEntry[]> => {
             // Deduplicate URLs to avoid redundant yt-dlp invocations
             const unique = [...new Set(urls)];
-            logger.debug({ urls: unique }, "Extracting video transcriptions");
+            logger.debug({ urls: unique }, "Fetching video captions");
 
             const results = await Promise.allSettled(
-                unique.map((url) => extractTranscription(url, logger, proxy, proxyRetries)),
+                unique.map((url) => extractCaptions(url, logger, proxy, proxyRetries)),
             );
 
-            return results
-                .map((result, i) => {
-                    if (result.status === "fulfilled") {
-                        return result.value;
-                    }
-                    const err = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
-                    logger.warn({ url: unique[i], error: err.message }, "Failed to extract transcription");
-                    return `## ${unique[i]}\n\nError: ${err.message}`;
-                })
-                .join("\n\n---\n\n");
+            return results.map((result, i) => {
+                if (result.status === "fulfilled") {
+                    return result.value;
+                }
+                const err = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
+                logger.warn({ url: unique[i], error: err.message }, "Failed to fetch video captions");
+                return { url: unique[i] ?? "unknown", error: err.message };
+            });
         },
         {
-            name: "get_video_transcription",
+            name: "get_video_captions",
             description:
-                "Extract transcriptions/subtitles from video URLs (YouTube, social media, etc.). " +
+                "Fetch captions/subtitles from video URLs (YouTube, social media, etc.). " +
                 "Use this when the user provides URLs pointing to video content they want summarized or analyzed.",
             schema: z.object({
-                urls: z.array(z.url()).min(1).describe("Video URLs to transcribe"),
+                urls: z.array(z.url()).min(1).describe("Video URLs to fetch captions for"),
             }),
         },
     );
@@ -263,7 +270,7 @@ async function fetchYtDlpMetadata(url: string, logger: Logger, proxy?: string, p
         }
 
         if (result.exitCode !== 0) {
-            throw new ToolError(`yt-dlp failed (exit ${result.exitCode}) for URL: ${url}: ${result.stderr.trim()}`);
+            throw new ToolError(`yt-dlp failed (exit ${result.exitCode}): ${result.stderr.trim()}`);
         }
     }
 
@@ -278,7 +285,12 @@ async function fetchYtDlpMetadata(url: string, logger: Logger, proxy?: string, p
  * @param url - The video URL to process
  * @param logger - Logger instance for progress tracking
  */
-async function extractTranscription(url: string, logger: Logger, proxy?: string, proxyRetries = 5): Promise<string> {
+async function extractCaptions(
+    url: string,
+    logger: Logger,
+    proxy?: string,
+    proxyRetries = 5,
+): Promise<VideoCaptionsResult> {
     logger.debug({ url }, "Fetching video metadata via yt-dlp -J");
 
     const stdout = await fetchYtDlpMetadata(url, logger, proxy, proxyRetries);
@@ -287,19 +299,19 @@ async function extractTranscription(url: string, logger: Logger, proxy?: string,
     try {
         raw = JSON.parse(stdout);
     } catch {
-        throw new ToolError(`Failed to parse yt-dlp JSON output for URL: ${url}`);
+        throw new ToolError("Failed to parse yt-dlp JSON output");
     }
 
     const parsed = InfoJsonSchema.safeParse(raw);
     if (!parsed.success) {
-        throw new ToolError(`Unexpected yt-dlp info JSON structure for URL: ${url}: ${parsed.error.message}`);
+        throw new ToolError(`Unexpected yt-dlp info JSON structure: ${parsed.error.message}`);
     }
     const info = parsed.data;
 
     const captionUrls = selectCaptionUrls(info);
 
     if (captionUrls.length === 0) {
-        throw new ToolError(`No caption tracks found for URL: ${url}`);
+        throw new ToolError("No caption tracks found");
     }
 
     logger.debug({ url, count: captionUrls.length }, "Trying caption URLs in priority order");
@@ -326,12 +338,17 @@ async function extractTranscription(url: string, logger: Logger, proxy?: string,
             continue;
         }
 
-        const content = await response.text();
+        const videoCaptions = await response.text();
         logger.debug({ url, captionUrl }, "Successfully fetched captions");
-        return `## ${url}\n\n${content}`;
+        return {
+            url,
+            videoCaptions,
+            ...(info.title && { title: info.title }),
+            ...((info.channel ?? info.uploader) ? { author: info.channel ?? info.uploader } : {}),
+        };
     }
 
-    throw new ToolError(`All ${captionUrls.length} caption URLs failed for: ${url}`);
+    throw new ToolError(`All ${captionUrls.length} caption URLs failed`);
 }
 
-export type GetVideoTranscriptionTool = Awaited<ReturnType<typeof createGetVideoTranscriptionTool>>;
+export type GetVideoCaptionsTool = Awaited<ReturnType<typeof createGetVideoCaptionsTool>>;

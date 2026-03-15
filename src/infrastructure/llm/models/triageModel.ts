@@ -4,7 +4,7 @@ import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
-import type { GetVideoTranscriptionTool } from "../tools/getVideoTranscriptionTool.ts";
+import type { GetVideoCaptionsTool } from "../tools/getVideoCaptionsTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
 
 /**
@@ -22,7 +22,7 @@ const routeToSearchTool = tool(async () => JSON.stringify({ route: "search" }), 
 
 /**
  * Sentinel tool that signals routing to the general-purpose agent.
- * Used for everything that doesn't need websites, video transcriptions, or search.
+ * Used for everything that doesn't need websites, video captions, or search.
  */
 const routeToGeneralTool = tool(async () => JSON.stringify({ route: "general" }), {
     name: "route_to_general",
@@ -43,7 +43,7 @@ export const TRIAGE_SYSTEM_PROMPT =
     "Do NOT answer the user directly — always call a tool. " +
     "Rules:\n" +
     "- If the message contains web page URLs to analyze: call get_website\n" +
-    "- If the message contains video URLs (YouTube, social media, etc.): call get_video_transcription\n" +
+    "- If the message contains video URLs (YouTube, social media, etc.): call get_video_captions\n" +
     "- If the question needs current/live information or very niche topics: call route_to_search\n" +
     "- For everything else: call route_to_general";
 
@@ -58,7 +58,7 @@ interface TriageModelOptions {
     /** Whether to include thought tokens in the model response. */
     includeLLMThoughts: boolean;
     getWebsiteTool: GetWebsiteTool;
-    getVideoTranscriptionTool: GetVideoTranscriptionTool;
+    getVideoCaptionsTool: GetVideoCaptionsTool;
 }
 
 /**
@@ -88,7 +88,7 @@ function createTriageModel(
         callbacks: sentryCallback,
     });
 
-    const tools = [options.getWebsiteTool, options.getVideoTranscriptionTool, routeToSearchTool, routeToGeneralTool];
+    const tools = [options.getWebsiteTool, options.getVideoCaptionsTool, routeToSearchTool, routeToGeneralTool];
     return llm.bindTools(tools);
 }
 

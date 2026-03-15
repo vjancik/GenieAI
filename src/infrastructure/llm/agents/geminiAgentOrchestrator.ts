@@ -31,7 +31,7 @@ import { buildGeneralSystemPrompt, type GeneralModel } from "../models/generalMo
 import { SEARCH_SYSTEM_PROMPT, type SearchModel } from "../models/searchModel.ts";
 import type { TriageModel } from "../models/triageModel.ts";
 import { TRIAGE_SYSTEM_PROMPT } from "../models/triageModel.ts";
-import type { GetVideoTranscriptionTool } from "../tools/getVideoTranscriptionTool.ts";
+import type { GetVideoCaptionsTool } from "../tools/getVideoCaptionsTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
 
 const GLOBAL_MODEL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes per invoke
@@ -278,7 +278,7 @@ type InvokableModel<T extends BaseMessage> = {
  * Routing decisions are made in the triage node via Command.goto.
  * Routing-only tool calls (route_to_search, route_to_general) are NOT added
  * to the messages state, preventing context bloat in subsequent turns.
- * Real tool calls (get_website, get_video_transcription) DO add their triage
+ * Real tool calls (get_website, get_video_captions) DO add their triage
  * AIMessage to state because it is required for the ToolMessage to be valid context.
  *
  * Free-key rotation: triage and general nodes iterate over free API keys on HTTP 429,
@@ -300,7 +300,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         private readonly freeKeyProvider: IFreeKeyProvider,
         private readonly paidApiKey: GeminiApiKey,
         private readonly getWebsiteTool: GetWebsiteTool,
-        private readonly getVideoTranscriptionTool: GetVideoTranscriptionTool,
+        private readonly getVideoCaptionsTool: GetVideoCaptionsTool,
         private readonly logger: Logger,
         config: Pick<AppConfig, "attachmentMode" | "maxInlineAttachmentSizeMb">,
         private readonly geminiFileRefreshService?: GeminiFileRefreshService,
@@ -665,7 +665,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
 
             switch (toolCall.name) {
                 case "get_website":
-                case "get_video_transcription": {
+                case "get_video_captions": {
                     // Real tool call: add triage AIMessage to state so the ToolMessage
                     // created in executeToolNode has a valid tool_call_id in history.
                     return new Command({
@@ -712,20 +712,23 @@ export class AgentOrchestrator implements IAgentOrchestrator {
 
             span.setAttribute("agent.tool_name", toolCall.name);
 
-            let toolResult: string;
             // TYPE COERCION: LangChain tool_calls args are typed as Record<string, unknown>;
             // the Zod schema on each tool guarantees the urls: string[] shape at parse time.
+            let toolResult:
+                | Awaited<ReturnType<typeof this.getWebsiteTool.invoke>>
+                | Awaited<ReturnType<typeof this.getVideoCaptionsTool.invoke>>;
             if (toolCall.name === "get_website") {
                 toolResult = await this.getWebsiteTool.invoke(toolCall.args as { urls: string[] });
             } else {
-                toolResult = await this.getVideoTranscriptionTool.invoke(toolCall.args as { urls: string[] });
+                toolResult = await this.getVideoCaptionsTool.invoke(toolCall.args as { urls: string[] });
             }
 
             // TODO: distinguish between partial / total tool failures and don't forward to general if the tool call is a complete failure as Gemini loves to make stuff up when it has no context. Either respond to user directly or insert a message with instructions that the model should report to the user the retrieval failed.
-            // TODO: add structured content
 
             const toolMessage = new ToolMessage({
-                content: toolResult,
+                // TYPE COERCION: ToolMessage.content types don't include object arrays,
+                // but LangChain and Gemini both accept structured JSON arrays at runtime.
+                content: toolResult as unknown as [] | string,
                 name: toolCall.name,
                 tool_call_id: toolCall.id ?? "",
             });

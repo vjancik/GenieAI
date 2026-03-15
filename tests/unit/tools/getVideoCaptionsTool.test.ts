@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { YtDlpInfoJson } from "../../../src/infrastructure/llm/tools/getVideoTranscriptionTool.ts";
-import { InfoJsonSchema, selectCaptionUrls } from "../../../src/infrastructure/llm/tools/getVideoTranscriptionTool.ts";
+import type { YtDlpInfoJson } from "../../../src/infrastructure/llm/tools/getVideoCaptionsTool.ts";
+import { InfoJsonSchema, selectCaptionUrls } from "../../../src/infrastructure/llm/tools/getVideoCaptionsTool.ts";
 
 /**
  * Load the real yt-dlp info JSON fixture for P-4pbFcERnk using the same
@@ -87,7 +87,7 @@ describe("selectCaptionUrls", () => {
         const info = await loadFixture();
         const urls = selectCaptionUrls(info);
         // HLS entries use protocol: "m3u8_native" and are served from manifest.googlevideo.com
-        expect(urls.every((u) => !u.includes("manifest.googlevideo.com"))).toBe(true);
+        expect(urls.every((u: string) => !u.includes("manifest.googlevideo.com"))).toBe(true);
     });
 
     test("manual captions take priority even when auto captions exist for same language", () => {

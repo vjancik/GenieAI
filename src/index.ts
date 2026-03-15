@@ -35,7 +35,7 @@ import { GeneralModelProvider } from "./infrastructure/llm/models/generalModel.t
 import { SearchModelProvider } from "./infrastructure/llm/models/searchModel.ts";
 import { TriageModelProvider } from "./infrastructure/llm/models/triageModel.ts";
 import { RoundRobinFreeKeyProvider } from "./infrastructure/llm/RoundRobinFreeKeyProvider.ts";
-import { createGetVideoTranscriptionTool } from "./infrastructure/llm/tools/getVideoTranscriptionTool.ts";
+import { createGetVideoCaptionsTool } from "./infrastructure/llm/tools/getVideoCaptionsTool.ts";
 import { createGetWebsiteTool } from "./infrastructure/llm/tools/getWebsiteTool.ts";
 import { createLogger } from "./infrastructure/logging/logger.ts";
 
@@ -82,7 +82,7 @@ const uploaderRegistry = new GenaiFileUploaderRegistry(
 
 // LLM tools
 const getWebsiteTool = createGetWebsiteTool(logger.child({ module: "tool:website" }));
-const getVideoTranscriptionTool = await createGetVideoTranscriptionTool(
+const getVideoCaptionsTool = await createGetVideoCaptionsTool(
     logger.child({ module: "tool:video" }),
     config.ytDlpHttpProxy,
     config.proxyRetries,
@@ -96,7 +96,7 @@ const triageProvider = new TriageModelProvider({
     triageThinkingLevel: config.triageThinkingLevel,
     includeLLMThoughts: config.includeLLMThoughts,
     getWebsiteTool,
-    getVideoTranscriptionTool,
+    getVideoCaptionsTool,
 });
 const generalProvider = new GeneralModelProvider({
     modelName: GENERAL_MODEL_NAME,
@@ -126,7 +126,7 @@ const agentOrchestrator = new AgentOrchestrator(
     freeKeyProvider,
     paidKey,
     getWebsiteTool,
-    getVideoTranscriptionTool,
+    getVideoCaptionsTool,
     logger.child({ module: "agent-orchestrator" }),
     config,
     geminiFileRefreshService,
