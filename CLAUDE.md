@@ -30,6 +30,7 @@
 - prefer timestamps with timezones over regular timestamps
 - prefer uuidv7 over uuidv4 
 - prefer using drizzle generate to creating migration files by hand
+- foreign keys should always refer to primary keys unless there is a good reason to do otherwise
 
 # Third-Party APIs & SDKs Rules
 - use `context7` MCP to look up up-to-date API docs and usage patterns for major libraries (e.g. langchain, @langchain/google, genai) before writing code using them, or when trying to resolve type discrepancies  

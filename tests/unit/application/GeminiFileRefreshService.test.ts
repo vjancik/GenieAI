@@ -32,7 +32,8 @@ function makeFile(overrides: Partial<GeminiFile> = {}): GeminiFile {
         originalGeminiUrl: GEMINI_URL,
         discordAttachmentId: "att-001",
         discordFilename: "image.png",
-        messageDiscordId: "msg-001",
+        messageId: "msg-uuid-1",
+        discordMessageId: "msg-001",
         ...overrides,
     };
 }

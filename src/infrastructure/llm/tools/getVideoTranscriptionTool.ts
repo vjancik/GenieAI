@@ -229,14 +229,21 @@ async function fetchYtDlpMetadata(url: string, logger: Logger, proxy?: string, p
             stderr: "pipe",
             stdout: "pipe",
         });
-        const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+        const [stdout, stderr] = await Promise.all([
+            new Response(proc.stdout).text(),
+            new Response(proc.stderr).text(),
+            proc.exited,
+        ]);
         return { stdout, exitCode: proc.exitCode, stderr };
     };
 
     let result = await runMeta();
 
     if (result.exitCode !== 0) {
-        logger.warn({ url, proxied: proxy !== undefined, stderr: result.stderr.trim() }, "yt-dlp metadata fetch failed, attempting update");
+        logger.warn(
+            { url, proxied: proxy !== undefined, stderr: result.stderr.trim() },
+            "yt-dlp metadata fetch failed, attempting update",
+        );
 
         // Bot detection with a proxy: retry to rotate the proxy IP
         if (proxy && result.stderr.includes(BOT_DETECTION_MSG)) {

@@ -12,7 +12,7 @@ function buildInsertPageStmt(db: Db) {
         .insert(messagePages)
         .values({
             botDiscordMessageId: sql.placeholder("botDiscordMessageId"),
-            firstPageDiscordMessageId: sql.placeholder("firstPageDiscordMessageId"),
+            firstPageMessageId: sql.placeholder("firstPageMessageId"),
             endOffset: sql.placeholder("endOffset"),
             currentPage: sql.placeholder("currentPage"),
             totalPages: sql.placeholder("totalPages"),
@@ -38,7 +38,7 @@ function buildFindByBotMessageIdStmt(db: Db) {
  *
  * Tracks pending "next page" state for paginated bot responses.
  * Each row corresponds to one bot message currently displaying a Next Page button.
- * firstPageDiscordMessageId always points to the first page's messages row, where the
+ * firstPageMessageId always points to the first page's messages row, where the
  * LangChain content is stored, regardless of which page number this row represents.
  */
 export class PgMessagePageRepository implements IMessagePageRepository {
@@ -61,7 +61,7 @@ export class PgMessagePageRepository implements IMessagePageRepository {
                 attributes: {
                     "db.table": "message_pages",
                     "discord.message_id": page.botDiscordMessageId,
-                    "discord.first_page_message_id": page.firstPageDiscordMessageId,
+                    "discord.first_page_message_id": page.firstPageMessageId,
                     "app.current_page": page.currentPage,
                     "app.total_pages": page.totalPages,
                 },
@@ -70,7 +70,7 @@ export class PgMessagePageRepository implements IMessagePageRepository {
                 try {
                     const [result] = await this.stmtInsertPage.execute({
                         botDiscordMessageId: page.botDiscordMessageId,
-                        firstPageDiscordMessageId: page.firstPageDiscordMessageId,
+                        firstPageMessageId: page.firstPageMessageId,
                         endOffset: page.endOffset,
                         currentPage: page.currentPage,
                         totalPages: page.totalPages,
@@ -85,7 +85,7 @@ export class PgMessagePageRepository implements IMessagePageRepository {
                     this.logger.debug(
                         {
                             botDiscordMessageId: page.botDiscordMessageId,
-                            firstPageDiscordMessageId: page.firstPageDiscordMessageId,
+                            firstPageMessageId: page.firstPageMessageId,
                             page: page.currentPage,
                         },
                         "Saved message page",

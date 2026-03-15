@@ -164,22 +164,27 @@ describe("PgGeminiApiKeyRepository.deactivateNotIn", () => {
 
     test("preserves associated gemini_file_uploads rows when a key is deactivated", async () => {
         // Minimal message → file anchor → upload chain
-        await db.insert(messages).values({
-            discordMessageId: "msg-deactivate-test",
-            repliesToDiscordId: null,
-            channelId: "ch-test",
-            guildId: null,
-            role: "human",
-            // TYPE COERCION: empty array satisfies the column type for test isolation
-            langchainMessages: [] as unknown as Record<string, unknown>[],
-        });
+        const [msgRow] = await db
+            .insert(messages)
+            .values({
+                discordMessageId: "msg-deactivate-test",
+                repliesToDiscordId: null,
+                channelId: "ch-test",
+                guildId: "@me",
+                role: "human",
+                // TYPE COERCION: empty array satisfies the column type for test isolation
+                langchainMessages: [] as unknown as Record<string, unknown>[],
+            })
+            .returning();
+        if (!msgRow) throw new Error("Failed to insert test message");
         const [fileRow] = await db
             .insert(geminiFiles)
             .values({
                 originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/deactivate-test",
                 discordAttachmentId: "att-deactivate",
                 discordFilename: "test.png",
-                messageDiscordId: "msg-deactivate-test",
+                messageId: msgRow.id,
+                discordMessageId: "msg-deactivate-test",
             })
             .returning();
         if (!fileRow) throw new Error("Failed to insert test gemini file");

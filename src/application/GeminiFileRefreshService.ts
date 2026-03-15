@@ -201,13 +201,13 @@ export class GeminiFileRefreshService {
             },
             async () => {
                 // Re-fetch the Discord attachment to get a fresh CDN URL
-                const attachment = await refetcher.fetchAttachment(file.messageDiscordId, file.discordAttachmentId);
+                const attachment = await refetcher.fetchAttachment(file.discordMessageId, file.discordAttachmentId);
 
                 if (!attachment) {
                     this.logger.warn(
                         {
                             discordAttachmentId: file.discordAttachmentId,
-                            messageDiscordId: file.messageDiscordId,
+                            discordMessageId: file.discordMessageId,
                         },
                         "Discord attachment no longer exists; removing block from history",
                     );

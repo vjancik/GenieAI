@@ -34,6 +34,7 @@ function makeRepo(chainMessages: DiscordMessage[] = []): IMessageRepository {
             createdAt: new Date(),
         })),
         fetchChain: mock(async () => chainMessages),
+        findById: mock(async () => null),
         findByDiscordMessageId: mock(async () => null),
     };
 }
@@ -93,7 +94,7 @@ describe("HandleDiscordMention.handle", () => {
             discordMessageId: "user-msg-1",
             referencedMessageId: null,
             channelId: "ch-1",
-            guildId: null,
+            guildId: "@me",
             userContent: "Hello",
             attachments: [],
             intent: MessageIntent.UNKNOWN,
@@ -155,7 +156,7 @@ describe("HandleDiscordMention.handle", () => {
             discordMessageId: "user-msg-1",
             referencedMessageId: null,
             channelId: "ch-1",
-            guildId: null,
+            guildId: "@me",
             userContent: "Hello",
             attachments: [],
             intent: MessageIntent.UNKNOWN,
@@ -177,7 +178,7 @@ describe("HandleDiscordMention.handle", () => {
             discordMessageId: "user-msg-1",
             referencedMessageId: null,
             channelId: "ch-1",
-            guildId: null,
+            guildId: "@me",
             userContent: "Hello",
             attachments: [],
             intent: MessageIntent.UNKNOWN,
@@ -234,7 +235,7 @@ describe("HandleDiscordMention.handle", () => {
             discordMessageId: "user-msg-1",
             referencedMessageId: null,
             channelId: "ch-1",
-            guildId: null,
+            guildId: "@me",
             userContent: "Here are files",
             attachments: [
                 {
@@ -265,7 +266,7 @@ describe("HandleDiscordMention.handle", () => {
             discordMessageId: "user-msg-1",
             referencedMessageId: null,
             channelId: "ch-1",
-            guildId: null,
+            guildId: "@me",
             userContent: "What's in this image?",
             attachments: [
                 {

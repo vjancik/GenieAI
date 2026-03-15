@@ -28,6 +28,9 @@ import { InteractionLock } from "./InteractionLock.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
 import { discordMessageToLlmText } from "./textTransformers.ts";
 
+/** Sentinel value stored as guild_id for DM messages, which have no guild. */
+const DM_GUILD_TOKEN = "@me";
+
 /** Custom ID for the Retry button attached to failed bot responses. */
 const RETRY_BUTTON_ID = "retry_mention";
 
@@ -339,17 +342,17 @@ export class DiscordGateway {
             });
 
             // messages row must exist before messagePageRepo.save (FK constraint)
-            await this.messageHandler.saveBotResponse({
+            const savedBotMsg = await this.messageHandler.saveBotResponse({
                 botDiscordMessageId: botReply.id,
                 repliesToDiscordId: replyTarget.id,
                 channelId: botReply.channelId,
-                guildId: botReply.guildId,
+                guildId: botReply.guildId ?? DM_GUILD_TOKEN,
                 newMessages,
             });
-            // firstPageDiscordMessageId = botReply.id for the first page (same message)
+            // firstPageMessageId = UUID of the saved messages row for the first page
             await this.messagePageRepo.save({
                 botDiscordMessageId: botReply.id,
-                firstPageDiscordMessageId: botReply.id,
+                firstPageMessageId: savedBotMsg.id,
                 endOffset: newOffset,
                 currentPage: 1,
                 totalPages,
@@ -369,7 +372,7 @@ export class DiscordGateway {
                 botDiscordMessageId: botReply.id,
                 repliesToDiscordId: replyTarget.id,
                 channelId: botReply.channelId,
-                guildId: botReply.guildId,
+                guildId: botReply.guildId ?? DM_GUILD_TOKEN,
                 newMessages,
             });
         }
@@ -447,7 +450,11 @@ export class DiscordGateway {
                     // Check whether the human message was already saved to DB.
                     // If it was, the failure was in the orchestrator (Scenario A).
                     // If not, the failure was earlier in the pipeline (Scenario B).
-                    const humanRecord = await this.messageRepo.findByDiscordMessageId(originalMessage.id);
+                    const humanRecord = await this.messageRepo.findByDiscordMessageId({
+                        discordMessageId: originalMessage.id,
+                        channelId: originalMessage.channelId,
+                        guildId: originalMessage.guildId ?? DM_GUILD_TOKEN,
+                    });
 
                     if (humanRecord) {
                         // --- Scenario A: human message exists, re-run orchestration only ---
@@ -593,19 +600,19 @@ export class DiscordGateway {
                         botDiscordMessageId: newBotMessage.id,
                         repliesToDiscordId: currentBotMessageId,
                         channelId: newBotMessage.channelId,
-                        guildId: newBotMessage.guildId,
+                        guildId: newBotMessage.guildId ?? DM_GUILD_TOKEN,
                         newMessages: [],
                     });
 
                     await Promise.allSettled([
                         // Save new pending page state if there are more pages after this one.
-                        // firstPageDiscordMessageId is propagated from the page state so all rows
+                        // firstPageMessageId is propagated from the page state so all rows
                         // in this response chain point to the same first-page messages row.
                         !result.isLast
                             ? this.messagePageRepo
                                   .save({
                                       botDiscordMessageId: newBotMessage.id,
-                                      firstPageDiscordMessageId: result.firstPageDiscordMessageId,
+                                      firstPageMessageId: result.firstPageMessageId,
                                       endOffset: result.newOffset,
                                       currentPage: result.currentPage,
                                       totalPages: result.totalPages,
@@ -692,7 +699,7 @@ export class DiscordGateway {
                 attributes: {
                     "discord.message_id": message.id,
                     "discord.channel_id": message.channelId,
-                    "discord.guild_id": message.guildId ?? undefined,
+                    "discord.guild_id": message.guildId ?? DM_GUILD_TOKEN,
                     "discord.attachment_count": attachments.length,
                     "discord.has_reply": message.reference?.messageId !== undefined,
                 },
@@ -747,7 +754,7 @@ export class DiscordGateway {
                         discordMessageId: message.id,
                         referencedMessageId: message.reference?.messageId ?? null,
                         channelId: message.channelId,
-                        guildId: message.guildId,
+                        guildId: message.guildId ?? DM_GUILD_TOKEN,
                         userContent: llmContent,
                         attachments,
                         intent,

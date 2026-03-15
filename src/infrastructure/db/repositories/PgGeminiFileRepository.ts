@@ -17,7 +17,8 @@ function buildInsertFileStmt(db: Db) {
             originalGeminiUrl: sql.placeholder("originalGeminiUrl"),
             discordAttachmentId: sql.placeholder("discordAttachmentId"),
             discordFilename: sql.placeholder("discordFilename"),
-            messageDiscordId: sql.placeholder("messageDiscordId"),
+            messageId: sql.placeholder("messageId"),
+            discordMessageId: sql.placeholder("discordMessageId"),
         })
         .onConflictDoNothing()
         .returning()
@@ -48,7 +49,8 @@ function buildFindWithUploadStateStmt(db: Db) {
             fileOriginalGeminiUrl: geminiFiles.originalGeminiUrl,
             fileDiscordAttachmentId: geminiFiles.discordAttachmentId,
             fileDiscordFilename: geminiFiles.discordFilename,
-            fileMessageDiscordId: geminiFiles.messageDiscordId,
+            fileMessageId: geminiFiles.messageId,
+            fileDiscordMessageId: geminiFiles.discordMessageId,
             uploadId: geminiFileUploads.id,
             uploadGeminiFileId: geminiFileUploads.geminiFileId,
             uploadApiKeyId: geminiFileUploads.apiKeyId,
@@ -151,7 +153,8 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                         originalGeminiUrl: record.originalGeminiUrl,
                         discordAttachmentId: record.discordAttachmentId,
                         discordFilename: record.discordFilename,
-                        messageDiscordId: record.messageDiscordId,
+                        messageId: record.messageId,
+                        discordMessageId: record.discordMessageId,
                     });
 
                     if (inserted) {
@@ -164,7 +167,8 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                             originalGeminiUrl: inserted.originalGeminiUrl,
                             discordAttachmentId: inserted.discordAttachmentId,
                             discordFilename: inserted.discordFilename,
-                            messageDiscordId: inserted.messageDiscordId,
+                            messageId: inserted.messageId,
+                            discordMessageId: inserted.discordMessageId,
                         };
                     }
 
@@ -192,7 +196,8 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                         originalGeminiUrl: existing.originalGeminiUrl,
                         discordAttachmentId: existing.discordAttachmentId,
                         discordFilename: existing.discordFilename,
-                        messageDiscordId: existing.messageDiscordId,
+                        messageId: existing.messageId,
+                        discordMessageId: existing.discordMessageId,
                     };
                 } catch (err) {
                     if (err instanceof DatabaseError) throw err;
@@ -251,7 +256,8 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                             originalGeminiUrl: row.fileOriginalGeminiUrl,
                             discordAttachmentId: row.fileDiscordAttachmentId,
                             discordFilename: row.fileDiscordFilename,
-                            messageDiscordId: row.fileMessageDiscordId,
+                            messageId: row.fileMessageId,
+                            discordMessageId: row.fileDiscordMessageId,
                         };
 
                         // Presence of uploadId indicates a matching upload row was found

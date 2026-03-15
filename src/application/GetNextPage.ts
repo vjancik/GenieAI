@@ -25,11 +25,11 @@ export interface GetNextPageResult {
     /** Primary key of the {@link MessagePage} row that was looked up. */
     pageStateId: string;
     /**
-     * Discord snowflake of the first page bot message for this paginated response.
+     * UUID primary key of the first page bot message row in the messages table.
      * Must be passed to {@link IMessagePageRepository.save} for subsequent pages so they
      * all reference the first page's messages row (where the LangChain content lives).
      */
-    firstPageDiscordMessageId: string;
+    firstPageMessageId: string;
     /**
      * True when this page ended mid-way through a fenced code block.
      * The next page's state row must record this so the following page can prepend
@@ -110,12 +110,12 @@ export class GetNextPage {
         }
 
         // Step 2: Fetch the stored messages row to get the LangChain message JSON.
-        // firstPageDiscordMessageId always points to the first page's messages row regardless
+        // firstPageMessageId always points to the first page's messages row regardless
         // of which page number this page state represents — the LangChain content lives there.
-        const msgRecord = await this.messageRepo.findByDiscordMessageId(pageState.firstPageDiscordMessageId);
+        const msgRecord = await this.messageRepo.findById(pageState.firstPageMessageId);
         if (!msgRecord) {
             this.logger.warn(
-                { botDiscordMessageId, firstPageDiscordMessageId: pageState.firstPageDiscordMessageId },
+                { botDiscordMessageId, firstPageMessageId: pageState.firstPageMessageId },
                 "Message record not found for first page of paginated bot message",
             );
             return null;
@@ -155,7 +155,7 @@ export class GetNextPage {
             totalPages,
             isLast,
             pageStateId: pageState.id,
-            firstPageDiscordMessageId: pageState.firstPageDiscordMessageId,
+            firstPageMessageId: pageState.firstPageMessageId,
             endedInCodeBlock: nextEndedInCodeBlock,
             codeBlockType: nextCodeBlockType,
         };

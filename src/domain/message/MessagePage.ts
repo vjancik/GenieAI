@@ -2,7 +2,7 @@
  * Domain entity for a pending "next page" action on a paginated bot response.
  *
  * One row exists per page that has been sent with a Next Page button displayed.
- * All rows for the same paginated response share the same firstPageDiscordMessageId,
+ * All rows for the same paginated response share the same firstPageMessageId,
  * which points to the messages row holding the LangChain content.
  */
 export interface MessagePage {
@@ -14,11 +14,11 @@ export interface MessagePage {
      */
     botDiscordMessageId: string;
     /**
-     * Discord snowflake of the FIRST page bot message for this paginated response.
+     * UUID primary key of the first page bot message row in the messages table.
      * All page rows for a response share this ID — the LangChain content lives on
      * the first page's messages row and must be referenced for all subsequent pages.
      */
-    firstPageDiscordMessageId: string;
+    firstPageMessageId: string;
     /** Character offset in the full transformed response text where the next page begins */
     endOffset: number;
     /** 1-based page number currently displayed to the user */

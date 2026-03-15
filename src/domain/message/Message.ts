@@ -24,7 +24,8 @@ export interface DiscordMessage {
     /** Discord snowflake of the message this replies to, or null if chain root */
     repliesToDiscordId: string | null;
     channelId: string;
-    guildId: string | null;
+    /** Discord guild snowflake, or "@me" for DMs */
+    guildId: string;
     role: MessageRole;
     /**
      * Serialized LangChain BaseMessage objects (output of BaseMessage.toJSON()).

@@ -1,0 +1,1 @@
+ALTER TABLE "messages" ALTER COLUMN "guild_id" SET NOT NULL;

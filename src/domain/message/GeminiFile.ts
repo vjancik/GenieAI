@@ -3,7 +3,7 @@
  *
  * Each row corresponds to one Discord attachment that was ever uploaded to the
  * Gemini Files API. This entity is NEVER deleted — it holds the immutable Discord
- * context (discordAttachmentId, discordFilename, messageDiscordId) needed to
+ * context (discordAttachmentId, discordFilename, messageId, discordMessageId) needed to
  * re-download and re-upload the file if it must be refreshed for a different API key.
  *
  * The `originalGeminiUrl` is the URI returned at the very first upload. It is
@@ -23,6 +23,8 @@ export interface GeminiFile {
     discordAttachmentId: string;
     /** Original filename as uploaded by the user in Discord. Used as displayName on re-upload. */
     discordFilename: string;
-    /** Discord message snowflake of the message that originally uploaded this file. */
-    messageDiscordId: string;
+    /** UUID primary key of the messages row that originally created this upload. FK → messages(id). */
+    messageId: string;
+    /** Discord message snowflake of the message that originally uploaded this file. Used to re-fetch from Discord CDN. */
+    discordMessageId: string;
 }

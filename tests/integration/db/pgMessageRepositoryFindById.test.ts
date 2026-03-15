@@ -50,7 +50,11 @@ function messagePayload(
 
 describe("PgMessageRepository.findByDiscordMessageId", () => {
     test("returns null for a non-existent discordMessageId", async () => {
-        const result = await repo.findByDiscordMessageId("does-not-exist");
+        const result = await repo.findByDiscordMessageId({
+            discordMessageId: "does-not-exist",
+            channelId: "ch-001",
+            guildId: "guild-001",
+        });
         expect(result).toBeNull();
     });
 
@@ -58,7 +62,11 @@ describe("PgMessageRepository.findByDiscordMessageId", () => {
         const payload = messagePayload({ discordMessageId: "find-001" });
         await repo.save(payload);
 
-        const result = await repo.findByDiscordMessageId("find-001");
+        const result = await repo.findByDiscordMessageId({
+            discordMessageId: "find-001",
+            channelId: "ch-001",
+            guildId: "guild-001",
+        });
 
         expect(result).not.toBeNull();
         expect(result?.discordMessageId).toBe("find-001");
@@ -73,7 +81,11 @@ describe("PgMessageRepository.findByDiscordMessageId", () => {
         await repo.save(messagePayload({ discordMessageId: "multi-B" }));
         await repo.save(messagePayload({ discordMessageId: "multi-C" }));
 
-        const result = await repo.findByDiscordMessageId("multi-B");
+        const result = await repo.findByDiscordMessageId({
+            discordMessageId: "multi-B",
+            channelId: "ch-001",
+            guildId: "guild-001",
+        });
 
         expect(result?.discordMessageId).toBe("multi-B");
     });
@@ -87,7 +99,11 @@ describe("PgMessageRepository.findByDiscordMessageId", () => {
             }),
         );
 
-        const result = await repo.findByDiscordMessageId("rt-001");
+        const result = await repo.findByDiscordMessageId({
+            discordMessageId: "rt-001",
+            channelId: "ch-001",
+            guildId: "guild-001",
+        });
 
         expect(result?.langchainMessages).toHaveLength(1);
         // Verify structure matches what was stored (kwargs.content holds the text)

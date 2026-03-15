@@ -700,6 +700,9 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 toolResult = await this.getVideoTranscriptionTool.invoke(toolCall.args as { urls: string[] });
             }
 
+            // TODO: distinguish between partial / total tool failures and don't forward to general if the tool call is a complete failure as Gemini loves to make stuff up when it has no context. Either respond to user directly or insert a message with instructions that the model should report to the user the retrieval failed.
+            // TODO: add structured content
+
             const toolMessage = new ToolMessage({
                 content: toolResult,
                 name: toolCall.name,

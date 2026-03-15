@@ -1,1 +1,0 @@
-ALTER TABLE "gemini_api_keys" ADD COLUMN "is_active" boolean DEFAULT true NOT NULL;

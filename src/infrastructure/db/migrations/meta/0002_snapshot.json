@@ -1,6 +1,6 @@
 {
-    "id": "b3ca923e-4892-4845-bd26-cfc238cc3792",
-    "prevId": "62dc6a4c-1c61-4c32-a210-2551072a8f40",
+    "id": "20359453-ea55-4172-812c-f977118706f3",
+    "prevId": "9a60bc53-001c-4aee-a644-5e9c6d7391ec",
     "version": "7",
     "dialect": "postgresql",
     "tables": {
@@ -13,7 +13,7 @@
                     "type": "uuid",
                     "primaryKey": true,
                     "notNull": true,
-                    "default": "gen_random_uuid()"
+                    "default": "uuidv7()"
                 },
                 "api_key": {
                     "name": "api_key",
@@ -36,7 +36,7 @@
                 },
                 "created_at": {
                     "name": "created_at",
-                    "type": "timestamp",
+                    "type": "timestamp with time zone",
                     "primaryKey": false,
                     "notNull": true,
                     "default": "now()"
@@ -65,7 +65,7 @@
                     "type": "uuid",
                     "primaryKey": true,
                     "notNull": true,
-                    "default": "gen_random_uuid()"
+                    "default": "uuidv7()"
                 },
                 "gemini_file_id": {
                     "name": "gemini_file_id",
@@ -93,7 +93,7 @@
                 },
                 "uploaded_at": {
                     "name": "uploaded_at",
-                    "type": "timestamp",
+                    "type": "timestamp with time zone",
                     "primaryKey": false,
                     "notNull": true
                 }
@@ -177,7 +177,7 @@
                     "type": "uuid",
                     "primaryKey": true,
                     "notNull": true,
-                    "default": "gen_random_uuid()"
+                    "default": "uuidv7()"
                 },
                 "original_gemini_url": {
                     "name": "original_gemini_url",
@@ -197,8 +197,14 @@
                     "primaryKey": false,
                     "notNull": true
                 },
-                "message_discord_id": {
-                    "name": "message_discord_id",
+                "message_id": {
+                    "name": "message_id",
+                    "type": "uuid",
+                    "primaryKey": false,
+                    "notNull": true
+                },
+                "discord_message_id": {
+                    "name": "discord_message_id",
                     "type": "text",
                     "primaryKey": false,
                     "notNull": true
@@ -206,12 +212,12 @@
             },
             "indexes": {},
             "foreignKeys": {
-                "gemini_files_message_discord_id_messages_discord_message_id_fk": {
-                    "name": "gemini_files_message_discord_id_messages_discord_message_id_fk",
+                "gemini_files_message_id_messages_id_fk": {
+                    "name": "gemini_files_message_id_messages_id_fk",
                     "tableFrom": "gemini_files",
                     "tableTo": "messages",
-                    "columnsFrom": ["message_discord_id"],
-                    "columnsTo": ["discord_message_id"],
+                    "columnsFrom": ["message_id"],
+                    "columnsTo": ["id"],
                     "onDelete": "cascade",
                     "onUpdate": "no action"
                 }
@@ -228,6 +234,92 @@
             "checkConstraints": {},
             "isRLSEnabled": false
         },
+        "public.message_pages": {
+            "name": "message_pages",
+            "schema": "",
+            "columns": {
+                "id": {
+                    "name": "id",
+                    "type": "uuid",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "default": "uuidv7()"
+                },
+                "bot_discord_message_id": {
+                    "name": "bot_discord_message_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true
+                },
+                "first_page_message_id": {
+                    "name": "first_page_message_id",
+                    "type": "uuid",
+                    "primaryKey": false,
+                    "notNull": true
+                },
+                "end_offset": {
+                    "name": "end_offset",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true
+                },
+                "current_page": {
+                    "name": "current_page",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true
+                },
+                "total_pages": {
+                    "name": "total_pages",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true
+                },
+                "ended_in_code_block": {
+                    "name": "ended_in_code_block",
+                    "type": "boolean",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "default": false
+                },
+                "code_block_type": {
+                    "name": "code_block_type",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "default": "now()"
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {
+                "message_pages_first_page_message_id_messages_id_fk": {
+                    "name": "message_pages_first_page_message_id_messages_id_fk",
+                    "tableFrom": "message_pages",
+                    "tableTo": "messages",
+                    "columnsFrom": ["first_page_message_id"],
+                    "columnsTo": ["id"],
+                    "onDelete": "cascade",
+                    "onUpdate": "no action"
+                }
+            },
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {
+                "message_pages_bot_discord_message_id_unique": {
+                    "name": "message_pages_bot_discord_message_id_unique",
+                    "nullsNotDistinct": false,
+                    "columns": ["bot_discord_message_id"]
+                }
+            },
+            "policies": {},
+            "checkConstraints": {},
+            "isRLSEnabled": false
+        },
         "public.messages": {
             "name": "messages",
             "schema": "",
@@ -237,7 +329,7 @@
                     "type": "uuid",
                     "primaryKey": true,
                     "notNull": true,
-                    "default": "gen_random_uuid()"
+                    "default": "uuidv7()"
                 },
                 "discord_message_id": {
                     "name": "discord_message_id",
@@ -261,7 +353,7 @@
                     "name": "guild_id",
                     "type": "text",
                     "primaryKey": false,
-                    "notNull": false
+                    "notNull": true
                 },
                 "role": {
                     "name": "role",
@@ -277,22 +369,44 @@
                 },
                 "created_at": {
                     "name": "created_at",
-                    "type": "timestamp",
+                    "type": "timestamp with time zone",
                     "primaryKey": false,
                     "notNull": true,
                     "default": "now()"
                 }
             },
-            "indexes": {},
-            "foreignKeys": {},
-            "compositePrimaryKeys": {},
-            "uniqueConstraints": {
-                "messages_discord_message_id_unique": {
-                    "name": "messages_discord_message_id_unique",
-                    "nullsNotDistinct": false,
-                    "columns": ["discord_message_id"]
+            "indexes": {
+                "messages_guild_channel_discord_id_idx": {
+                    "name": "messages_guild_channel_discord_id_idx",
+                    "columns": [
+                        {
+                            "expression": "guild_id",
+                            "isExpression": false,
+                            "asc": true,
+                            "nulls": "last"
+                        },
+                        {
+                            "expression": "channel_id",
+                            "isExpression": false,
+                            "asc": true,
+                            "nulls": "last"
+                        },
+                        {
+                            "expression": "discord_message_id",
+                            "isExpression": false,
+                            "asc": true,
+                            "nulls": "last"
+                        }
+                    ],
+                    "isUnique": true,
+                    "concurrently": false,
+                    "method": "btree",
+                    "with": {}
                 }
             },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
             "policies": {},
             "checkConstraints": {},
             "isRLSEnabled": false

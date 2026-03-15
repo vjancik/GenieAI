@@ -1,5 +1,5 @@
 import * as Sentry from "@sentry/bun";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Logger } from "../../../application/types/Logger.ts";
 import { DatabaseError } from "../../../domain/errors/AppError.ts";
 import type { IMessageRepository } from "../../../domain/message/IMessageRepository.ts";
@@ -7,14 +7,34 @@ import type { DiscordMessage } from "../../../domain/message/Message.ts";
 import type { Db } from "../connection.ts";
 import { messages } from "../schema.ts";
 
-/** Prepared statement: fetch a single message by its Discord message ID. */
-function buildFindByDiscordMessageIdStmt(db: Db) {
+/** Prepared statement: fetch a single message by its UUID primary key. */
+function buildFindByIdStmt(db: Db) {
     return db
         .select()
         .from(messages)
-        .where(eq(messages.discordMessageId, sql.placeholder("discordMessageId")))
+        .where(eq(messages.id, sql.placeholder("id")))
         .limit(1)
-        .prepare("message_find_by_discord_id");
+        .prepare("message_find_by_id");
+}
+
+/**
+ * Prepared statement: fetch a single message by the (guildId, channelId, discordMessageId) triple.
+ * Only usable for guild messages where guildId IS NOT NULL. DM lookups (guildId IS NULL)
+ * require a separate dynamic query since prepared statements cannot switch between = ? and IS NULL.
+ */
+function buildFindByDiscordMessageIdGuildStmt(db: Db) {
+    return db
+        .select()
+        .from(messages)
+        .where(
+            and(
+                eq(messages.guildId, sql.placeholder("guildId")),
+                eq(messages.channelId, sql.placeholder("channelId")),
+                eq(messages.discordMessageId, sql.placeholder("discordMessageId")),
+            ),
+        )
+        .limit(1)
+        .prepare("message_find_by_discord_id_guild");
 }
 
 /** Prepared statement: insert a new message row and return it. */
@@ -45,14 +65,16 @@ function buildInsertMessageStmt(db: Db) {
  */
 export class PgMessageRepository implements IMessageRepository {
     private readonly stmtInsertMessage: ReturnType<typeof buildInsertMessageStmt>;
-    private readonly stmtFindByDiscordMessageId: ReturnType<typeof buildFindByDiscordMessageIdStmt>;
+    private readonly stmtFindById: ReturnType<typeof buildFindByIdStmt>;
+    private readonly stmtFindByDiscordMessageIdGuild: ReturnType<typeof buildFindByDiscordMessageIdGuildStmt>;
 
     constructor(
         private readonly db: Db,
         private readonly logger: Logger,
     ) {
         this.stmtInsertMessage = buildInsertMessageStmt(db);
-        this.stmtFindByDiscordMessageId = buildFindByDiscordMessageIdStmt(db);
+        this.stmtFindById = buildFindByIdStmt(db);
+        this.stmtFindByDiscordMessageIdGuild = buildFindByDiscordMessageIdGuildStmt(db);
     }
 
     async save(msg: Omit<DiscordMessage, "id" | "createdAt">): Promise<DiscordMessage> {
@@ -99,30 +121,73 @@ export class PgMessageRepository implements IMessageRepository {
         );
     }
 
-    async findByDiscordMessageId(discordMessageId: string): Promise<DiscordMessage | null> {
+    async findById(id: string): Promise<DiscordMessage | null> {
+        return Sentry.startSpan(
+            {
+                name: "Find message by ID",
+                op: "db.query",
+                attributes: { "db.table": "messages", "db.message_id": id },
+            },
+            async () => {
+                try {
+                    const [result] = await this.stmtFindById.execute({ id });
+                    if (!result) return null;
+                    return {
+                        id: result.id,
+                        discordMessageId: result.discordMessageId,
+                        repliesToDiscordId: result.repliesToDiscordId ?? null,
+                        channelId: result.channelId,
+                        guildId: result.guildId,
+                        role: result.role,
+                        // TYPE COERCION: the parsed value's shape matches DiscordMessage["langchainMessages"]
+                        // by construction (it was stored from BaseMessage.toJSON()), but TS cannot verify it.
+                        langchainMessages: (typeof result.langchainMessages === "string"
+                            ? JSON.parse(result.langchainMessages)
+                            : result.langchainMessages) as DiscordMessage["langchainMessages"],
+                        createdAt: result.createdAt,
+                    };
+                } catch (err) {
+                    Sentry.captureException(err);
+                    throw new DatabaseError("Failed to find message by ID", err);
+                }
+            },
+        );
+    }
+
+    async findByDiscordMessageId(lookup: {
+        discordMessageId: string;
+        channelId: string;
+        guildId: string;
+    }): Promise<DiscordMessage | null> {
         return Sentry.startSpan(
             {
                 name: "Find message by Discord ID",
                 op: "db.query",
                 attributes: {
                     "db.table": "messages",
-                    "discord.message_id": discordMessageId,
+                    "discord.message_id": lookup.discordMessageId,
+                    "discord.channel_id": lookup.channelId,
+                    "discord.guild_id": lookup.guildId,
                 },
             },
             async () => {
                 try {
-                    const [result] = await this.stmtFindByDiscordMessageId.execute({ discordMessageId });
+                    const [result] = await this.stmtFindByDiscordMessageIdGuild.execute({
+                        guildId: lookup.guildId,
+                        channelId: lookup.channelId,
+                        discordMessageId: lookup.discordMessageId,
+                    });
 
                     if (!result) return null;
 
-                    this.logger.debug({ discordMessageId }, "Found message by Discord ID");
+                    this.logger.debug(lookup, "Found message by Discord ID");
 
                     return {
                         id: result.id,
                         discordMessageId: result.discordMessageId,
                         repliesToDiscordId: result.repliesToDiscordId ?? null,
                         channelId: result.channelId,
-                        guildId: result.guildId ?? null,
+                        guildId: result.guildId,
                         role: result.role,
                         // langchain_messages is a JSON column; Bun's SQL driver may return it as either a
                         // pre-parsed JS value or a raw JSON string — handle both cases defensively.
@@ -193,7 +258,7 @@ export class PgMessageRepository implements IMessageRepository {
                         discordMessageId: row.discord_message_id as string,
                         repliesToDiscordId: (row.replies_to_discord_id as string | null) ?? null,
                         channelId: row.channel_id as string,
-                        guildId: (row.guild_id as string | null) ?? null,
+                        guildId: row.guild_id as string,
                         role: row.role as DiscordMessage["role"],
                         // langchain_messages is a JSON column; Bun's SQL driver may return it as either a
                         // pre-parsed JS value or a raw JSON string — handle both cases defensively.

@@ -5,6 +5,7 @@ import { HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import type { GeminiFile } from "../domain/message/GeminiFile.ts";
 import type { IMessageRepository } from "../domain/message/IMessageRepository.ts";
+import type { DiscordMessage } from "../domain/message/Message.ts";
 import type { MessageIntent } from "../domain/message/MessageIntent.ts";
 import type { AppConfig } from "./config/AppConfig.ts";
 import type { IAgentOrchestrator } from "./ports/IAgentOrchestrator.ts";
@@ -30,7 +31,8 @@ const UPLOAD_TEMP_DIR = "/var/tmp/genie-attachments";
  * - `uploadData` → upserted into `gemini_file_uploads` (ephemeral, per-key)
  */
 type PendingGeminiRecord = {
-    fileAnchor: Omit<GeminiFile, "id">;
+    /** fileAnchor excludes id and messageId — messageId is filled in after the message row is saved (FK requires UUID PK). */
+    fileAnchor: Omit<GeminiFile, "id" | "messageId">;
     uploadData: {
         geminiFileName: string;
         geminiUrl: string;
@@ -79,7 +81,7 @@ export class HandleDiscordMessage {
      * @param params.discordMessageId - Discord snowflake for the user's message
      * @param params.referencedMessageId - Discord snowflake of the message being replied to, or null
      * @param params.channelId - Discord channel snowflake
-     * @param params.guildId - Discord guild snowflake (null for DMs)
+     * @param params.guildId - Discord guild snowflake, or "@me" for DMs
      * @param params.userContent - Message content with bot mention stripped
      * @param params.attachments - File attachments on the Discord message
      * @param params.onStatusUpdate - Optional callback forwarded to the orchestrator for live status updates
@@ -91,7 +93,7 @@ export class HandleDiscordMessage {
         discordMessageId: string;
         referencedMessageId: string | null;
         channelId: string;
-        guildId: string | null;
+        guildId: string;
         userContent: string;
         attachments: DiscordAttachmentInfo[];
         intent: MessageIntent;
@@ -171,7 +173,7 @@ export class HandleDiscordMessage {
                     );
 
                     // Persist the user's message first so gemini_files FK is satisfied.
-                    await this.messageRepo.save({
+                    const savedUserMsg = await this.messageRepo.save({
                         discordMessageId: params.discordMessageId,
                         repliesToDiscordId: params.referencedMessageId,
                         channelId: params.channelId,
@@ -195,7 +197,11 @@ export class HandleDiscordMessage {
                         const { geminiFileRepo, geminiFileUploader } = this;
                         for (const { fileAnchor, uploadData } of pendingRecords) {
                             // TODO: we might have to delete these files in a catch clause if the handler fails as the originalUrl will never get persisted to langchainMessages and this record will never be selected
-                            const savedFile = await geminiFileRepo.saveFile(fileAnchor);
+                            // Inject the saved message UUID as the FK — messageId was unavailable when fileAnchor was built.
+                            const savedFile = await geminiFileRepo.saveFile({
+                                ...fileAnchor,
+                                messageId: savedUserMsg.id,
+                            });
                             await geminiFileRepo.upsertUpload({
                                 geminiFileId: savedFile.id,
                                 apiKeyId: geminiFileUploader.apiKeyId,
@@ -252,17 +258,17 @@ export class HandleDiscordMessage {
      * @param params.botDiscordMessageId - The Discord ID of the sent bot reply
      * @param params.repliesToDiscordId - The Discord ID of the user message this replies to
      * @param params.channelId - Discord channel snowflake
-     * @param params.guildId - Discord guild snowflake (null for DMs)
+     * @param params.guildId - Discord guild snowflake, or "@me" for DMs
      * @param params.newMessages - All LangChain messages generated during this turn
      */
     async saveBotResponse(params: {
         botDiscordMessageId: string;
         repliesToDiscordId: string;
         channelId: string;
-        guildId: string | null;
+        guildId: string;
         newMessages: BaseMessage[];
-    }): Promise<void> {
-        await Sentry.startSpan(
+    }): Promise<DiscordMessage> {
+        return Sentry.startSpan(
             {
                 name: "Save bot response",
                 op: "app.message.save_bot_response",
@@ -272,7 +278,7 @@ export class HandleDiscordMessage {
                 },
             },
             async () => {
-                await this.messageRepo.save({
+                const saved = await this.messageRepo.save({
                     discordMessageId: params.botDiscordMessageId,
                     repliesToDiscordId: params.repliesToDiscordId,
                     channelId: params.channelId,
@@ -291,6 +297,8 @@ export class HandleDiscordMessage {
                     },
                     "Saved bot response to database",
                 );
+
+                return saved;
             },
         );
     }
@@ -386,8 +394,8 @@ export class HandleDiscordMessage {
      *
      * Temp files are deleted in a try/finally after each upload.
      * Gemini file records are NOT saved here — they are returned as `pendingRecords`
-     * so that `handle()` can persist them after the user message row exists
-     * (required to satisfy the `gemini_files.message_discord_id` FK constraint).
+     * so that `handle()` can persist them after the user message row exists and its
+     * UUID primary key is available (required to satisfy the `gemini_files.message_id` FK).
      */
     private async buildUploadModeMessage(
         discordMessageId: string,
@@ -448,7 +456,7 @@ export class HandleDiscordMessage {
                                 originalGeminiUrl: uploaded.geminiUrl,
                                 discordAttachmentId: attachment.id,
                                 discordFilename: attachment.name,
-                                messageDiscordId: discordMessageId,
+                                discordMessageId,
                             },
                             uploadData: {
                                 geminiFileName: uploaded.geminiFileName,

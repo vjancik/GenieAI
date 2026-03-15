@@ -15,19 +15,27 @@ import type { DiscordMessage } from "../../domain/message/Message.ts";
  *
  * JSON (not JSONB) is used since we never perform key-level operations on this column.
  */
-export const messages = pgTable("messages", {
-    id: uuid("id").primaryKey().default(sql`uuidv7()`),
-    /** The Discord snowflake ID for this message */
-    discordMessageId: text("discord_message_id").notNull().unique(),
-    /** Discord snowflake of the parent message in the reply chain, null for chain root */
-    repliesToDiscordId: text("replies_to_discord_id"),
-    channelId: text("channel_id").notNull(),
-    guildId: text("guild_id"),
-    role: text("role", { enum: ["human", "assistant"] }).notNull(),
-    /** Serialized LangChain BaseMessage objects stored as JSON array */
-    langchainMessages: json("langchain_messages").notNull().$type<DiscordMessage["langchainMessages"]>(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+export const messages = pgTable(
+    "messages",
+    {
+        id: uuid("id").primaryKey().default(sql`uuidv7()`),
+        /** The Discord snowflake ID for this message */
+        discordMessageId: text("discord_message_id").notNull(),
+        /** Discord snowflake of the parent message in the reply chain, null for chain root */
+        repliesToDiscordId: text("replies_to_discord_id"),
+        channelId: text("channel_id").notNull(),
+        /** Discord guild snowflake, or "@me" for DMs */
+        guildId: text("guild_id").notNull(),
+        role: text("role", { enum: ["human", "assistant"] }).notNull(),
+        /** Serialized LangChain BaseMessage objects stored as JSON array */
+        langchainMessages: json("langchain_messages").notNull().$type<DiscordMessage["langchainMessages"]>(),
+        createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    },
+    (table) => [
+        /** Messages are unique per guild+channel+discordMessageId triple */
+        uniqueIndex("messages_guild_channel_discord_id_idx").on(table.guildId, table.channelId, table.discordMessageId),
+    ],
+);
 
 /**
  * Tracks the pending "next page" state for a paginated bot response.
@@ -46,15 +54,15 @@ export const messagePages = pgTable("message_pages", {
      */
     botDiscordMessageId: text("bot_discord_message_id").notNull().unique(),
     /**
-     * Discord snowflake of the FIRST page bot message for this paginated response.
+     * UUID primary key of the FIRST page bot message row in the messages table.
      * All page rows for the same response share this ID — the LangChain content is
      * stored on the first page's messages row and must be referenced for all subsequent pages.
      * Not unique: multiple page rows can point to the same first page message.
-     * FK → messages(discord_message_id) with CASCADE so page rows are cleaned up automatically.
+     * FK → messages(id) with CASCADE so page rows are cleaned up automatically.
      */
-    firstPageDiscordMessageId: text("first_page_discord_message_id")
+    firstPageMessageId: uuid("first_page_message_id")
         .notNull()
-        .references(() => messages.discordMessageId, { onDelete: "cascade" }),
+        .references(() => messages.id, { onDelete: "cascade" }),
     /** Character offset in the full transformed response text where the next page begins */
     endOffset: integer("end_offset").notNull(),
     /** 1-based page number currently displayed to the user */
@@ -104,7 +112,7 @@ export const geminiApiKeys = pgTable("gemini_api_keys", {
  *
  * Each row corresponds to one Discord attachment that has been uploaded at least
  * once. This table is NEVER cleaned — it holds the immutable Discord context
- * (discordAttachmentId, discordFilename, messageDiscordId) needed to re-download
+ * (discordAttachmentId, discordFilename, messageId) needed to re-download
  * the file if it must be refreshed for a different API key.
  *
  * The `original_gemini_url` is the URI returned at the very first upload and is
@@ -122,13 +130,18 @@ export const geminiFiles = pgTable("gemini_files", {
     /** Original filename as uploaded in Discord. Used as displayName on re-upload. */
     discordFilename: text("discord_filename").notNull(),
     /**
-     * Discord message that originally created this upload.
-     * References messages(discord_message_id); ON DELETE CASCADE removes file records
-     * when the originating message is deleted.
+     * UUID primary key of the messages row that originally created this upload.
+     * FK → messages(id); ON DELETE CASCADE removes file records when the originating message is deleted.
      */
-    messageDiscordId: text("message_discord_id")
+    messageId: uuid("message_id")
         .notNull()
-        .references(() => messages.discordMessageId, { onDelete: "cascade" }),
+        .references(() => messages.id, { onDelete: "cascade" }),
+    /**
+     * Discord message snowflake of the message that originally uploaded this file.
+     * Kept as a plain column (no FK) for re-fetching the attachment from the Discord CDN
+     * via IDiscordAttachmentRefetcher — Discord snowflakes are not stored as PKs in our schema.
+     */
+    discordMessageId: text("discord_message_id").notNull(),
 });
 
 /**

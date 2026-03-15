@@ -46,18 +46,24 @@ afterAll(async () => {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/** Inserts a messages row so gemini_files FK is satisfied. */
-async function insertTestMessage(discordMessageId = "trigger-test-msg"): Promise<string> {
-    await db.insert(messages).values({
-        discordMessageId,
-        repliesToDiscordId: null,
-        channelId: "ch-trigger",
-        guildId: null,
-        role: "human",
-        // TYPE COERCION: empty array satisfies the column type for test isolation
-        langchainMessages: [] as unknown as Record<string, unknown>[],
-    });
-    return discordMessageId;
+/** Inserts a messages row so gemini_files FK is satisfied. Returns both UUID and discord message ID. */
+async function insertTestMessage(
+    discordMessageId = "trigger-test-msg",
+): Promise<{ id: string; discordMessageId: string }> {
+    const [row] = await db
+        .insert(messages)
+        .values({
+            discordMessageId,
+            repliesToDiscordId: null,
+            channelId: "ch-trigger",
+            guildId: "@me",
+            role: "human",
+            // TYPE COERCION: empty array satisfies the column type for test isolation
+            langchainMessages: [] as unknown as Record<string, unknown>[],
+        })
+        .returning();
+    if (!row) throw new Error("Failed to insert test message");
+    return { id: row.id, discordMessageId: row.discordMessageId };
 }
 
 /** Inserts a gemini_api_keys row and returns its UUID. */
@@ -69,16 +75,22 @@ async function insertTestApiKey(apiKey = "trigger-test-key"): Promise<string> {
 
 /**
  * Inserts a gemini_files row and returns its UUID.
- * `messageDiscordId` must already exist in the messages table.
+ * `messageId` must be the UUID PK of an existing messages row.
+ * `discordMessageId` is kept for Discord CDN re-fetching.
  */
-async function insertTestFile(originalGeminiUrl: string, messageDiscordId = "trigger-test-msg"): Promise<string> {
+async function insertTestFile(
+    originalGeminiUrl: string,
+    messageId: string,
+    discordMessageId = "trigger-test-msg",
+): Promise<string> {
     const [row] = await db
         .insert(geminiFiles)
         .values({
             originalGeminiUrl,
             discordAttachmentId: `att-${originalGeminiUrl.slice(-4)}`,
             discordFilename: "test.png",
-            messageDiscordId,
+            messageId,
+            discordMessageId,
         })
         .returning();
     if (!row) throw new Error("Failed to insert test gemini file");
@@ -89,17 +101,19 @@ async function insertTestFile(originalGeminiUrl: string, messageDiscordId = "tri
 
 describe("gemini_file_uploads_stale_cleanup trigger", () => {
     test("deletes a stale row (>48h) when a fresh row is inserted", async () => {
-        const msgId = await insertTestMessage();
+        const msg = await insertTestMessage();
         const apiKeyId = await insertTestApiKey();
 
         // Two separate gemini_files so we can have distinct (file, key) pairs
         const staleFileId = await insertTestFile(
             "https://generativelanguage.googleapis.com/v1beta/files/stale-file",
-            msgId,
+            msg.id,
+            msg.discordMessageId,
         );
         const freshFileId = await insertTestFile(
             "https://generativelanguage.googleapis.com/v1beta/files/fresh-file",
-            msgId,
+            msg.id,
+            msg.discordMessageId,
         );
 
         // Step 1: Insert stale row (49h ago).
@@ -136,16 +150,18 @@ describe("gemini_file_uploads_stale_cleanup trigger", () => {
     });
 
     test("does not delete a row that is exactly 47h old (below the 48h threshold)", async () => {
-        const msgId = await insertTestMessage();
+        const msg = await insertTestMessage();
         const apiKeyId = await insertTestApiKey();
 
         const recentFileId = await insertTestFile(
             "https://generativelanguage.googleapis.com/v1beta/files/recent-file",
-            msgId,
+            msg.id,
+            msg.discordMessageId,
         );
         const freshFileId = await insertTestFile(
             "https://generativelanguage.googleapis.com/v1beta/files/another-fresh-file",
-            msgId,
+            msg.id,
+            msg.discordMessageId,
         );
 
         // Insert a "recent" row uploaded 47h ago — within the 48h window, so NOT stale
@@ -176,22 +192,25 @@ describe("gemini_file_uploads_stale_cleanup trigger", () => {
     });
 
     test("deletes multiple stale rows in a single trigger invocation", async () => {
-        const msgId = await insertTestMessage();
+        const msg = await insertTestMessage();
         const apiKeyId1 = await insertTestApiKey("key-stale-1");
         const apiKeyId2 = await insertTestApiKey("key-stale-2");
         const freshApiKeyId = await insertTestApiKey("key-fresh");
 
         const staleFile1Id = await insertTestFile(
             "https://generativelanguage.googleapis.com/v1beta/files/stale-multi-1",
-            msgId,
+            msg.id,
+            msg.discordMessageId,
         );
         const staleFile2Id = await insertTestFile(
             "https://generativelanguage.googleapis.com/v1beta/files/stale-multi-2",
-            msgId,
+            msg.id,
+            msg.discordMessageId,
         );
         const freshFileId = await insertTestFile(
             "https://generativelanguage.googleapis.com/v1beta/files/fresh-multi",
-            msgId,
+            msg.id,
+            msg.discordMessageId,
         );
 
         const staleTime = new Date(Date.now() - 49 * 60 * 60 * 1000);
