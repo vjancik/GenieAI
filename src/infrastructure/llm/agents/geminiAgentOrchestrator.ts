@@ -11,11 +11,11 @@ import {
 import { Command, END, MessagesValue, START, StateGraph, StateSchema } from "@langchain/langgraph";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
-import type { GeminiFileRefreshService } from "../../../application/GeminiFileRefreshService.ts";
 import type { IAgentOrchestrator } from "../../../application/ports/IAgentOrchestrator.ts";
 import type { IDiscordAttachmentFetcher } from "../../../application/ports/IDiscordAttachmentFetcher.ts";
 import type { IFreeKeyProvider } from "../../../application/ports/IFreeKeyProvider.ts";
 import type { IModelProvider } from "../../../application/ports/IModelProvider.ts";
+import type { GeminiFileRefreshService } from "../../../application/services/GeminiFileRefreshService.ts";
 import type { OnStatusUpdate } from "../../../application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../../application/types/AgentStatus.ts";
 import type { Logger } from "../../../application/types/Logger.ts";

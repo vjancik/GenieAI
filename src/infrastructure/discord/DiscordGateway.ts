@@ -11,11 +11,11 @@ import {
     GatewayIntentBits,
     type Message,
 } from "discord.js";
-import { extractWebGroundingChunks, formatGroundingSources } from "../../application/groundingSources.ts";
-import { splitMarkdown } from "../../application/markdownSplitter.ts";
+import { extractWebGroundingChunks, formatGroundingSources } from "../../application/formatters/groundingSources.ts";
+import { splitMarkdown } from "../../application/formatters/markdownSplitter.ts";
+import { llmTextToDiscordText } from "../../application/formatters/textTransformers.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { IDiscordAttachmentFetcher } from "../../application/ports/IDiscordAttachmentFetcher.ts";
-import { llmTextToDiscordText } from "../../application/textTransformers.ts";
 import type { AgentStatusUpdate, OnStatusUpdate } from "../../application/types/AgentStatus.ts";
 import { AgentStatusType, assertNever } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";

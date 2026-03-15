@@ -13,8 +13,8 @@
  * 6. Start Discord gateway
  */
 import * as Sentry from "@sentry/bun";
-import { GeminiApiKeySyncService } from "./application/GeminiApiKeySyncService.ts";
-import { GeminiFileRefreshService } from "./application/GeminiFileRefreshService.ts";
+import { GeminiApiKeySyncService } from "./application/services/GeminiApiKeySyncService.ts";
+import { GeminiFileRefreshService } from "./application/services/GeminiFileRefreshService.ts";
 import { GetNextPageUseCase } from "./application/use-cases/GetNextPage.ts";
 import { HandleDiscordMessageUseCase } from "./application/use-cases/HandleDiscordMessage.ts";
 import { RetryDiscordMessageUseCase } from "./application/use-cases/RetryDiscordMessage.ts";

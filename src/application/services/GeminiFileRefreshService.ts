@@ -3,14 +3,14 @@ import { join } from "node:path";
 import type { BaseMessage, MessageContent } from "@langchain/core/messages";
 import { HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
-import type { GeminiFile } from "../domain/message/GeminiFile.ts";
-import type { GeminiFileUpload } from "../domain/message/GeminiFileUpload.ts";
-import type { AppConfig } from "./config/AppConfig.ts";
-import type { IDiscordAttachmentFetcher } from "./ports/IDiscordAttachmentFetcher.ts";
-import type { IDiskAttachmentDownloader } from "./ports/IDiskAttachmentDownloader.ts";
-import type { IGeminiFileRepository } from "./ports/IGeminiFileRepository.ts";
-import type { IGeminiFileUploaderRegistry } from "./ports/IGeminiFileUploaderRegistry.ts";
-import type { Logger } from "./types/Logger.ts";
+import type { GeminiFile } from "../../domain/message/GeminiFile.ts";
+import type { GeminiFileUpload } from "../../domain/message/GeminiFileUpload.ts";
+import type { AppConfig } from "../config/AppConfig.ts";
+import type { IDiscordAttachmentFetcher } from "../ports/IDiscordAttachmentFetcher.ts";
+import type { IDiskAttachmentDownloader } from "../ports/IDiskAttachmentDownloader.ts";
+import type { IGeminiFileRepository } from "../ports/IGeminiFileRepository.ts";
+import type { IGeminiFileUploaderRegistry } from "../ports/IGeminiFileUploaderRegistry.ts";
+import type { Logger } from "../types/Logger.ts";
 
 /** URL prefix that identifies a Gemini Files API URI in a content block. */
 const GEMINI_URL_PREFIX = "https://generativelanguage.googleapis.com";

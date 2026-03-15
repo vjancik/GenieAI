@@ -1,6 +1,6 @@
-import type { GeminiApiKey } from "../domain/message/GeminiApiKey.ts";
-import type { IGeminiApiKeyRepository } from "./ports/IGeminiApiKeyRepository.ts";
-import type { Logger } from "./types/Logger.ts";
+import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
+import type { IGeminiApiKeyRepository } from "../ports/IGeminiApiKeyRepository.ts";
+import type { Logger } from "../types/Logger.ts";
 
 /**
  * Application service that keeps the `gemini_api_keys` DB table in sync with

@@ -3,7 +3,7 @@ import {
     extractWebGroundingChunks,
     formatGroundingSources,
     type WebSource,
-} from "../../../src/application/groundingSources.ts";
+} from "../../../src/application/formatters/groundingSources.ts";
 
 // ---------------------------------------------------------------------------
 // extractWebGroundingChunks

@@ -1,7 +1,7 @@
 import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
 import type { IMessagePageRepository, MessagePage } from "../../domain/message/MessagePage.ts";
-import { splitMarkdown } from "../markdownSplitter.ts";
-import { llmTextToDiscordText } from "../textTransformers.ts";
+import { splitMarkdown } from "../formatters/markdownSplitter.ts";
+import { llmTextToDiscordText } from "../formatters/textTransformers.ts";
 import type { Logger } from "../types/Logger.ts";
 
 /** Parameters for {@link GetNextPageUseCase.execute}. */

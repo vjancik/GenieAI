@@ -1,13 +1,13 @@
 import { describe, expect, mock, test } from "bun:test";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
-import { GeminiFileRefreshService } from "../../../src/application/GeminiFileRefreshService.ts";
 import type { DiscordAttachmentInfo } from "../../../src/application/ports/IAttachmentDownloader.ts";
 import type { IDiscordAttachmentFetcher } from "../../../src/application/ports/IDiscordAttachmentFetcher.ts";
 import type { IDiskAttachmentDownloader } from "../../../src/application/ports/IDiskAttachmentDownloader.ts";
 import type { IGeminiFileRepository } from "../../../src/application/ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploader } from "../../../src/application/ports/IGeminiFileUploader.ts";
 import type { IGeminiFileUploaderRegistry } from "../../../src/application/ports/IGeminiFileUploaderRegistry.ts";
+import { GeminiFileRefreshService } from "../../../src/application/services/GeminiFileRefreshService.ts";
 import type { GeminiFile } from "../../../src/domain/message/GeminiFile.ts";
 import type { GeminiFileUpload } from "../../../src/domain/message/GeminiFileUpload.ts";
 

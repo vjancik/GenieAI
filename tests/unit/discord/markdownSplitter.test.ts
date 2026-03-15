@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { splitMarkdown } from "../../../src/application/markdownSplitter.ts";
+import { splitMarkdown } from "../../../src/application/formatters/markdownSplitter.ts";
 
 // ---------------------------------------------------------------------------
 // Regression test: real payload from production error 2026-03-14
