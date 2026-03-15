@@ -1,4 +1,4 @@
-import type { BaseMessage } from "@langchain/core/messages";
+import { AIMessage, type BaseMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import type { Span } from "@sentry/core";
 import {
@@ -11,6 +11,7 @@ import {
     GatewayIntentBits,
     type Message,
 } from "discord.js";
+import { extractWebGroundingChunks, formatGroundingSources } from "../../application/groundingSources.ts";
 import { splitMarkdown } from "../../application/markdownSplitter.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { IDiscordAttachmentFetcher } from "../../application/ports/IDiscordAttachmentFetcher.ts";
@@ -24,6 +25,7 @@ import type { RetryDiscordMessageUseCase } from "../../application/use-cases/Ret
 import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
 import { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { IMessagePageRepository } from "../../domain/message/MessagePage.ts";
+import { shortenRedirectUrl } from "../http/redirectUrl.ts";
 import { InteractionLock } from "./InteractionLock.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
 import { discordMessageToLlmText } from "./textTransformers.ts";
@@ -257,11 +259,46 @@ export class DiscordGateway {
     }
 
     /**
+     * Resolves grounding web sources from the final AIMessage in newMessages.
+     *
+     * Only the last message is inspected — it is the one whose content is displayed
+     * to the user, and the one the orchestrator's `extractContent` reads from.
+     * NOTE: grounding sources on any intermediary AIMessages (e.g. a triage response
+     * that also happened to use search) are intentionally omitted.
+     *
+     * Extracts `groundingMetadata.groundingChunks[].web` entries, shortens each
+     * redirect URL, and formats them as a Discord Markdown sources string.
+     * Returns `null` if the last message is not an AIMessage, has no web sources,
+     * or formatting produces nothing.
+     */
+    private async resolveGroundingSources(newMessages: BaseMessage[]): Promise<string | null> {
+        const lastMessage = newMessages.at(-1);
+        if (!(lastMessage instanceof AIMessage)) return null;
+
+        const rawChunks = extractWebGroundingChunks(lastMessage.additional_kwargs);
+        if (rawChunks.length === 0) return null;
+
+        const sources = await Promise.all(
+            rawChunks.map(async ({ uri, title }) => ({
+                title,
+                url: await shortenRedirectUrl(uri),
+            })),
+        );
+
+        return formatGroundingSources(sources);
+    }
+
+    /**
      * Shared post-processing step after the LLM produces a response.
      *
      * Handles: cancelling/deleting the thinking placeholder, applying the LLM→Discord
      * text transform, splitting paginated responses, building action row buttons,
      * sending the bot reply, saving it to the database, and persisting page state.
+     *
+     * When the response used Google Search grounding (searchNode), any web source
+     * citations are appended to the reply (non-paginated path) or sent as a
+     * follow-up reply (paginated path and when combined length exceeds 2000 chars).
+     * The sources message is persisted to the DB so it can be replied to.
      *
      * Called by both {@link handleMessageCreate} and {@link handleRetryButton} so neither
      * duplicates the pagination or persistence logic.
@@ -298,6 +335,10 @@ export class DiscordGateway {
 
         // Sanitize LLM output for Discord rendering
         const discordResponse = llmTextToDiscordText(response);
+
+        // Resolve grounding sources in parallel with the response being sent.
+        // Only populated when the response came from the searchNode (Google Search grounding).
+        const sourcesLine = await this.resolveGroundingSources(newMessages);
 
         // Attach a Retry button when the use case signals a retryable failure
         const retryRow =
@@ -359,10 +400,22 @@ export class DiscordGateway {
                 endedInCodeBlock: page1EndedInCodeBlock,
                 codeBlockType: page1CodeBlockType,
             });
+
+            // In the paginated path, send sources as a separate follow-up reply
+            if (sourcesLine) {
+                await this.sendSourcesReply(botReply, sourcesLine);
+            }
         } else {
             // --- NON-PAGINATED PATH ---
+
+            // Attempt to combine response + sources into a single message
+            const combined =
+                sourcesLine && discordResponse.length + 1 + sourcesLine.length <= 2000
+                    ? `${discordResponse}\n${sourcesLine}`
+                    : null;
+
             const botReply = await replyTarget.reply({
-                content: discordResponse,
+                content: combined ?? discordResponse,
                 ...(retryRow && { components: [retryRow] }),
             });
 
@@ -375,12 +428,42 @@ export class DiscordGateway {
                 guildId: botReply.guildId ?? DM_GUILD_TOKEN,
                 newMessages,
             });
+
+            // Sources didn't fit in the main message — send as a separate follow-up reply
+            if (sourcesLine && !combined) {
+                await this.sendSourcesReply(botReply, sourcesLine);
+            }
         }
 
         span.setAttributes({
             "discord.response_length": response.length,
             "discord.is_failure": isFailure ?? false,
         });
+    }
+
+    /**
+     * Sends a sources-only follow-up reply and persists it to the DB so it
+     * participates in the reply chain.
+     *
+     * No `newMessages` are stored for this row — it is a display-only message
+     * that contains no LangChain-generated content.
+     *
+     * @param replyTo - The bot message to reply to
+     * @param sourcesLine - The formatted sources string (≤ 2000 chars)
+     */
+    private async sendSourcesReply(replyTo: Message, sourcesLine: string): Promise<void> {
+        try {
+            const sourcesReply = await replyTo.reply({ content: sourcesLine });
+            await this.handleDiscordMessageUseCase.saveBotResponse({
+                botDiscordMessageId: sourcesReply.id,
+                repliesToDiscordId: replyTo.id,
+                channelId: sourcesReply.channelId,
+                guildId: sourcesReply.guildId ?? DM_GUILD_TOKEN,
+                newMessages: [],
+            });
+        } catch (err) {
+            this.logger.warn({ err }, "Failed to send grounding sources reply");
+        }
     }
 
     /**
