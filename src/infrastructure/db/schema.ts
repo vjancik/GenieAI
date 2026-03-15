@@ -59,7 +59,8 @@ export const messagePages = pgTable("message_pages", {
      * Discord snowflake of the bot message currently showing the Next Page button.
      * Unique — used to look up the pending page state when the button is clicked.
      */
-    botDiscordMessageId: text("bot_discord_message_id").notNull().unique(),
+    // TODO: refactor to use UUID PK as FK
+    discordMessageId: text("bot_discord_message_id").notNull().unique(),
     /**
      * UUID primary key of the FIRST page bot message row in the messages table.
      * All page rows for the same response share this ID — the LangChain content is

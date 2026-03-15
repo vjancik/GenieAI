@@ -7,7 +7,7 @@ import type { Logger } from "../types/Logger.ts";
 /** Parameters for {@link GetNextPageUseCase.execute}. */
 export interface GetNextPageUseCaseParams {
     /** Discord snowflake of the bot message currently showing the Next Page button. */
-    botDiscordMessageId: string;
+    discordMessageId: string;
 }
 
 /** Result of a successful {@link GetNextPageUseCase.execute} call. */
@@ -100,12 +100,12 @@ export class GetNextPageUseCase {
      * @returns The next page result, or null if the page state is missing/stale
      */
     async execute(params: GetNextPageUseCaseParams): Promise<GetNextPageResult | null> {
-        const { botDiscordMessageId } = params;
+        const { discordMessageId } = params;
 
         // Step 1: Look up the pending page state
-        const pageState = await this.messagePageRepo.findByBotMessageId(botDiscordMessageId);
+        const pageState = await this.messagePageRepo.findByDiscordMessageId(discordMessageId);
         if (!pageState) {
-            this.logger.debug({ botDiscordMessageId }, "No pending page state found — stale button click");
+            this.logger.debug({ discordMessageId }, "No pending page state found — stale button click");
             return null;
         }
 
@@ -115,7 +115,7 @@ export class GetNextPageUseCase {
         const msgRecord = await this.messageRepo.findById(pageState.firstPageMessageId);
         if (!msgRecord) {
             this.logger.warn(
-                { botDiscordMessageId, firstPageMessageId: pageState.firstPageMessageId },
+                { discordMessageId, firstPageMessageId: pageState.firstPageMessageId },
                 "Message record not found for first page of paginated bot message",
             );
             return null;
@@ -125,7 +125,7 @@ export class GetNextPageUseCase {
         // The last message is the final AI response (triage → tool → final or direct general).
         const lastMsgJson = msgRecord.langchainMessages.at(-1);
         if (!lastMsgJson) {
-            this.logger.warn({ botDiscordMessageId }, "langchainMessages array is empty for bot message");
+            this.logger.warn({ discordMessageId }, "langchainMessages array is empty for bot message");
             return null;
         }
 
@@ -146,7 +146,7 @@ export class GetNextPageUseCase {
             codeBlockType: nextCodeBlockType,
         } = splitMarkdown(fullDiscordText, endOffset, 2000, { continuationCodeBlock });
 
-        this.logger.debug({ botDiscordMessageId, page: nextPage, totalPages, isLast }, "Computed next page content");
+        this.logger.debug({ discordMessageId, page: nextPage, totalPages, isLast }, "Computed next page content");
 
         return {
             content,

@@ -1,3 +1,4 @@
+import type { BaseMessage } from "@langchain/core/messages";
 import type { DiscordMessage } from "./Message.ts";
 
 /**
@@ -31,6 +32,26 @@ export interface IMessageRepository {
         guildId: string;
         limit?: number;
     }): Promise<DiscordMessage[]>;
+
+    /**
+     * Persist the bot's reply after it has been sent to Discord.
+     * Must be called after sending so the Discord-assigned message ID is available.
+     *
+     * @param params.discordMessageId - The Discord ID of the sent bot reply
+     * @param params.repliesToDiscordId - The Discord ID of the user message this replies to
+     * @param params.channelId - Discord channel snowflake
+     * @param params.guildId - Discord guild snowflake, or `"@me"` for DMs
+     * @param params.newMessages - All LangChain messages generated during this turn
+     * @param params.retriesLeft - Remaining retries to store on the row; only set for retryable responses
+     */
+    saveAssistantMessage(params: {
+        discordMessageId: string;
+        repliesToDiscordId: string;
+        channelId: string;
+        guildId: string;
+        newMessages: BaseMessage[];
+        retriesLeft?: number | null;
+    }): Promise<DiscordMessage>;
 
     /**
      * Fetch a single message by its UUID primary key.

@@ -1,3 +1,4 @@
+import type { BaseMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import { and, eq, sql } from "drizzle-orm";
 import type { Logger } from "../../../application/types/Logger.ts";
@@ -120,6 +121,38 @@ export class PgMessageRepository implements IMessageRepository {
                 }
             },
         );
+    }
+
+    async saveAssistantMessage(params: {
+        discordMessageId: string;
+        repliesToDiscordId: string;
+        channelId: string;
+        guildId: string;
+        newMessages: BaseMessage[];
+        retriesLeft?: number | null;
+    }): Promise<DiscordMessage> {
+        const saved = await this.save({
+            discordMessageId: params.discordMessageId,
+            repliesToDiscordId: params.repliesToDiscordId,
+            channelId: params.channelId,
+            guildId: params.guildId,
+            role: "assistant",
+            // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
+            // which is incompatible with our DB schema's Record<string, unknown>. Double cast
+            // through unknown bridges the gap — the serialized shape IS a plain JSON object.
+            langchainMessages: params.newMessages.map((m) => m.toJSON() as unknown as Record<string, unknown>),
+            retriesLeft: params.retriesLeft ?? null,
+        });
+
+        this.logger.debug(
+            {
+                discordMessageId: params.discordMessageId,
+                messageCount: params.newMessages.length,
+            },
+            "Saved assistant message to database",
+        );
+
+        return saved;
     }
 
     async findById(id: string): Promise<DiscordMessage | null> {

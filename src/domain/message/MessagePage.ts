@@ -12,7 +12,7 @@ export interface MessagePage {
      * Discord snowflake of the bot message currently showing the Next Page button.
      * Unique — used to look up the pending page state when the button is clicked.
      */
-    botDiscordMessageId: string;
+    discordMessageId: string;
     /**
      * UUID primary key of the first page bot message row in the messages table.
      * All page rows for a response share this ID — the LangChain content lives on
@@ -56,5 +56,5 @@ export interface IMessagePageRepository {
      * Retrieve the pending page entry for the bot message currently showing the Next Page button.
      * @returns The page entry, or null if no pending page exists (e.g. stale button)
      */
-    findByBotMessageId(botDiscordMessageId: string): Promise<MessagePage | null>;
+    findByDiscordMessageId(discordMessageId: string): Promise<MessagePage | null>;
 }

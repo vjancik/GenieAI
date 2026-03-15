@@ -5,7 +5,6 @@ import { HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import type { GeminiFile } from "../../domain/message/GeminiFile.ts";
 import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
-import type { DiscordMessage } from "../../domain/message/Message.ts";
 import type { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { AppConfig } from "../config/AppConfig.ts";
 import type { IAgentOrchestrator } from "../ports/IAgentOrchestrator.ts";
@@ -50,7 +49,7 @@ type PendingGeminiRecord = {
  *    (the orchestrator handles Gemini file refresh per key attempt internally)
  * 4. Persisting the user's message to the database
  *
- * The bot's response message is persisted separately (via {@link saveBotResponse})
+ * The bot's response message is persisted separately via {@link IMessageRepository.saveAssistantMessage}
  * after it has been sent to Discord, because we need Discord's message ID.
  *
  * All messages are serialized using LangChain's BaseMessage.toJSON() to preserve
@@ -251,64 +250,6 @@ export class HandleDiscordMessageUseCase {
                 isRetryable: true,
             };
         }
-    }
-
-    /**
-     * Persist the bot's reply message after it has been sent to Discord.
-     * Must be called after sending the reply so we can capture Discord's assigned message ID.
-     *
-     * Stores all LangChain messages generated during processing (triage response, tool messages,
-     * final response) so the conversation history has no gaps.
-     *
-     * @param params.botDiscordMessageId - The Discord ID of the sent bot reply
-     * @param params.repliesToDiscordId - The Discord ID of the user message this replies to
-     * @param params.channelId - Discord channel snowflake
-     * @param params.guildId - Discord guild snowflake, or "@me" for DMs
-     * @param params.newMessages - All LangChain messages generated during this turn
-     */
-    async saveBotResponse(params: {
-        botDiscordMessageId: string;
-        repliesToDiscordId: string;
-        channelId: string;
-        guildId: string;
-        newMessages: BaseMessage[];
-        /** Remaining retries to store on the row. Only set for retryable bot responses. */
-        retriesLeft?: number | null;
-    }): Promise<DiscordMessage> {
-        return Sentry.startSpan(
-            {
-                name: "Save bot response",
-                op: "app.message.save_bot_response",
-                attributes: {
-                    "discord.message_id": params.botDiscordMessageId,
-                    "app.message_count": params.newMessages.length,
-                },
-            },
-            async () => {
-                const saved = await this.messageRepo.save({
-                    discordMessageId: params.botDiscordMessageId,
-                    repliesToDiscordId: params.repliesToDiscordId,
-                    channelId: params.channelId,
-                    guildId: params.guildId,
-                    role: "assistant",
-                    // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
-                    // which is incompatible with our DB schema's Record<string, unknown>. Double cast
-                    // through unknown bridges the gap — the serialized shape IS a plain JSON object.
-                    langchainMessages: params.newMessages.map((m) => m.toJSON() as unknown as Record<string, unknown>),
-                    retriesLeft: params.retriesLeft ?? null,
-                });
-
-                this.logger.debug(
-                    {
-                        botDiscordMessageId: params.botDiscordMessageId,
-                        messageCount: params.newMessages.length,
-                    },
-                    "Saved bot response to database",
-                );
-
-                return saved;
-            },
-        );
     }
 
     /**

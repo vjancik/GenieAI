@@ -34,6 +34,19 @@ function makeRepo(chainMessages: DiscordMessage[] = []): IMessageRepository {
             id: "new-uuid",
             createdAt: new Date(),
         })),
+        saveAssistantMessage: mock(async (params) => ({
+            id: "new-uuid",
+            discordMessageId: params.discordMessageId,
+            repliesToDiscordId: params.repliesToDiscordId,
+            channelId: params.channelId,
+            guildId: params.guildId,
+            role: "assistant" as const,
+            langchainMessages: params.newMessages.map(
+                (m: { toJSON(): unknown }) => m.toJSON() as Record<string, unknown>,
+            ),
+            retriesLeft: params.retriesLeft ?? null,
+            createdAt: new Date(),
+        })),
         fetchChain: mock(async () => chainMessages),
         findById: mock(async () => null),
         findByDiscordMessageId: mock(async () => null),
@@ -342,63 +355,5 @@ describe("HandleDiscordMention.handle", () => {
         expect(userMessage).toBeInstanceOf(HumanMessage);
         // Should have structured content (array), not a plain string
         expect(Array.isArray(userMessage.content)).toBe(true);
-    });
-});
-
-describe("HandleDiscordMention.saveBotResponse", () => {
-    test("saves bot response with assistant role and serialized messages", async () => {
-        const repo = makeRepo();
-        const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMessageUseCase(
-            repo,
-            orchestrator as never,
-            makeDownloader(),
-            testLogger,
-            testConfig,
-        );
-
-        const aiMsg = new AIMessage("The answer is 4");
-        await handler.saveBotResponse({
-            botDiscordMessageId: "bot-msg-1",
-            repliesToDiscordId: "user-msg-1",
-            channelId: "ch-1",
-            guildId: "guild-1",
-            newMessages: [aiMsg],
-        });
-
-        const saveCall = (repo.save as ReturnType<typeof mock>).mock.calls[0]?.[0] as DiscordMessage;
-        expect(saveCall.discordMessageId).toBe("bot-msg-1");
-        expect(saveCall.repliesToDiscordId).toBe("user-msg-1");
-        expect(saveCall.role).toBe("assistant");
-        expect(saveCall.langchainMessages).toHaveLength(1);
-    });
-
-    test("saves multiple newMessages (e.g. triage + tool + final)", async () => {
-        const repo = makeRepo();
-        const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMessageUseCase(
-            repo,
-            orchestrator as never,
-            makeDownloader(),
-            testLogger,
-            testConfig,
-        );
-
-        const messages = [
-            new AIMessage("triage response"),
-            new AIMessage("tool result"),
-            new AIMessage("final answer"),
-        ];
-
-        await handler.saveBotResponse({
-            botDiscordMessageId: "bot-msg-1",
-            repliesToDiscordId: "user-msg-1",
-            channelId: "ch-1",
-            guildId: "guild-1",
-            newMessages: messages,
-        });
-
-        const saveCall = (repo.save as ReturnType<typeof mock>).mock.calls[0]?.[0] as DiscordMessage;
-        expect(saveCall.langchainMessages).toHaveLength(3);
     });
 });

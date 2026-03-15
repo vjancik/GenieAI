@@ -415,8 +415,8 @@ export class DiscordGateway {
             });
 
             // messages row must exist before messagePageRepo.save (FK constraint)
-            const savedBotMsg = await this.handleDiscordMessageUseCase.saveBotResponse({
-                botDiscordMessageId: botReply.id,
+            const savedBotMsg = await this.messageRepo.saveAssistantMessage({
+                discordMessageId: botReply.id,
                 repliesToDiscordId: replyTarget.id,
                 channelId: botReply.channelId,
                 guildId: botReply.guildId ?? DM_GUILD_TOKEN,
@@ -425,7 +425,7 @@ export class DiscordGateway {
             });
             // firstPageMessageId = UUID of the saved messages row for the first page
             await this.messagePageRepo.save({
-                botDiscordMessageId: botReply.id,
+                discordMessageId: botReply.id,
                 firstPageMessageId: savedBotMsg.id,
                 endOffset: newOffset,
                 currentPage: 1,
@@ -454,8 +454,8 @@ export class DiscordGateway {
 
             span.setAttributes({ "discord.paginated": false });
 
-            await this.handleDiscordMessageUseCase.saveBotResponse({
-                botDiscordMessageId: botReply.id,
+            await this.messageRepo.saveAssistantMessage({
+                discordMessageId: botReply.id,
                 repliesToDiscordId: replyTarget.id,
                 channelId: botReply.channelId,
                 guildId: botReply.guildId ?? DM_GUILD_TOKEN,
@@ -488,8 +488,8 @@ export class DiscordGateway {
     private async sendSourcesReply(replyTo: Message, sourcesLine: string): Promise<void> {
         try {
             const sourcesReply = await replyTo.reply({ content: sourcesLine });
-            await this.handleDiscordMessageUseCase.saveBotResponse({
-                botDiscordMessageId: sourcesReply.id,
+            await this.messageRepo.saveAssistantMessage({
+                discordMessageId: sourcesReply.id,
                 repliesToDiscordId: replyTo.id,
                 channelId: sourcesReply.channelId,
                 guildId: sourcesReply.guildId ?? DM_GUILD_TOKEN,
@@ -680,7 +680,7 @@ export class DiscordGateway {
                     // Step 1: Compute next page content via use case
                     let result: Awaited<ReturnType<GetNextPageUseCase["execute"]>>;
                     try {
-                        result = await this.getNextPageUseCase.execute({ botDiscordMessageId: currentBotMessageId });
+                        result = await this.getNextPageUseCase.execute({ discordMessageId: currentBotMessageId });
                     } catch (err) {
                         this.logger.error({ err, currentBotMessageId }, "Failed to compute next page");
                         Sentry.captureException(err);
@@ -727,8 +727,8 @@ export class DiscordGateway {
 
                     // Step 4: Persist the messages row first — messagePageRepo.save has a FK on it,
                     // so if this throws the remaining cleanup is skipped entirely.
-                    await this.handleDiscordMessageUseCase.saveBotResponse({
-                        botDiscordMessageId: newBotMessage.id,
+                    await this.messageRepo.saveAssistantMessage({
+                        discordMessageId: newBotMessage.id,
                         repliesToDiscordId: currentBotMessageId,
                         channelId: newBotMessage.channelId,
                         guildId: newBotMessage.guildId ?? DM_GUILD_TOKEN,
@@ -743,7 +743,7 @@ export class DiscordGateway {
                         !result.isLast
                             ? this.messagePageRepo
                                   .save({
-                                      botDiscordMessageId: newBotMessage.id,
+                                      discordMessageId: newBotMessage.id,
                                       firstPageMessageId: result.firstPageMessageId,
                                       endOffset: result.newOffset,
                                       currentPage: result.currentPage,
@@ -801,8 +801,8 @@ export class DiscordGateway {
             const rateLimitReply = await message.reply(
                 "Hi! It seems you have sent too many messages at once recently. Please wait a while before sending more.",
             );
-            await this.handleDiscordMessageUseCase.saveBotResponse({
-                botDiscordMessageId: rateLimitReply.id,
+            await this.messageRepo.saveAssistantMessage({
+                discordMessageId: rateLimitReply.id,
                 repliesToDiscordId: message.id,
                 channelId: rateLimitReply.channelId,
                 guildId: rateLimitReply.guildId ?? DM_GUILD_TOKEN,
@@ -937,8 +937,8 @@ export class DiscordGateway {
                             );
                             // Persist the error message so it participates in the reply chain.
                             // The thinking message was never saved, so we save it now after the edit.
-                            await this.handleDiscordMessageUseCase.saveBotResponse({
-                                botDiscordMessageId: errorReply.id,
+                            await this.messageRepo.saveAssistantMessage({
+                                discordMessageId: errorReply.id,
                                 repliesToDiscordId: message.id,
                                 channelId: errorReply.channelId,
                                 guildId: errorReply.guildId ?? DM_GUILD_TOKEN,

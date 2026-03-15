@@ -57,12 +57,12 @@ async function saveParentMessage(discordMessageId: string): Promise<DiscordMessa
 }
 
 function pagePayload(
-    botDiscordMessageId: string,
+    discordMessageId: string,
     firstPageMessageId: string,
-    overrides: Partial<Omit<MessagePage, "id" | "createdAt" | "botDiscordMessageId" | "firstPageMessageId">> = {},
+    overrides: Partial<Omit<MessagePage, "id" | "createdAt" | "discordMessageId" | "firstPageMessageId">> = {},
 ): Omit<MessagePage, "id" | "createdAt"> {
     return {
-        botDiscordMessageId,
+        discordMessageId,
         firstPageMessageId,
         endOffset: 1800,
         currentPage: 1,
@@ -82,7 +82,7 @@ describe("PgMessagePageRepository.save", () => {
 
         expect(saved.id).toBeDefined();
         expect(typeof saved.id).toBe("string");
-        expect(saved.botDiscordMessageId).toBe("bot-save-001");
+        expect(saved.discordMessageId).toBe("bot-save-001");
         expect(saved.firstPageMessageId).toBe(parent.id);
         expect(saved.endOffset).toBe(1800);
         expect(saved.currentPage).toBe(1);
@@ -90,7 +90,7 @@ describe("PgMessagePageRepository.save", () => {
         expect(saved.createdAt).toBeInstanceOf(Date);
     });
 
-    test("throws DatabaseError on duplicate botDiscordMessageId", async () => {
+    test("throws DatabaseError on duplicate discordMessageId", async () => {
         const parent = await saveParentMessage("bot-dup-001");
         const payload = pagePayload(parent.discordMessageId, parent.id);
 
@@ -114,18 +114,18 @@ describe("PgMessagePageRepository.save", () => {
 
         expect(page2.firstPageMessageId).toBe(firstPage.id);
         expect(page3.firstPageMessageId).toBe(firstPage.id);
-        expect(page2.botDiscordMessageId).toBe("page-2-msg-id");
-        expect(page3.botDiscordMessageId).toBe("page-3-msg-id");
+        expect(page2.discordMessageId).toBe("page-2-msg-id");
+        expect(page3.discordMessageId).toBe("page-3-msg-id");
     });
 });
 
-describe("PgMessagePageRepository.findByBotMessageId", () => {
-    test("returns null for a non-existent botDiscordMessageId", async () => {
-        const result = await pageRepo.findByBotMessageId("no-such-id");
+describe("PgMessagePageRepository.findByDiscordMessageId", () => {
+    test("returns null for a non-existent discordMessageId", async () => {
+        const result = await pageRepo.findByDiscordMessageId("no-such-id");
         expect(result).toBeNull();
     });
 
-    test("returns the saved page by its botDiscordMessageId", async () => {
+    test("returns the saved page by its discordMessageId", async () => {
         const parent = await saveParentMessage("bot-find-001");
         await pageRepo.save(
             pagePayload(parent.discordMessageId, parent.id, {
@@ -135,10 +135,10 @@ describe("PgMessagePageRepository.findByBotMessageId", () => {
             }),
         );
 
-        const result = await pageRepo.findByBotMessageId("bot-find-001");
+        const result = await pageRepo.findByDiscordMessageId("bot-find-001");
 
         expect(result).not.toBeNull();
-        expect(result?.botDiscordMessageId).toBe("bot-find-001");
+        expect(result?.discordMessageId).toBe("bot-find-001");
         expect(result?.firstPageMessageId).toBe(parent.id);
         expect(result?.currentPage).toBe(2);
         expect(result?.totalPages).toBe(5);
@@ -153,20 +153,20 @@ describe("PgMessagePageRepository.findByBotMessageId", () => {
         await pageRepo.save(pagePayload(p1.discordMessageId, p1.id, { currentPage: 1, totalPages: 2 }));
         await pageRepo.save(pagePayload(p2.discordMessageId, p2.id, { currentPage: 3, totalPages: 4 }));
 
-        const result = await pageRepo.findByBotMessageId("bot-multi-2");
+        const result = await pageRepo.findByDiscordMessageId("bot-multi-2");
 
-        expect(result?.botDiscordMessageId).toBe("bot-multi-2");
+        expect(result?.discordMessageId).toBe("bot-multi-2");
         expect(result?.currentPage).toBe(3);
         expect(result?.totalPages).toBe(4);
     });
 
-    test("finds a subsequent-page row by its botDiscordMessageId", async () => {
+    test("finds a subsequent-page row by its discordMessageId", async () => {
         const firstPage = await saveParentMessage("first-page-lookup");
         await pageRepo.save(pagePayload("page-2-lookup", firstPage.id, { currentPage: 2 }));
 
-        const result = await pageRepo.findByBotMessageId("page-2-lookup");
+        const result = await pageRepo.findByDiscordMessageId("page-2-lookup");
 
-        expect(result?.botDiscordMessageId).toBe("page-2-lookup");
+        expect(result?.discordMessageId).toBe("page-2-lookup");
         expect(result?.firstPageMessageId).toBe(firstPage.id);
         expect(result?.currentPage).toBe(2);
     });
@@ -180,7 +180,7 @@ describe("PgMessagePageRepository — cascade behaviour", () => {
 
         await db.execute(sql`DELETE FROM messages WHERE discord_message_id = ${"first-page-cascade"}`);
 
-        expect(await pageRepo.findByBotMessageId("page-2-cascade")).toBeNull();
-        expect(await pageRepo.findByBotMessageId("page-3-cascade")).toBeNull();
+        expect(await pageRepo.findByDiscordMessageId("page-2-cascade")).toBeNull();
+        expect(await pageRepo.findByDiscordMessageId("page-3-cascade")).toBeNull();
     });
 });
