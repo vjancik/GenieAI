@@ -11,16 +11,16 @@ import {
     GatewayIntentBits,
     type Message,
 } from "discord.js";
-import type { GetNextPage } from "../../application/GetNextPage.ts";
-import type { HandleDiscordMessage } from "../../application/HandleDiscordMessage.ts";
 import { splitMarkdown } from "../../application/markdownSplitter.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
-import type { IDiscordAttachmentRefetcher } from "../../application/ports/IDiscordAttachmentRefetcher.ts";
-import type { RetryOrchestration } from "../../application/RetryOrchestration.ts";
+import type { IDiscordAttachmentFetcher } from "../../application/ports/IDiscordAttachmentFetcher.ts";
 import { llmTextToDiscordText } from "../../application/textTransformers.ts";
 import type { AgentStatusUpdate, OnStatusUpdate } from "../../application/types/AgentStatus.ts";
 import { AgentStatusType, assertNever } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";
+import type { GetNextPageUseCase } from "../../application/use-cases/GetNextPage.ts";
+import type { HandleDiscordMessageUseCase } from "../../application/use-cases/HandleDiscordMessage.ts";
+import type { RetryDiscordMessageUseCase } from "../../application/use-cases/RetryDiscordMessage.ts";
 import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
 import { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { IMessagePageRepository } from "../../domain/message/MessagePage.ts";
@@ -161,12 +161,12 @@ export class DiscordGateway {
 
     constructor(
         private readonly token: string,
-        private readonly messageHandler: HandleDiscordMessage,
+        private readonly handleDiscordMessageUseCase: HandleDiscordMessageUseCase,
         private readonly logger: Logger,
         private readonly statusUpdater: StatusMessageUpdater,
         private readonly messagePageRepo: IMessagePageRepository,
-        private readonly getNextPage: GetNextPage,
-        private readonly retryOrchestration: RetryOrchestration,
+        private readonly getNextPageUseCase: GetNextPageUseCase,
+        private readonly retryDiscordMessageUseCase: RetryDiscordMessageUseCase,
         private readonly messageRepo: IMessageRepository,
     ) {
         this.client = new Client({
@@ -219,16 +219,16 @@ export class DiscordGateway {
     }
 
     /**
-     * Creates an {@link IDiscordAttachmentRefetcher} bound to a specific Discord channel.
+     * Creates an {@link IDiscordAttachmentFetcher} bound to a specific Discord channel.
      *
      * Fetches fresh CDN URLs for Discord attachments by re-fetching the message from the
      * API. Used by GeminiFileRefreshService in upload mode when a Gemini file URI has expired.
-     * All messages in a reply chain share the same channel, so a single refetcher per request
+     * All messages in a reply chain share the same channel, so a single fetcher per request
      * is sufficient.
      *
      * @param channelId - The Discord channel snowflake to fetch messages from
      */
-    private createAttachmentRefetcher(channelId: string): IDiscordAttachmentRefetcher {
+    private createAttachmentFetcher(channelId: string): IDiscordAttachmentFetcher {
         const client = this.client;
         return {
             async fetchAttachment(
@@ -342,7 +342,7 @@ export class DiscordGateway {
             });
 
             // messages row must exist before messagePageRepo.save (FK constraint)
-            const savedBotMsg = await this.messageHandler.saveBotResponse({
+            const savedBotMsg = await this.handleDiscordMessageUseCase.saveBotResponse({
                 botDiscordMessageId: botReply.id,
                 repliesToDiscordId: replyTarget.id,
                 channelId: botReply.channelId,
@@ -368,7 +368,7 @@ export class DiscordGateway {
 
             span.setAttributes({ "discord.paginated": false });
 
-            await this.messageHandler.saveBotResponse({
+            await this.handleDiscordMessageUseCase.saveBotResponse({
                 botDiscordMessageId: botReply.id,
                 repliesToDiscordId: replyTarget.id,
                 channelId: botReply.channelId,
@@ -460,7 +460,7 @@ export class DiscordGateway {
                         // --- Scenario A: human message exists, re-run orchestration only ---
                         span.setAttribute("discord.retry_scenario", "A");
 
-                        const attachmentRefetcher = this.createAttachmentRefetcher(originalMessage.channelId);
+                        const attachmentFetcher = this.createAttachmentFetcher(originalMessage.channelId);
 
                         // Send thinking placeholder — awaited so we have the message before
                         // the first status update can arrive.
@@ -488,14 +488,13 @@ export class DiscordGateway {
                             });
                         };
 
-                        const { response, newMessages, isFailure, isRetryable } = await this.retryOrchestration.execute(
-                            {
+                        const { response, newMessages, isFailure, isRetryable } =
+                            await this.retryDiscordMessageUseCase.execute({
                                 humanDiscordMessageId: originalMessage.id,
                                 intent,
                                 onStatusUpdate,
-                                attachmentRefetcher,
-                            },
-                        );
+                                attachmentFetcher,
+                            });
 
                         await this.sendBotReply({
                             replyTarget: originalMessage,
@@ -547,9 +546,9 @@ export class DiscordGateway {
                 },
                 async (span) => {
                     // Step 1: Compute next page content via use case
-                    let result: Awaited<ReturnType<GetNextPage["execute"]>>;
+                    let result: Awaited<ReturnType<GetNextPageUseCase["execute"]>>;
                     try {
-                        result = await this.getNextPage.execute({ botDiscordMessageId: currentBotMessageId });
+                        result = await this.getNextPageUseCase.execute({ botDiscordMessageId: currentBotMessageId });
                     } catch (err) {
                         this.logger.error({ err, currentBotMessageId }, "Failed to compute next page");
                         Sentry.captureException(err);
@@ -596,7 +595,7 @@ export class DiscordGateway {
 
                     // Step 4: Persist the messages row first — messagePageRepo.save has a FK on it,
                     // so if this throws the remaining cleanup is skipped entirely.
-                    await this.messageHandler.saveBotResponse({
+                    await this.handleDiscordMessageUseCase.saveBotResponse({
                         botDiscordMessageId: newBotMessage.id,
                         repliesToDiscordId: currentBotMessageId,
                         channelId: newBotMessage.channelId,
@@ -716,7 +715,7 @@ export class DiscordGateway {
                         allowedMentions: { repliedUser: false },
                     });
 
-                    const attachmentRefetcher = this.createAttachmentRefetcher(message.channelId);
+                    const attachmentFetcher = this.createAttachmentFetcher(message.channelId);
 
                     const onStatusUpdate: OnStatusUpdate = (update) => {
                         // Await the thinking message promise so we have the message ID before
@@ -750,17 +749,18 @@ export class DiscordGateway {
                     const llmContent = discordMessageToLlmText(userName, userContent);
 
                     // handle() never throws — errors are caught internally and returned as a response
-                    const { response, newMessages, isFailure, isRetryable } = await this.messageHandler.handle({
-                        discordMessageId: message.id,
-                        referencedMessageId: message.reference?.messageId ?? null,
-                        channelId: message.channelId,
-                        guildId: message.guildId ?? DM_GUILD_TOKEN,
-                        userContent: llmContent,
-                        attachments,
-                        intent,
-                        onStatusUpdate,
-                        attachmentRefetcher,
-                    });
+                    const { response, newMessages, isFailure, isRetryable } =
+                        await this.handleDiscordMessageUseCase.handle({
+                            discordMessageId: message.id,
+                            referencedMessageId: message.reference?.messageId ?? null,
+                            channelId: message.channelId,
+                            guildId: message.guildId ?? DM_GUILD_TOKEN,
+                            userContent: llmContent,
+                            attachments,
+                            intent,
+                            onStatusUpdate,
+                            attachmentFetcher,
+                        });
 
                     await this.sendBotReply({
                         replyTarget: message,

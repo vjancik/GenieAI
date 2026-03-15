@@ -15,9 +15,9 @@
 import * as Sentry from "@sentry/bun";
 import { GeminiApiKeySyncService } from "./application/GeminiApiKeySyncService.ts";
 import { GeminiFileRefreshService } from "./application/GeminiFileRefreshService.ts";
-import { GetNextPage } from "./application/GetNextPage.ts";
-import { HandleDiscordMessage } from "./application/HandleDiscordMessage.ts";
-import { RetryOrchestration } from "./application/RetryOrchestration.ts";
+import { GetNextPageUseCase } from "./application/use-cases/GetNextPage.ts";
+import { HandleDiscordMessageUseCase } from "./application/use-cases/HandleDiscordMessage.ts";
+import { RetryDiscordMessageUseCase } from "./application/use-cases/RetryDiscordMessage.ts";
 import { FetchAttachmentDownloader } from "./infrastructure/attachments/FetchAttachmentDownloader.ts";
 import { FetchDiskAttachmentDownloader } from "./infrastructure/attachments/FetchDiskAttachmentDownloader.ts";
 import { GenaiFileUploaderRegistry } from "./infrastructure/attachments/GenaiFileUploaderRegistry.ts";
@@ -118,7 +118,7 @@ const geminiFileRefreshService = new GeminiFileRefreshService(
 );
 
 // Orchestrator
-const orchestrator = new AgentOrchestrator(
+const agentOrchestrator = new AgentOrchestrator(
     triageProvider,
     generalProvider,
     searchProvider,
@@ -126,7 +126,7 @@ const orchestrator = new AgentOrchestrator(
     paidKey,
     getWebsiteTool,
     getVideoTranscriptionTool,
-    logger.child({ module: "orchestrator" }),
+    logger.child({ module: "agent-orchestrator" }),
     config,
     geminiFileRefreshService,
     MODEL_TIMEOUTS,
@@ -137,11 +137,11 @@ const orchestrator = new AgentOrchestrator(
 const primaryUploader = uploaderRegistry.get(freeKeyProvider.currentKey.id);
 
 // Application use case
-const handleDiscordMessage = new HandleDiscordMessage(
+const handleDiscordMessageUseCase = new HandleDiscordMessageUseCase(
     messageRepository,
-    orchestrator,
+    agentOrchestrator,
     attachmentDownloader,
-    logger.child({ module: "handler" }),
+    logger.child({ module: "discord-message-use-case" }),
     config,
     diskDownloader,
     primaryUploader,
@@ -150,29 +150,29 @@ const handleDiscordMessage = new HandleDiscordMessage(
 
 // Pagination
 const messagePageRepository = new PgMessagePageRepository(db, logger.child({ module: "repository:message-pages" }));
-const getNextPage = new GetNextPage(
+const getNextPage = new GetNextPageUseCase(
     messageRepository,
     messagePageRepository,
-    logger.child({ module: "get-next-page" }),
+    logger.child({ module: "get-next-page-use-case" }),
 );
 
 // Retry orchestration use case
-const retryOrchestration = new RetryOrchestration(
+const retryDiscordMessageUseCase = new RetryDiscordMessageUseCase(
     messageRepository,
-    orchestrator,
-    logger.child({ module: "retryOrchestration" }),
+    agentOrchestrator,
+    logger.child({ module: "discord-message-retry-use-case" }),
 );
 
 // Discord gateway
 const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
 const gateway = new DiscordGateway(
     config.discordToken,
-    handleDiscordMessage,
+    handleDiscordMessageUseCase,
     logger.child({ module: "discord" }),
     statusUpdater,
     messagePageRepository,
     getNextPage,
-    retryOrchestration,
+    retryDiscordMessageUseCase,
     messageRepository,
 );
 

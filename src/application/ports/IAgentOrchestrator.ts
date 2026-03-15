@@ -2,7 +2,7 @@ import type { BaseMessage, HumanMessage } from "@langchain/core/messages";
 import type { DiscordMessage } from "../../domain/message/Message.ts";
 import type { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { OnStatusUpdate } from "../types/AgentStatus.ts";
-import type { IDiscordAttachmentRefetcher } from "./IDiscordAttachmentRefetcher.ts";
+import type { IDiscordAttachmentFetcher } from "./IDiscordAttachmentFetcher.ts";
 
 /**
  * Port for the LLM orchestration layer.
@@ -27,7 +27,7 @@ export interface IAgentOrchestrator {
      * @param userMessage - The current user's HumanMessage
      * @param intent - The user's declared intent, used to bypass triage for explicit commands
      * @param onStatusUpdate - Optional callback invoked as the agent transitions between phases
-     * @param attachmentRefetcher - Optional Discord attachment fetcher for refreshing Gemini file uploads
+     * @param attachmentFetcher - Optional Discord attachment fetcher for refreshing Gemini file uploads
      * @returns The display content string and all new LangChain messages generated during processing
      */
     process(
@@ -35,6 +35,6 @@ export interface IAgentOrchestrator {
         userMessage: HumanMessage,
         intent: MessageIntent,
         onStatusUpdate?: OnStatusUpdate,
-        attachmentRefetcher?: IDiscordAttachmentRefetcher,
+        attachmentFetcher?: IDiscordAttachmentFetcher,
     ): Promise<{ content: string; newMessages: BaseMessage[] }>;
 }

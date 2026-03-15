@@ -86,9 +86,7 @@ export class GenaiFileUploader implements IGeminiFileUploader {
                 });
 
                 if (file.state === FileState.FAILED) {
-                    const err = new AppError("GEMINI_UPLOAD_FAILED", `Gemini file "${fileName}" reached FAILED state`);
-                    Sentry.captureException(err);
-                    throw err;
+                    throw new AppError("GEMINI_UPLOAD_FAILED", `Gemini file "${fileName}" reached FAILED state`);
                 }
 
                 if (file.state !== FileState.ACTIVE) {

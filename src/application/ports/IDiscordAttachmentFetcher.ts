@@ -12,9 +12,9 @@ import type { DiscordAttachmentInfo } from "./IAttachmentDownloader.ts";
  * context captured at request time is valid for any historical message in the chain.
  *
  * Constructed inline in {@link DiscordGateway} per message-create event and passed
- * to {@link HandleDiscordMention.handle} as a parameter.
+ * to {@link HandleDiscordMessageUseCase.handle} as a parameter.
  */
-export interface IDiscordAttachmentRefetcher {
+export interface IDiscordAttachmentFetcher {
     /**
      * Fetches a specific attachment from a message in the captured channel.
      * Returns `null` if the message or attachment no longer exists (deleted).

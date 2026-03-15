@@ -3,7 +3,7 @@ import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
 import { GeminiFileRefreshService } from "../../../src/application/GeminiFileRefreshService.ts";
 import type { DiscordAttachmentInfo } from "../../../src/application/ports/IAttachmentDownloader.ts";
-import type { IDiscordAttachmentRefetcher } from "../../../src/application/ports/IDiscordAttachmentRefetcher.ts";
+import type { IDiscordAttachmentFetcher } from "../../../src/application/ports/IDiscordAttachmentFetcher.ts";
 import type { IDiskAttachmentDownloader } from "../../../src/application/ports/IDiskAttachmentDownloader.ts";
 import type { IGeminiFileRepository } from "../../../src/application/ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploader } from "../../../src/application/ports/IGeminiFileUploader.ts";
@@ -115,7 +115,9 @@ const freshDiscordAttachment: DiscordAttachmentInfo = {
     contentType: "image/png",
 };
 
-function makeRefetcher(attachment: DiscordAttachmentInfo | null = freshDiscordAttachment): IDiscordAttachmentRefetcher {
+function makeAttachmentFetcher(
+    attachment: DiscordAttachmentInfo | null = freshDiscordAttachment,
+): IDiscordAttachmentFetcher {
     return {
         fetchAttachment: mock(async () => attachment),
     };
@@ -137,7 +139,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         );
         const messages = [new AIMessage("hello"), new HumanMessage("world")];
 
-        const result = await service.refreshHistory(messages, makeRefetcher(), TEST_API_KEY_ID);
+        const result = await service.refreshHistory(messages, makeAttachmentFetcher(), TEST_API_KEY_ID);
 
         // No Gemini URLs → early return with same reference
         expect(result).toBe(messages);
@@ -158,7 +160,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
             content: [{ type: "media", mimeType: "image/png", fileUri: GEMINI_URL }],
         });
 
-        const result = await service.refreshHistory([msg], makeRefetcher(), TEST_API_KEY_ID);
+        const result = await service.refreshHistory([msg], makeAttachmentFetcher(), TEST_API_KEY_ID);
 
         // No stale files → no substitutions → same array reference
         expect(result[0]).toBe(msg);
@@ -180,7 +182,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
             content: [{ type: "media", mimeType: "image/png", fileUri: GEMINI_URL }],
         });
 
-        const result = await service.refreshHistory([msg], makeRefetcher(), TEST_API_KEY_ID);
+        const result = await service.refreshHistory([msg], makeAttachmentFetcher(), TEST_API_KEY_ID);
 
         const updated = result[0] as HumanMessage;
         expect(updated).toBeInstanceOf(HumanMessage);
@@ -203,7 +205,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
             content: [{ type: "media", mimeType: "image/png", fileUri: GEMINI_URL }],
         });
 
-        await service.refreshHistory([msg], makeRefetcher(), TEST_API_KEY_ID);
+        await service.refreshHistory([msg], makeAttachmentFetcher(), TEST_API_KEY_ID);
 
         expect(repo.upsertUpload).toHaveBeenCalledWith(
             expect.objectContaining({
@@ -232,7 +234,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
             content: [{ type: "media", mimeType: "image/png", fileUri: GEMINI_URL }],
         });
 
-        await service.refreshHistory([msg], makeRefetcher(), TEST_API_KEY_ID);
+        await service.refreshHistory([msg], makeAttachmentFetcher(), TEST_API_KEY_ID);
 
         expect(uploader.deleteFile).toHaveBeenCalledWith("files/old-uuid");
     });
@@ -255,7 +257,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         });
 
         // null = attachment deleted from Discord
-        const result = await service.refreshHistory([msg], makeRefetcher(null), TEST_API_KEY_ID);
+        const result = await service.refreshHistory([msg], makeAttachmentFetcher(null), TEST_API_KEY_ID);
 
         const updated = result[0] as HumanMessage;
         const blocks = updated.content as unknown[];
@@ -280,7 +282,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
             content: [{ type: "media", mimeType: "image/png", fileUri: GEMINI_URL }],
         });
 
-        const result = await service.refreshHistory([msg], makeRefetcher(), TEST_API_KEY_ID);
+        const result = await service.refreshHistory([msg], makeAttachmentFetcher(), TEST_API_KEY_ID);
 
         // URL should be replaced with the newly uploaded file's URL
         const updated = result[0] as HumanMessage;
@@ -310,7 +312,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         );
         const aiMsg = new AIMessage("some response");
 
-        const result = await service.refreshHistory([aiMsg], makeRefetcher(), TEST_API_KEY_ID);
+        const result = await service.refreshHistory([aiMsg], makeAttachmentFetcher(), TEST_API_KEY_ID);
 
         expect(result[0]).toBe(aiMsg);
     });
@@ -325,7 +327,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         );
         const msg = new HumanMessage("plain text message");
 
-        const result = await service.refreshHistory([msg], makeRefetcher(), TEST_API_KEY_ID);
+        const result = await service.refreshHistory([msg], makeAttachmentFetcher(), TEST_API_KEY_ID);
 
         expect(result[0]).toBe(msg);
     });
@@ -345,7 +347,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
             content: [{ type: "media", mimeType: "image/png", fileUri: GEMINI_URL }],
         });
 
-        const result = await service.refreshHistory([msg], makeRefetcher(), TEST_API_KEY_ID);
+        const result = await service.refreshHistory([msg], makeAttachmentFetcher(), TEST_API_KEY_ID);
 
         // Fresh file → returned as same reference (no substitution)
         expect(result[0]).toBe(msg);
@@ -364,7 +366,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
             content: [{ type: "image", mimeType: "image/png", url: otherUrl }],
         });
 
-        const result = await service.refreshHistory([msg], makeRefetcher(), TEST_API_KEY_ID);
+        const result = await service.refreshHistory([msg], makeAttachmentFetcher(), TEST_API_KEY_ID);
 
         // No Gemini URLs found → same array reference
         expect(result[0]).toBe(msg);

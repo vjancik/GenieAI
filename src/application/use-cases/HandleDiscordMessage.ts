@@ -3,20 +3,20 @@ import { join } from "node:path";
 import type { BaseMessage } from "@langchain/core/messages";
 import { HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
-import type { GeminiFile } from "../domain/message/GeminiFile.ts";
-import type { IMessageRepository } from "../domain/message/IMessageRepository.ts";
-import type { DiscordMessage } from "../domain/message/Message.ts";
-import type { MessageIntent } from "../domain/message/MessageIntent.ts";
-import type { AppConfig } from "./config/AppConfig.ts";
-import type { IAgentOrchestrator } from "./ports/IAgentOrchestrator.ts";
-import type { DiscordAttachmentInfo, IAttachmentDownloader } from "./ports/IAttachmentDownloader.ts";
-import type { IDiscordAttachmentRefetcher } from "./ports/IDiscordAttachmentRefetcher.ts";
-import type { IDiskAttachmentDownloader } from "./ports/IDiskAttachmentDownloader.ts";
-import type { IGeminiFileRepository } from "./ports/IGeminiFileRepository.ts";
-import type { IGeminiFileUploader } from "./ports/IGeminiFileUploader.ts";
-import type { OnStatusUpdate } from "./types/AgentStatus.ts";
-import { AgentStatusType } from "./types/AgentStatus.ts";
-import type { Logger } from "./types/Logger.ts";
+import type { GeminiFile } from "../../domain/message/GeminiFile.ts";
+import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
+import type { DiscordMessage } from "../../domain/message/Message.ts";
+import type { MessageIntent } from "../../domain/message/MessageIntent.ts";
+import type { AppConfig } from "../config/AppConfig.ts";
+import type { IAgentOrchestrator } from "../ports/IAgentOrchestrator.ts";
+import type { DiscordAttachmentInfo, IAttachmentDownloader } from "../ports/IAttachmentDownloader.ts";
+import type { IDiscordAttachmentFetcher } from "../ports/IDiscordAttachmentFetcher.ts";
+import type { IDiskAttachmentDownloader } from "../ports/IDiskAttachmentDownloader.ts";
+import type { IGeminiFileRepository } from "../ports/IGeminiFileRepository.ts";
+import type { IGeminiFileUploader } from "../ports/IGeminiFileUploader.ts";
+import type { OnStatusUpdate } from "../types/AgentStatus.ts";
+import { AgentStatusType } from "../types/AgentStatus.ts";
+import type { Logger } from "../types/Logger.ts";
 
 /** Temp directory for streaming attachments before Gemini upload. */
 const UPLOAD_TEMP_DIR = "/var/tmp/genie-attachments";
@@ -56,7 +56,7 @@ type PendingGeminiRecord = {
  * All messages are serialized using LangChain's BaseMessage.toJSON() to preserve
  * full metadata (thoughtSignatures, tool calls, response_metadata) for context continuity.
  */
-export class HandleDiscordMessage {
+export class HandleDiscordMessageUseCase {
     private readonly maxInlineBytes: number;
     private readonly attachmentMode: AppConfig["attachmentMode"];
 
@@ -85,7 +85,7 @@ export class HandleDiscordMessage {
      * @param params.userContent - Message content with bot mention stripped
      * @param params.attachments - File attachments on the Discord message
      * @param params.onStatusUpdate - Optional callback forwarded to the orchestrator for live status updates
-     * @param params.attachmentRefetcher - Per-request Discord attachment fetcher (required in upload mode)
+     * @param params.attachmentFetcher - Per-request Discord attachment fetcher (required in upload mode)
      * @returns The AI-generated response string and the new LangChain messages generated,
      *          or an error string if attachments exceed the size limit (inline mode only)
      */
@@ -98,7 +98,7 @@ export class HandleDiscordMessage {
         attachments: DiscordAttachmentInfo[];
         intent: MessageIntent;
         onStatusUpdate?: OnStatusUpdate;
-        attachmentRefetcher?: IDiscordAttachmentRefetcher;
+        attachmentFetcher?: IDiscordAttachmentFetcher;
     }): Promise<{
         response: string;
         newMessages: BaseMessage[];
@@ -211,13 +211,13 @@ export class HandleDiscordMessage {
                     }
 
                     // Generate the AI response; the orchestrator handles Gemini file refresh internally
-                    // per key attempt, threaded via attachmentRefetcher in context.
+                    // per key attempt, threaded via attachmentFetcher in context.
                     const { content, newMessages } = await this.orchestrator.process(
                         history,
                         humanMsg,
                         params.intent,
                         params.onStatusUpdate,
-                        params.attachmentRefetcher,
+                        params.attachmentFetcher,
                     );
 
                     if (!content) {

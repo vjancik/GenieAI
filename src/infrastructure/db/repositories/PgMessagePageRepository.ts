@@ -94,7 +94,6 @@ export class PgMessagePageRepository implements IMessagePageRepository {
                     return result;
                 } catch (err) {
                     if (err instanceof DatabaseError) throw err;
-                    Sentry.captureException(err);
                     throw new DatabaseError("Failed to save message page", err);
                 }
             },
@@ -116,7 +115,6 @@ export class PgMessagePageRepository implements IMessagePageRepository {
                     const [result] = await this.stmtFindByBotMessageId.execute({ botDiscordMessageId });
                     return result ?? null;
                 } catch (err) {
-                    Sentry.captureException(err);
                     throw new DatabaseError("Failed to find message page", err);
                 }
             },

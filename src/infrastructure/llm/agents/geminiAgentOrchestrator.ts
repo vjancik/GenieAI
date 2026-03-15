@@ -13,7 +13,7 @@ import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
 import type { GeminiFileRefreshService } from "../../../application/GeminiFileRefreshService.ts";
 import type { IAgentOrchestrator } from "../../../application/ports/IAgentOrchestrator.ts";
-import type { IDiscordAttachmentRefetcher } from "../../../application/ports/IDiscordAttachmentRefetcher.ts";
+import type { IDiscordAttachmentFetcher } from "../../../application/ports/IDiscordAttachmentFetcher.ts";
 import type { IFreeKeyProvider } from "../../../application/ports/IFreeKeyProvider.ts";
 import type { IModelProvider } from "../../../application/ports/IModelProvider.ts";
 import type { OnStatusUpdate } from "../../../application/types/AgentStatus.ts";
@@ -57,7 +57,7 @@ const OrchestratorStateSchema = new StateSchema({
  */
 const OrchestratorContextSchema = z.object({
     onStatusUpdate: z.custom<OnStatusUpdate>().optional(),
-    attachmentRefetcher: z.custom<IDiscordAttachmentRefetcher>().optional(),
+    attachmentFetcher: z.custom<IDiscordAttachmentFetcher>().optional(),
 });
 
 type OrchestratorContext = z.infer<typeof OrchestratorContextSchema>;
@@ -336,14 +336,14 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * @param history - Prior messages in the reply chain, chronologically ordered
      * @param userMessage - The current user's HumanMessage (may contain multimodal content blocks)
      * @param onStatusUpdate - Optional callback invoked as the agent transitions between processing phases
-     * @param attachmentRefetcher - Optional Discord attachment fetcher for refreshing Gemini file uploads
+     * @param attachmentFetcher - Optional Discord attachment fetcher for refreshing Gemini file uploads
      */
     async process(
         history: BaseMessage[],
         userMessage: HumanMessage,
         intent: MessageIntent,
         onStatusUpdate?: OnStatusUpdate,
-        attachmentRefetcher?: IDiscordAttachmentRefetcher,
+        attachmentFetcher?: IDiscordAttachmentFetcher,
     ): Promise<{ content: string; newMessages: BaseMessage[] }> {
         return Sentry.startSpan(
             {
@@ -355,7 +355,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 const initialMessages = [...history, userMessage];
                 const result = await this.graph.invoke(
                     { messages: initialMessages, intent },
-                    { context: { onStatusUpdate, attachmentRefetcher } },
+                    { context: { onStatusUpdate, attachmentFetcher } },
                 );
 
                 // Everything after the initial seed is "new" — generated during this turn
@@ -396,7 +396,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         getModel: (key: GeminiApiKey) => InvokableModel<T>,
         getFallbackModel: ((key: GeminiApiKey) => InvokableModel<T> | undefined) | undefined,
         messages: BaseMessage[],
-        refetcher: IDiscordAttachmentRefetcher | undefined,
+        attachmentFetcher: IDiscordAttachmentFetcher | undefined,
         timeoutMs?: number,
     ): Promise<T> {
         return Sentry.startSpan(
@@ -418,8 +418,12 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     try {
                         // Refresh Gemini file uploads for this specific API key before invoking
                         const refreshed =
-                            this.geminiFileRefreshService && refetcher
-                                ? await this.geminiFileRefreshService.refreshHistory(messages, refetcher, key.id)
+                            this.geminiFileRefreshService && attachmentFetcher
+                                ? await this.geminiFileRefreshService.refreshHistory(
+                                      messages,
+                                      attachmentFetcher,
+                                      key.id,
+                                  )
                                 : messages;
 
                         filtered =
@@ -497,7 +501,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         model: InvokableModel<T>,
         fallbackModel: InvokableModel<T> | undefined,
         messages: BaseMessage[],
-        refetcher: IDiscordAttachmentRefetcher | undefined,
+        attachmentFetcher: IDiscordAttachmentFetcher | undefined,
         timeoutMs?: number,
     ): Promise<T> {
         return Sentry.startSpan(
@@ -508,8 +512,12 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             },
             async (span) => {
                 const refreshed =
-                    this.geminiFileRefreshService && refetcher
-                        ? await this.geminiFileRefreshService.refreshHistory(messages, refetcher, this.paidApiKey.id)
+                    this.geminiFileRefreshService && attachmentFetcher
+                        ? await this.geminiFileRefreshService.refreshHistory(
+                              messages,
+                              attachmentFetcher,
+                              this.paidApiKey.id,
+                          )
                         : messages;
 
                 const filtered =
@@ -626,7 +634,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 this.triageProvider.get.bind(this.triageProvider),
                 this.triageProvider.getFallback.bind(this.triageProvider),
                 messages,
-                config.context?.attachmentRefetcher,
+                config.context?.attachmentFetcher,
                 this.modelTimeouts?.triageTimeoutMs,
             );
 
@@ -745,7 +753,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 this.generalProvider.get.bind(this.generalProvider),
                 this.generalProvider.getFallback.bind(this.generalProvider),
                 invokeMessages,
-                config.context?.attachmentRefetcher,
+                config.context?.attachmentFetcher,
                 this.modelTimeouts?.generalTimeoutMs,
             );
             return { messages: [response] };
@@ -766,7 +774,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 this.searchProvider.get(this.paidApiKey),
                 this.searchProvider.getFallback(this.paidApiKey),
                 messages,
-                config.context?.attachmentRefetcher,
+                config.context?.attachmentFetcher,
                 this.modelTimeouts?.searchTimeoutMs,
             );
             return { messages: [response] };

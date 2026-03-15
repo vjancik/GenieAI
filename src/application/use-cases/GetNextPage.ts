@@ -1,16 +1,16 @@
-import type { IMessageRepository } from "../domain/message/IMessageRepository.ts";
-import type { IMessagePageRepository, MessagePage } from "../domain/message/MessagePage.ts";
-import { splitMarkdown } from "./markdownSplitter.ts";
-import { llmTextToDiscordText } from "./textTransformers.ts";
-import type { Logger } from "./types/Logger.ts";
+import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
+import type { IMessagePageRepository, MessagePage } from "../../domain/message/MessagePage.ts";
+import { splitMarkdown } from "../markdownSplitter.ts";
+import { llmTextToDiscordText } from "../textTransformers.ts";
+import type { Logger } from "../types/Logger.ts";
 
-/** Parameters for {@link GetNextPage.execute}. */
-export interface GetNextPageParams {
+/** Parameters for {@link GetNextPageUseCase.execute}. */
+export interface GetNextPageUseCaseParams {
     /** Discord snowflake of the bot message currently showing the Next Page button. */
     botDiscordMessageId: string;
 }
 
-/** Result of a successful {@link GetNextPage.execute} call. */
+/** Result of a successful {@link GetNextPageUseCase.execute} call. */
 export interface GetNextPageResult {
     /** Next page content (ready to send to Discord — no footer appended). */
     content: string;
@@ -86,7 +86,7 @@ function extractTextFromMessageJson(json: Record<string, unknown>): string {
  *
  * Returns `null` when no pending page state exists (e.g. the user clicked a stale button).
  */
-export class GetNextPage {
+export class GetNextPageUseCase {
     constructor(
         private readonly messageRepo: IMessageRepository,
         private readonly messagePageRepo: IMessagePageRepository,
@@ -99,7 +99,7 @@ export class GetNextPage {
      * @param params - The Discord message ID of the bot message with the Next Page button
      * @returns The next page result, or null if the page state is missing/stale
      */
-    async execute(params: GetNextPageParams): Promise<GetNextPageResult | null> {
+    async execute(params: GetNextPageUseCaseParams): Promise<GetNextPageResult | null> {
         const { botDiscordMessageId } = params;
 
         // Step 1: Look up the pending page state

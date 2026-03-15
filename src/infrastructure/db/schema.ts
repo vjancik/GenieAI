@@ -139,7 +139,7 @@ export const geminiFiles = pgTable("gemini_files", {
     /**
      * Discord message snowflake of the message that originally uploaded this file.
      * Kept as a plain column (no FK) for re-fetching the attachment from the Discord CDN
-     * via IDiscordAttachmentRefetcher — Discord snowflakes are not stored as PKs in our schema.
+     * via {@link IDiscordAttachmentFetcher} — Discord snowflakes are not stored as PKs in our schema.
      */
     discordMessageId: text("discord_message_id").notNull(),
 });

@@ -1,11 +1,11 @@
 import type { BaseMessage, HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
-import type { IMessageRepository } from "../domain/message/IMessageRepository.ts";
-import type { MessageIntent } from "../domain/message/MessageIntent.ts";
-import type { IAgentOrchestrator } from "./ports/IAgentOrchestrator.ts";
-import type { IDiscordAttachmentRefetcher } from "./ports/IDiscordAttachmentRefetcher.ts";
-import type { OnStatusUpdate } from "./types/AgentStatus.ts";
-import type { Logger } from "./types/Logger.ts";
+import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
+import type { MessageIntent } from "../../domain/message/MessageIntent.ts";
+import type { IAgentOrchestrator } from "../ports/IAgentOrchestrator.ts";
+import type { IDiscordAttachmentFetcher } from "../ports/IDiscordAttachmentFetcher.ts";
+import type { OnStatusUpdate } from "../types/AgentStatus.ts";
+import type { Logger } from "../types/Logger.ts";
 
 /**
  * Application use case: re-run the LLM orchestration for a previously saved human message.
@@ -19,7 +19,7 @@ import type { Logger } from "./types/Logger.ts";
  * Returns the same shape as {@link HandleDiscordMessage.handle} so the gateway can
  * share the same post-processing path (pagination, saveBotResponse, button attachment).
  */
-export class RetryOrchestration {
+export class RetryDiscordMessageUseCase {
     constructor(
         private readonly messageRepo: IMessageRepository,
         private readonly orchestrator: IAgentOrchestrator,
@@ -33,13 +33,13 @@ export class RetryOrchestration {
      * @param params.humanDiscordMessageId - Discord snowflake of the human message to retry from
      * @param params.intent - The message intent (re-derived by the caller from the original Discord message)
      * @param params.onStatusUpdate - Optional callback for live status updates
-     * @param params.attachmentRefetcher - Optional Discord attachment fetcher for Gemini file refresh
+     * @param params.attachmentFetcher - Optional Discord attachment fetcher for Gemini file refresh
      */
     async execute(params: {
         humanDiscordMessageId: string;
         intent: MessageIntent;
         onStatusUpdate?: OnStatusUpdate;
-        attachmentRefetcher?: IDiscordAttachmentRefetcher;
+        attachmentFetcher?: IDiscordAttachmentFetcher;
     }): Promise<{
         response: string;
         newMessages: BaseMessage[];
@@ -116,7 +116,7 @@ export class RetryOrchestration {
                         humanMsg,
                         params.intent,
                         params.onStatusUpdate,
-                        params.attachmentRefetcher,
+                        params.attachmentFetcher,
                     );
 
                     if (!content) {

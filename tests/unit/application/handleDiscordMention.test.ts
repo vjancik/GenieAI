@@ -1,10 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
-import { HandleDiscordMessage } from "../../../src/application/HandleDiscordMessage.ts";
 import type { IAgentOrchestrator } from "../../../src/application/ports/IAgentOrchestrator.ts";
 import type { IAttachmentDownloader } from "../../../src/application/ports/IAttachmentDownloader.ts";
 import type { OnStatusUpdate } from "../../../src/application/types/AgentStatus.ts";
+import { HandleDiscordMessageUseCase } from "../../../src/application/use-cases/HandleDiscordMessage.ts";
 import type { IMessageRepository } from "../../../src/domain/message/IMessageRepository.ts";
 import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
 import { MessageIntent } from "../../../src/domain/message/MessageIntent.ts";
@@ -41,7 +41,7 @@ function makeRepo(chainMessages: DiscordMessage[] = []): IMessageRepository {
 
 function makeOrchestrator(response = "AI response"): IAgentOrchestrator {
     return {
-        // Return deserialized messages only when records are present — mirrors real behaviour
+        // Return deserialized messages only when records are present — mirrors real behavior
         buildHistory: mock((records: DiscordMessage[]) => (records.length > 0 ? [prevAiMessage] : [])),
         process: mock(async () => ({
             content: response,
@@ -69,7 +69,13 @@ describe("HandleDiscordMention.handle", () => {
     test("returns the orchestrator response", async () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator("Hello back!");
-        const handler = new HandleDiscordMessage(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
+        const handler = new HandleDiscordMessageUseCase(
+            repo,
+            orchestrator as never,
+            makeDownloader(),
+            testLogger,
+            testConfig,
+        );
 
         const result = await handler.handle({
             discordMessageId: "user-msg-1",
@@ -88,7 +94,13 @@ describe("HandleDiscordMention.handle", () => {
     test("does not fetch chain when referencedMessageId is null", async () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMessage(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
+        const handler = new HandleDiscordMessageUseCase(
+            repo,
+            orchestrator as never,
+            makeDownloader(),
+            testLogger,
+            testConfig,
+        );
 
         await handler.handle({
             discordMessageId: "user-msg-1",
@@ -106,7 +118,13 @@ describe("HandleDiscordMention.handle", () => {
     test("fetches chain when referencedMessageId is set", async () => {
         const repo = makeRepo([baseMessage]);
         const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMessage(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
+        const handler = new HandleDiscordMessageUseCase(
+            repo,
+            orchestrator as never,
+            makeDownloader(),
+            testLogger,
+            testConfig,
+        );
 
         await handler.handle({
             discordMessageId: "user-msg-2",
@@ -124,7 +142,13 @@ describe("HandleDiscordMention.handle", () => {
     test("passes fetched history to orchestrator as LangChain messages", async () => {
         const repo = makeRepo([baseMessage]);
         const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMessage(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
+        const handler = new HandleDiscordMessageUseCase(
+            repo,
+            orchestrator as never,
+            makeDownloader(),
+            testLogger,
+            testConfig,
+        );
 
         await handler.handle({
             discordMessageId: "user-msg-2",
@@ -148,7 +172,13 @@ describe("HandleDiscordMention.handle", () => {
     test("forwards onStatusUpdate to orchestrator.process as the third argument", async () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMessage(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
+        const handler = new HandleDiscordMessageUseCase(
+            repo,
+            orchestrator as never,
+            makeDownloader(),
+            testLogger,
+            testConfig,
+        );
 
         const onStatusUpdate: OnStatusUpdate = mock(() => {});
 
@@ -172,7 +202,13 @@ describe("HandleDiscordMention.handle", () => {
     test("passes empty history to orchestrator when no reply chain", async () => {
         const repo = makeRepo([]);
         const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMessage(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
+        const handler = new HandleDiscordMessageUseCase(
+            repo,
+            orchestrator as never,
+            makeDownloader(),
+            testLogger,
+            testConfig,
+        );
 
         await handler.handle({
             discordMessageId: "user-msg-1",
@@ -193,7 +229,13 @@ describe("HandleDiscordMention.handle", () => {
     test("saves the user's message as a serialized HumanMessage", async () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMessage(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
+        const handler = new HandleDiscordMessageUseCase(
+            repo,
+            orchestrator as never,
+            makeDownloader(),
+            testLogger,
+            testConfig,
+        );
 
         await handler.handle({
             discordMessageId: "user-msg-1",
@@ -223,7 +265,7 @@ describe("HandleDiscordMention.handle", () => {
     test("returns error response when attachment total size exceeds limit", async () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMessage(
+        const handler = new HandleDiscordMessageUseCase(
             repo,
             orchestrator as never,
             makeDownloader(),
@@ -260,7 +302,13 @@ describe("HandleDiscordMention.handle", () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator();
         const downloader = makeDownloader();
-        const handler = new HandleDiscordMessage(repo, orchestrator as never, downloader, testLogger, testConfig);
+        const handler = new HandleDiscordMessageUseCase(
+            repo,
+            orchestrator as never,
+            downloader,
+            testLogger,
+            testConfig,
+        );
 
         await handler.handle({
             discordMessageId: "user-msg-1",
@@ -295,7 +343,13 @@ describe("HandleDiscordMention.saveBotResponse", () => {
     test("saves bot response with assistant role and serialized messages", async () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMessage(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
+        const handler = new HandleDiscordMessageUseCase(
+            repo,
+            orchestrator as never,
+            makeDownloader(),
+            testLogger,
+            testConfig,
+        );
 
         const aiMsg = new AIMessage("The answer is 4");
         await handler.saveBotResponse({
@@ -316,7 +370,13 @@ describe("HandleDiscordMention.saveBotResponse", () => {
     test("saves multiple newMessages (e.g. triage + tool + final)", async () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator();
-        const handler = new HandleDiscordMessage(repo, orchestrator as never, makeDownloader(), testLogger, testConfig);
+        const handler = new HandleDiscordMessageUseCase(
+            repo,
+            orchestrator as never,
+            makeDownloader(),
+            testLogger,
+            testConfig,
+        );
 
         const messages = [
             new AIMessage("triage response"),

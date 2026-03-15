@@ -114,7 +114,6 @@ export class PgMessageRepository implements IMessageRepository {
                     return result;
                 } catch (err) {
                     if (err instanceof DatabaseError) throw err;
-                    Sentry.captureException(err);
                     throw new DatabaseError("Failed to save message", err);
                 }
             },
@@ -147,7 +146,6 @@ export class PgMessageRepository implements IMessageRepository {
                         createdAt: result.createdAt,
                     };
                 } catch (err) {
-                    Sentry.captureException(err);
                     throw new DatabaseError("Failed to find message by ID", err);
                 }
             },
@@ -199,7 +197,6 @@ export class PgMessageRepository implements IMessageRepository {
                         createdAt: result.createdAt,
                     };
                 } catch (err) {
-                    Sentry.captureException(err);
                     throw new DatabaseError("Failed to find message by Discord ID", err);
                 }
             },
@@ -271,7 +268,6 @@ export class PgMessageRepository implements IMessageRepository {
                     }));
                 } catch (err) {
                     if (err instanceof DatabaseError) throw err;
-                    Sentry.captureException(err);
                     throw new DatabaseError("Failed to fetch message chain", err);
                 }
             },

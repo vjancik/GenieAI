@@ -23,7 +23,6 @@
         "multistream",
         "pino",
         "quicktime",
-        "Refetcher",
         "Retriable",
         "shadowcat",
         "splittable",
