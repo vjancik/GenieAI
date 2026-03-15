@@ -36,5 +36,5 @@ export interface IAgentOrchestrator {
         intent: MessageIntent,
         onStatusUpdate?: OnStatusUpdate,
         attachmentFetcher?: IDiscordAttachmentFetcher,
-    ): Promise<{ content: string; newMessages: BaseMessage[] }>;
+    ): Promise<{ content: string; newMessages: BaseMessage[]; isRetryable: boolean }>;
 }

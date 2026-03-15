@@ -46,6 +46,7 @@ function makeOrchestrator(response = "AI response"): IAgentOrchestrator {
         process: mock(async () => ({
             content: response,
             newMessages: [mockAiResponse],
+            isRetryable: false,
         })),
     };
 }

@@ -8,7 +8,7 @@ import {
     SystemMessage,
     ToolMessage,
 } from "@langchain/core/messages";
-import { Command, END, MessagesValue, START, StateGraph, StateSchema } from "@langchain/langgraph";
+import { Command, END, MessagesValue, ReducedValue, START, StateGraph, StateSchema } from "@langchain/langgraph";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
 import type { IAgentOrchestrator } from "../../../application/ports/IAgentOrchestrator.ts";
@@ -47,6 +47,18 @@ const GLOBAL_MODEL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes per invoke
 const OrchestratorStateSchema = new StateSchema({
     messages: MessagesValue,
     intent: z.custom<MessageIntent>(),
+    /**
+     * Set to true by generalNode or searchNode when the fallback model was used.
+     * Signals to the caller that the response quality may be degraded and a retry is worthwhile.
+     * Defaults to false; never set to true by triageNode (routing quality is unaffected).
+     *
+     * Uses a boolean OR reducer so that once any node sets this to true it is never
+     * overwritten back to false by a subsequent node's replace-semantics update.
+     */
+    isRetryable: new ReducedValue(z.boolean().default(false), {
+        inputSchema: z.boolean(),
+        reducer: (current, next) => current || next,
+    }),
 });
 
 /**
@@ -344,7 +356,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         intent: MessageIntent,
         onStatusUpdate?: OnStatusUpdate,
         attachmentFetcher?: IDiscordAttachmentFetcher,
-    ): Promise<{ content: string; newMessages: BaseMessage[] }> {
+    ): Promise<{ content: string; newMessages: BaseMessage[]; isRetryable: boolean }> {
         return Sentry.startSpan(
             {
                 name: "Orchestrate agent pipeline",
@@ -366,7 +378,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 }
 
                 span.setAttribute("agent.new_messages_count", newMessages.length);
-                return { content: extractContent(lastMessage), newMessages };
+                return { content: extractContent(lastMessage), newMessages, isRetryable: result.isRetryable };
             },
         );
     }
@@ -398,7 +410,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         messages: BaseMessage[],
         attachmentFetcher: IDiscordAttachmentFetcher | undefined,
         timeoutMs?: number,
-    ): Promise<T> {
+    ): Promise<{ result: T; usedFallback: boolean }> {
         return Sentry.startSpan(
             {
                 name: "Invoke model with free key rotation",
@@ -438,7 +450,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                             "llm.attempt_count": attempt + 1,
                             "llm.api_key_id": key.id,
                         });
-                        return result;
+                        return { result, usedFallback: false };
                     } catch (err) {
                         if (is429Error(err)) {
                             this.logger.warn(
@@ -465,7 +477,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                                 { attempt, apiKeyId: key.id, errName: (err as Error).name },
                                 "Primary model failed with 503/timeout; trying fallback model",
                             );
-                            // TODO: if fallback model is used, response should be isRetriable
                             // Reuse filtered — same key, same messages, no re-refresh needed
                             const fallbackResult = await fallbackModel.invoke(filtered, {
                                 timeout: timeoutMs ?? GLOBAL_MODEL_TIMEOUT_MS,
@@ -475,7 +486,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                                 "llm.api_key_id": key.id,
                                 "llm.used_fallback": true,
                             });
-                            return fallbackResult;
+                            return { result: fallbackResult, usedFallback: true };
                         }
 
                         // Non-429, non-fallback error: propagate immediately without trying other keys
@@ -503,7 +514,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         messages: BaseMessage[],
         attachmentFetcher: IDiscordAttachmentFetcher | undefined,
         timeoutMs?: number,
-    ): Promise<T> {
+    ): Promise<{ result: T; usedFallback: boolean }> {
         return Sentry.startSpan(
             {
                 name: "Invoke paid model",
@@ -527,7 +538,8 @@ export class AgentOrchestrator implements IAgentOrchestrator {
 
                 const invokeOptions = timeoutMs !== undefined ? { timeout: timeoutMs } : undefined;
                 try {
-                    return await model.invoke(filtered, invokeOptions);
+                    const result = await model.invoke(filtered, invokeOptions);
+                    return { result, usedFallback: false };
                 } catch (err) {
                     if (isModelFallbackError(err) && fallbackModel) {
                         this.logger.warn(
@@ -535,7 +547,8 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                             "Paid model failed with 503/timeout; trying fallback model",
                         );
                         span.setAttribute("llm.used_fallback", true);
-                        return fallbackModel.invoke(filtered, invokeOptions);
+                        const result = await fallbackModel.invoke(filtered, invokeOptions);
+                        return { result, usedFallback: true };
                     }
                     throw err;
                 }
@@ -630,7 +643,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 secondToLastHumanIdx === -1 ? state.messages : state.messages.slice(secondToLastHumanIdx);
             const messages: BaseMessage[] = [new SystemMessage(TRIAGE_SYSTEM_PROMPT), ...triageWindow];
 
-            const triageResponse = await this.invokeWithFreeKeyRotation(
+            const { result: triageResponse } = await this.invokeWithFreeKeyRotation(
                 this.triageProvider.get.bind(this.triageProvider),
                 this.triageProvider.getFallback.bind(this.triageProvider),
                 messages,
@@ -728,7 +741,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * instruction prompt to focus the model on the retrieved content. This extra
      * HumanMessage is passed transiently to the model and is NOT stored in state.
      */
-    private async generalNode(state: GraphState, config: NodeConfig): Promise<{ messages: BaseMessage[] }> {
+    private async generalNode(
+        state: GraphState,
+        config: NodeConfig,
+    ): Promise<{ messages: BaseMessage[]; isRetryable: boolean }> {
         return Sentry.startSpan({ name: "General agent node", op: "agent.node.general" }, async (span) => {
             config.context?.onStatusUpdate?.({
                 type: AgentStatusType.GENERATING,
@@ -749,14 +765,14 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 ...state.messages,
             ];
 
-            const response = await this.invokeWithFreeKeyRotation(
+            const { result: response, usedFallback } = await this.invokeWithFreeKeyRotation(
                 this.generalProvider.get.bind(this.generalProvider),
                 this.generalProvider.getFallback.bind(this.generalProvider),
                 invokeMessages,
                 config.context?.attachmentFetcher,
                 this.modelTimeouts?.generalTimeoutMs,
             );
-            return { messages: [response] };
+            return { messages: [response], isRetryable: usedFallback };
         });
     }
 
@@ -764,20 +780,23 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * Search agent node: generates an answer using the Google-Search-grounded model.
      * Always uses the paid API key — Google Search grounding is a paid-only feature.
      */
-    private async searchNode(state: GraphState, config: NodeConfig): Promise<{ messages: BaseMessage[] }> {
+    private async searchNode(
+        state: GraphState,
+        config: NodeConfig,
+    ): Promise<{ messages: BaseMessage[]; isRetryable: boolean }> {
         return Sentry.startSpan({ name: "Search agent node", op: "agent.node.search" }, async () => {
             config.context?.onStatusUpdate?.({
                 type: AgentStatusType.SEARCHING,
             });
             const messages: BaseMessage[] = [new SystemMessage(SEARCH_SYSTEM_PROMPT), ...state.messages];
-            const response = await this.invokePaidModelWithMiddleware(
+            const { result: response, usedFallback } = await this.invokePaidModelWithMiddleware(
                 this.searchProvider.get(this.paidApiKey),
                 this.searchProvider.getFallback(this.paidApiKey),
                 messages,
                 config.context?.attachmentFetcher,
                 this.modelTimeouts?.searchTimeoutMs,
             );
-            return { messages: [response] };
+            return { messages: [response], isRetryable: usedFallback };
         });
     }
 }

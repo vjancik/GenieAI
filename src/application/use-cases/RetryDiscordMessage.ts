@@ -119,7 +119,7 @@ export class RetryDiscordMessageUseCase {
                         "Retrying orchestration with saved chain",
                     );
 
-                    const { content, newMessages } = await this.orchestrator.process(
+                    const { content, newMessages, isRetryable } = await this.orchestrator.process(
                         history,
                         humanMsg,
                         params.intent,
@@ -140,7 +140,7 @@ export class RetryDiscordMessageUseCase {
                         };
                     }
 
-                    return { response: content, newMessages };
+                    return { response: content, newMessages, isRetryable: isRetryable || undefined };
                 },
             );
         } catch (err) {

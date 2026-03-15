@@ -216,7 +216,7 @@ export class HandleDiscordMessageUseCase {
 
                     // Generate the AI response; the orchestrator handles Gemini file refresh internally
                     // per key attempt, threaded via attachmentFetcher in context.
-                    const { content, newMessages } = await this.orchestrator.process(
+                    const { content, newMessages, isRetryable } = await this.orchestrator.process(
                         history,
                         humanMsg,
                         params.intent,
@@ -237,7 +237,7 @@ export class HandleDiscordMessageUseCase {
                         };
                     }
 
-                    return { response: content, newMessages };
+                    return { response: content, newMessages, isRetryable: isRetryable || undefined };
                 },
             );
         } catch (err) {
