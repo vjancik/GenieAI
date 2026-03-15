@@ -9,10 +9,11 @@ export interface MessagePage {
     /** UUIDv7 primary key */
     id: string;
     /**
-     * Discord snowflake of the bot message currently showing the Next Page button.
-     * Unique — used to look up the pending page state when the button is clicked.
+     * UUID primary key of the bot messages row currently showing the Next Page button.
+     * Unique — one pending page entry per bot message at most.
+     * FK → messages(id); cleaned up via CASCADE when the message is removed.
      */
-    discordMessageId: string;
+    messageId: string;
     /**
      * UUID primary key of the first page bot message row in the messages table.
      * All page rows for a response share this ID — the LangChain content lives on
@@ -51,10 +52,4 @@ export interface IMessagePageRepository {
      * @returns The saved page including generated id and createdAt
      */
     save(page: Omit<MessagePage, "id" | "createdAt">): Promise<MessagePage>;
-
-    /**
-     * Retrieve the pending page entry for the bot message currently showing the Next Page button.
-     * @returns The page entry, or null if no pending page exists (e.g. stale button)
-     */
-    findByDiscordMessageId(discordMessageId: string): Promise<MessagePage | null>;
 }

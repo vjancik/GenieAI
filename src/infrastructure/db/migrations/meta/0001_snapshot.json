@@ -1,6 +1,6 @@
 {
-    "id": "9a60bc53-001c-4aee-a644-5e9c6d7391ec",
-    "prevId": "e25ecbb2-75e2-4fc1-9380-8768c056a377",
+    "id": "d748aca1-26e4-49cb-ae51-6f19b1cb0e5d",
+    "prevId": "f9f2c601-edd8-4dc2-a668-7763041ad312",
     "version": "7",
     "dialect": "postgresql",
     "tables": {
@@ -245,9 +245,9 @@
                     "notNull": true,
                     "default": "uuidv7()"
                 },
-                "bot_discord_message_id": {
-                    "name": "bot_discord_message_id",
-                    "type": "text",
+                "message_id": {
+                    "name": "message_id",
+                    "type": "uuid",
                     "primaryKey": false,
                     "notNull": true
                 },
@@ -298,6 +298,15 @@
             },
             "indexes": {},
             "foreignKeys": {
+                "message_pages_message_id_messages_id_fk": {
+                    "name": "message_pages_message_id_messages_id_fk",
+                    "tableFrom": "message_pages",
+                    "columnsFrom": ["message_id"],
+                    "tableTo": "messages",
+                    "columnsTo": ["id"],
+                    "onUpdate": "no action",
+                    "onDelete": "cascade"
+                },
                 "message_pages_first_page_message_id_messages_id_fk": {
                     "name": "message_pages_first_page_message_id_messages_id_fk",
                     "tableFrom": "message_pages",
@@ -310,9 +319,9 @@
             },
             "compositePrimaryKeys": {},
             "uniqueConstraints": {
-                "message_pages_bot_discord_message_id_unique": {
-                    "name": "message_pages_bot_discord_message_id_unique",
-                    "columns": ["bot_discord_message_id"],
+                "message_pages_message_id_unique": {
+                    "name": "message_pages_message_id_unique",
+                    "columns": ["message_id"],
                     "nullsNotDistinct": false
                 }
             },
@@ -353,7 +362,7 @@
                     "name": "guild_id",
                     "type": "text",
                     "primaryKey": false,
-                    "notNull": false
+                    "notNull": true
                 },
                 "role": {
                     "name": "role",
@@ -366,6 +375,12 @@
                     "type": "json",
                     "primaryKey": false,
                     "notNull": true
+                },
+                "retries_left": {
+                    "name": "retries_left",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false
                 },
                 "created_at": {
                     "name": "created_at",

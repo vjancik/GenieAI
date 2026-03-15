@@ -423,9 +423,9 @@ export class DiscordGateway {
                 newMessages,
                 retriesLeft: isRetryable ? effectiveRetriesLeft - 1 : null,
             });
-            // firstPageMessageId = UUID of the saved messages row for the first page
+            // messageId = UUID of the saved messages row for this page; firstPageMessageId = same for page 1
             await this.messagePageRepo.save({
-                discordMessageId: botReply.id,
+                messageId: savedBotMsg.id,
                 firstPageMessageId: savedBotMsg.id,
                 endOffset: newOffset,
                 currentPage: 1,
@@ -680,7 +680,11 @@ export class DiscordGateway {
                     // Step 1: Compute next page content via use case
                     let result: Awaited<ReturnType<GetNextPageUseCase["execute"]>>;
                     try {
-                        result = await this.getNextPageUseCase.execute({ discordMessageId: currentBotMessageId });
+                        result = await this.getNextPageUseCase.execute({
+                            discordMessageId: currentBotMessageId,
+                            channelId: interaction.message.channelId,
+                            guildId: interaction.message.guildId ?? DM_GUILD_TOKEN,
+                        });
                     } catch (err) {
                         this.logger.error({ err, currentBotMessageId }, "Failed to compute next page");
                         Sentry.captureException(err);
@@ -727,7 +731,7 @@ export class DiscordGateway {
 
                     // Step 4: Persist the messages row first — messagePageRepo.save has a FK on it,
                     // so if this throws the remaining cleanup is skipped entirely.
-                    await this.messageRepo.saveAssistantMessage({
+                    const savedNextBotMsg = await this.messageRepo.saveAssistantMessage({
                         discordMessageId: newBotMessage.id,
                         repliesToDiscordId: currentBotMessageId,
                         channelId: newBotMessage.channelId,
@@ -743,7 +747,7 @@ export class DiscordGateway {
                         !result.isLast
                             ? this.messagePageRepo
                                   .save({
-                                      discordMessageId: newBotMessage.id,
+                                      messageId: savedNextBotMsg.id,
                                       firstPageMessageId: result.firstPageMessageId,
                                       endOffset: result.newOffset,
                                       currentPage: result.currentPage,

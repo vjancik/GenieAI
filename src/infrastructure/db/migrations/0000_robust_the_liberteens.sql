@@ -29,7 +29,7 @@ CREATE TABLE "gemini_files" (
 --> statement-breakpoint
 CREATE TABLE "message_pages" (
 	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
-	"bot_discord_message_id" text NOT NULL,
+	"message_id" uuid NOT NULL,
 	"first_page_message_id" uuid NOT NULL,
 	"end_offset" integer NOT NULL,
 	"current_page" integer NOT NULL,
@@ -37,7 +37,7 @@ CREATE TABLE "message_pages" (
 	"ended_in_code_block" boolean DEFAULT false NOT NULL,
 	"code_block_type" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "message_pages_bot_discord_message_id_unique" UNIQUE("bot_discord_message_id")
+	CONSTRAINT "message_pages_message_id_unique" UNIQUE("message_id")
 );
 --> statement-breakpoint
 CREATE TABLE "messages" (
@@ -45,15 +45,17 @@ CREATE TABLE "messages" (
 	"discord_message_id" text NOT NULL,
 	"replies_to_discord_id" text,
 	"channel_id" text NOT NULL,
-	"guild_id" text,
+	"guild_id" text NOT NULL,
 	"role" text NOT NULL,
 	"langchain_messages" json NOT NULL,
+	"retries_left" integer,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 ALTER TABLE "gemini_file_uploads" ADD CONSTRAINT "gemini_file_uploads_gemini_file_id_gemini_files_id_fk" FOREIGN KEY ("gemini_file_id") REFERENCES "public"."gemini_files"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "gemini_file_uploads" ADD CONSTRAINT "gemini_file_uploads_api_key_id_gemini_api_keys_id_fk" FOREIGN KEY ("api_key_id") REFERENCES "public"."gemini_api_keys"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "gemini_files" ADD CONSTRAINT "gemini_files_message_id_messages_id_fk" FOREIGN KEY ("message_id") REFERENCES "public"."messages"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "message_pages" ADD CONSTRAINT "message_pages_message_id_messages_id_fk" FOREIGN KEY ("message_id") REFERENCES "public"."messages"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "message_pages" ADD CONSTRAINT "message_pages_first_page_message_id_messages_id_fk" FOREIGN KEY ("first_page_message_id") REFERENCES "public"."messages"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "gemini_file_uploads_file_key_idx" ON "gemini_file_uploads" USING btree ("gemini_file_id","api_key_id");--> statement-breakpoint
 CREATE INDEX "gemini_file_uploads_uploaded_at_idx" ON "gemini_file_uploads" USING btree ("uploaded_at");--> statement-breakpoint

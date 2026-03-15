@@ -17,7 +17,8 @@ import { PgMessageRepository } from "../../../src/infrastructure/db/repositories
  *   - DATABASE_URL env var set to the test DB connection string
  *
  * Each test inserts a parent messages row first (required by the FK on
- * message_pages.first_page_message_id), then exercises the page repository.
+ * message_pages.message_id and message_pages.first_page_message_id), then exercises
+ * the page repository.
  */
 
 const TEST_DB_URL = process.env.DATABASE_URL ?? "postgresql://genie_test:genie_test@localhost:5433/genie_test";
@@ -43,7 +44,7 @@ afterAll(async () => {
     await (db as unknown as { $client: { end?: () => Promise<void> } }).$client?.end?.();
 });
 
-/** Insert a messages row so the FK constraint on message_pages is satisfied. */
+/** Insert a messages row so the FK constraints on message_pages are satisfied. */
 async function saveParentMessage(discordMessageId: string): Promise<DiscordMessage> {
     return messageRepo.save({
         discordMessageId,
@@ -57,12 +58,12 @@ async function saveParentMessage(discordMessageId: string): Promise<DiscordMessa
 }
 
 function pagePayload(
-    discordMessageId: string,
+    messageId: string,
     firstPageMessageId: string,
-    overrides: Partial<Omit<MessagePage, "id" | "createdAt" | "discordMessageId" | "firstPageMessageId">> = {},
+    overrides: Partial<Omit<MessagePage, "id" | "createdAt" | "messageId" | "firstPageMessageId">> = {},
 ): Omit<MessagePage, "id" | "createdAt"> {
     return {
-        discordMessageId,
+        messageId,
         firstPageMessageId,
         endOffset: 1800,
         currentPage: 1,
@@ -76,13 +77,13 @@ function pagePayload(
 describe("PgMessagePageRepository.save", () => {
     test("saves a page and returns it with generated id and createdAt", async () => {
         const parent = await saveParentMessage("bot-save-001");
-        const payload = pagePayload(parent.discordMessageId, parent.id);
+        const payload = pagePayload(parent.id, parent.id);
 
         const saved = await pageRepo.save(payload);
 
         expect(saved.id).toBeDefined();
         expect(typeof saved.id).toBe("string");
-        expect(saved.discordMessageId).toBe("bot-save-001");
+        expect(saved.messageId).toBe(parent.id);
         expect(saved.firstPageMessageId).toBe(parent.id);
         expect(saved.endOffset).toBe(1800);
         expect(saved.currentPage).toBe(1);
@@ -90,9 +91,9 @@ describe("PgMessagePageRepository.save", () => {
         expect(saved.createdAt).toBeInstanceOf(Date);
     });
 
-    test("throws DatabaseError on duplicate discordMessageId", async () => {
+    test("throws DatabaseError on duplicate messageId", async () => {
         const parent = await saveParentMessage("bot-dup-001");
-        const payload = pagePayload(parent.discordMessageId, parent.id);
+        const payload = pagePayload(parent.id, parent.id);
 
         await pageRepo.save(payload);
 
@@ -101,44 +102,47 @@ describe("PgMessagePageRepository.save", () => {
 
     test("saves page with endOffset=0 (start of page 2 is beginning of text)", async () => {
         const parent = await saveParentMessage("bot-offset-zero");
-        const saved = await pageRepo.save(pagePayload(parent.discordMessageId, parent.id, { endOffset: 0 }));
+        const saved = await pageRepo.save(pagePayload(parent.id, parent.id, { endOffset: 0 }));
         expect(saved.endOffset).toBe(0);
     });
 
     test("multiple page rows can share the same firstPageMessageId", async () => {
-        // Simulate pages 2 and 3 of the same response both pointing to the first page message
+        // Simulate pages 2 and 3 of the same response all pointing to the first page message.
+        // Each page needs its own messages row (FK on message_id).
         const firstPage = await saveParentMessage("first-page-001");
-        // page 2 and page 3 bot messages don't need messages rows (FK is on first_page_message_id)
-        const page2 = await pageRepo.save(pagePayload("page-2-msg-id", firstPage.id, { currentPage: 2 }));
-        const page3 = await pageRepo.save(pagePayload("page-3-msg-id", firstPage.id, { currentPage: 3 }));
+        const page2Msg = await saveParentMessage("page-2-msg-001");
+        const page3Msg = await saveParentMessage("page-3-msg-001");
+
+        const page2 = await pageRepo.save(pagePayload(page2Msg.id, firstPage.id, { currentPage: 2 }));
+        const page3 = await pageRepo.save(pagePayload(page3Msg.id, firstPage.id, { currentPage: 3 }));
 
         expect(page2.firstPageMessageId).toBe(firstPage.id);
         expect(page3.firstPageMessageId).toBe(firstPage.id);
-        expect(page2.discordMessageId).toBe("page-2-msg-id");
-        expect(page3.discordMessageId).toBe("page-3-msg-id");
+        expect(page2.messageId).toBe(page2Msg.id);
+        expect(page3.messageId).toBe(page3Msg.id);
     });
 });
 
-describe("PgMessagePageRepository.findByDiscordMessageId", () => {
-    test("returns null for a non-existent discordMessageId", async () => {
-        const result = await pageRepo.findByDiscordMessageId("no-such-id");
+describe("PgMessagePageRepository.findByMessageId", () => {
+    test("returns null for a non-existent messageId", async () => {
+        const result = await pageRepo.findByMessageId("00000000-0000-0000-0000-000000000000");
         expect(result).toBeNull();
     });
 
-    test("returns the saved page by its discordMessageId", async () => {
+    test("returns the saved page by its messageId", async () => {
         const parent = await saveParentMessage("bot-find-001");
         await pageRepo.save(
-            pagePayload(parent.discordMessageId, parent.id, {
+            pagePayload(parent.id, parent.id, {
                 currentPage: 2,
                 totalPages: 5,
                 endOffset: 500,
             }),
         );
 
-        const result = await pageRepo.findByDiscordMessageId("bot-find-001");
+        const result = await pageRepo.findByMessageId(parent.id);
 
         expect(result).not.toBeNull();
-        expect(result?.discordMessageId).toBe("bot-find-001");
+        expect(result?.messageId).toBe(parent.id);
         expect(result?.firstPageMessageId).toBe(parent.id);
         expect(result?.currentPage).toBe(2);
         expect(result?.totalPages).toBe(5);
@@ -150,37 +154,56 @@ describe("PgMessagePageRepository.findByDiscordMessageId", () => {
         const p1 = await saveParentMessage("bot-multi-1");
         const p2 = await saveParentMessage("bot-multi-2");
 
-        await pageRepo.save(pagePayload(p1.discordMessageId, p1.id, { currentPage: 1, totalPages: 2 }));
-        await pageRepo.save(pagePayload(p2.discordMessageId, p2.id, { currentPage: 3, totalPages: 4 }));
+        await pageRepo.save(pagePayload(p1.id, p1.id, { currentPage: 1, totalPages: 2 }));
+        await pageRepo.save(pagePayload(p2.id, p2.id, { currentPage: 3, totalPages: 4 }));
 
-        const result = await pageRepo.findByDiscordMessageId("bot-multi-2");
+        const result = await pageRepo.findByMessageId(p2.id);
 
-        expect(result?.discordMessageId).toBe("bot-multi-2");
+        expect(result?.messageId).toBe(p2.id);
         expect(result?.currentPage).toBe(3);
         expect(result?.totalPages).toBe(4);
     });
 
-    test("finds a subsequent-page row by its discordMessageId", async () => {
+    test("finds a subsequent-page row by its messageId", async () => {
         const firstPage = await saveParentMessage("first-page-lookup");
-        await pageRepo.save(pagePayload("page-2-lookup", firstPage.id, { currentPage: 2 }));
+        const page2Msg = await saveParentMessage("page-2-lookup");
+        await pageRepo.save(pagePayload(page2Msg.id, firstPage.id, { currentPage: 2 }));
 
-        const result = await pageRepo.findByDiscordMessageId("page-2-lookup");
+        const result = await pageRepo.findByMessageId(page2Msg.id);
 
-        expect(result?.discordMessageId).toBe("page-2-lookup");
+        expect(result?.messageId).toBe(page2Msg.id);
         expect(result?.firstPageMessageId).toBe(firstPage.id);
         expect(result?.currentPage).toBe(2);
     });
 });
 
 describe("PgMessagePageRepository — cascade behaviour", () => {
-    test("deleting the first-page parent message cascades and removes all page rows", async () => {
+    test("deleting the bot message row cascades and removes its page row", async () => {
         const firstPage = await saveParentMessage("first-page-cascade");
-        await pageRepo.save(pagePayload("page-2-cascade", firstPage.id, { currentPage: 2 }));
-        await pageRepo.save(pagePayload("page-3-cascade", firstPage.id, { currentPage: 3 }));
+        const page2Msg = await saveParentMessage("page-2-cascade");
+        const page3Msg = await saveParentMessage("page-3-cascade");
+        await pageRepo.save(pagePayload(page2Msg.id, firstPage.id, { currentPage: 2 }));
+        await pageRepo.save(pagePayload(page3Msg.id, firstPage.id, { currentPage: 3 }));
 
-        await db.execute(sql`DELETE FROM messages WHERE discord_message_id = ${"first-page-cascade"}`);
+        // Delete page 2's messages row — its page row should cascade
+        await db.execute(sql`DELETE FROM messages WHERE id = ${page2Msg.id}`);
 
-        expect(await pageRepo.findByDiscordMessageId("page-2-cascade")).toBeNull();
-        expect(await pageRepo.findByDiscordMessageId("page-3-cascade")).toBeNull();
+        expect(await pageRepo.findByMessageId(page2Msg.id)).toBeNull();
+        // page 3 is unaffected
+        expect(await pageRepo.findByMessageId(page3Msg.id)).not.toBeNull();
+    });
+
+    test("deleting the first-page parent message cascades and removes all page rows", async () => {
+        const firstPage = await saveParentMessage("first-page-cascade-all");
+        const page2Msg = await saveParentMessage("page-2-cascade-all");
+        const page3Msg = await saveParentMessage("page-3-cascade-all");
+        await pageRepo.save(pagePayload(page2Msg.id, firstPage.id, { currentPage: 2 }));
+        await pageRepo.save(pagePayload(page3Msg.id, firstPage.id, { currentPage: 3 }));
+
+        // Delete the first page's messages row — all page rows should cascade via firstPageMessageId FK
+        await db.execute(sql`DELETE FROM messages WHERE id = ${firstPage.id}`);
+
+        expect(await pageRepo.findByMessageId(page2Msg.id)).toBeNull();
+        expect(await pageRepo.findByMessageId(page3Msg.id)).toBeNull();
     });
 });

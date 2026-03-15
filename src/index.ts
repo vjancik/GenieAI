@@ -23,6 +23,7 @@ import { FetchDiskAttachmentDownloader } from "./infrastructure/attachments/Fetc
 import { GenaiFileUploaderRegistry } from "./infrastructure/attachments/GenaiFileUploaderRegistry.ts";
 import { config } from "./infrastructure/config/config.ts";
 import { createDb } from "./infrastructure/db/connection.ts";
+import { PgGetNextPageQuery } from "./infrastructure/db/queries/PgGetNextPageQuery.ts";
 import { PgGeminiApiKeyRepository } from "./infrastructure/db/repositories/PgGeminiApiKeyRepository.ts";
 import { PgGeminiFileRepository } from "./infrastructure/db/repositories/PgGeminiFileRepository.ts";
 import { PgMessagePageRepository } from "./infrastructure/db/repositories/PgMessagePageRepository.ts";
@@ -150,11 +151,8 @@ const handleDiscordMessageUseCase = new HandleDiscordMessageUseCase(
 
 // Pagination
 const messagePageRepository = new PgMessagePageRepository(db, logger.child({ module: "repository:message-pages" }));
-const getNextPage = new GetNextPageUseCase(
-    messageRepository,
-    messagePageRepository,
-    logger.child({ module: "get-next-page-use-case" }),
-);
+const getNextPageQuery = new PgGetNextPageQuery(db);
+const getNextPage = new GetNextPageUseCase(getNextPageQuery, logger.child({ module: "get-next-page-use-case" }));
 
 // Retry orchestration use case
 const retryDiscordMessageUseCase = new RetryDiscordMessageUseCase(

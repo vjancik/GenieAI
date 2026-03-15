@@ -11,7 +11,7 @@ function buildInsertPageStmt(db: Db) {
     return db
         .insert(messagePages)
         .values({
-            discordMessageId: sql.placeholder("discordMessageId"),
+            messageId: sql.placeholder("messageId"),
             firstPageMessageId: sql.placeholder("firstPageMessageId"),
             endOffset: sql.placeholder("endOffset"),
             currentPage: sql.placeholder("currentPage"),
@@ -23,34 +23,34 @@ function buildInsertPageStmt(db: Db) {
         .prepare("message_page_insert");
 }
 
-/** Prepared statement: find a message page by the bot Discord message ID currently showing the button. */
-function buildFindByBotMessageIdStmt(db: Db) {
+/** Prepared statement: find a message page by the UUID of the bot messages row showing the button. */
+function buildFindByMessageIdStmt(db: Db) {
     return db
         .select()
         .from(messagePages)
-        .where(eq(messagePages.discordMessageId, sql.placeholder("discordMessageId")))
+        .where(eq(messagePages.messageId, sql.placeholder("messageId")))
         .limit(1)
-        .prepare("message_page_find_by_bot_message_id");
+        .prepare("message_page_find_by_message_id");
 }
 
 /**
  * PostgreSQL implementation of {@link IMessagePageRepository} using Drizzle ORM.
  *
  * Tracks pending "next page" state for paginated bot responses.
- * Each row corresponds to one bot message currently displaying a Next Page button.
+ * Each row corresponds to one bot messages row currently displaying a Next Page button.
  * firstPageMessageId always points to the first page's messages row, where the
  * LangChain content is stored, regardless of which page number this row represents.
  */
 export class PgMessagePageRepository implements IMessagePageRepository {
     private readonly stmtInsertPage: ReturnType<typeof buildInsertPageStmt>;
-    private readonly stmtFindByBotMessageId: ReturnType<typeof buildFindByBotMessageIdStmt>;
+    private readonly stmtFindByMessageId: ReturnType<typeof buildFindByMessageIdStmt>;
 
     constructor(
         db: Db,
         private readonly logger: Logger,
     ) {
         this.stmtInsertPage = buildInsertPageStmt(db);
-        this.stmtFindByBotMessageId = buildFindByBotMessageIdStmt(db);
+        this.stmtFindByMessageId = buildFindByMessageIdStmt(db);
     }
 
     async save(page: Omit<MessagePage, "id" | "createdAt">): Promise<MessagePage> {
@@ -60,8 +60,8 @@ export class PgMessagePageRepository implements IMessagePageRepository {
                 op: "db.query",
                 attributes: {
                     "db.table": "message_pages",
-                    "discord.message_id": page.discordMessageId,
-                    "discord.first_page_message_id": page.firstPageMessageId,
+                    "db.message_id": page.messageId,
+                    "db.first_page_message_id": page.firstPageMessageId,
                     "app.current_page": page.currentPage,
                     "app.total_pages": page.totalPages,
                 },
@@ -69,7 +69,7 @@ export class PgMessagePageRepository implements IMessagePageRepository {
             async () => {
                 try {
                     const [result] = await this.stmtInsertPage.execute({
-                        discordMessageId: page.discordMessageId,
+                        messageId: page.messageId,
                         firstPageMessageId: page.firstPageMessageId,
                         endOffset: page.endOffset,
                         currentPage: page.currentPage,
@@ -84,7 +84,7 @@ export class PgMessagePageRepository implements IMessagePageRepository {
 
                     this.logger.debug(
                         {
-                            discordMessageId: page.discordMessageId,
+                            messageId: page.messageId,
                             firstPageMessageId: page.firstPageMessageId,
                             page: page.currentPage,
                         },
@@ -100,19 +100,19 @@ export class PgMessagePageRepository implements IMessagePageRepository {
         );
     }
 
-    async findByDiscordMessageId(discordMessageId: string): Promise<MessagePage | null> {
+    async findByMessageId(messageId: string): Promise<MessagePage | null> {
         return Sentry.startSpan(
             {
-                name: "Find message page by bot message ID",
+                name: "Find message page by message ID",
                 op: "db.query",
                 attributes: {
                     "db.table": "message_pages",
-                    "discord.message_id": discordMessageId,
+                    "db.message_id": messageId,
                 },
             },
             async () => {
                 try {
-                    const [result] = await this.stmtFindByBotMessageId.execute({ discordMessageId });
+                    const [result] = await this.stmtFindByMessageId.execute({ messageId });
                     return result ?? null;
                 } catch (err) {
                     throw new DatabaseError("Failed to find message page", err);
