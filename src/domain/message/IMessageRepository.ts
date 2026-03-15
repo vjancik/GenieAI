@@ -14,7 +14,7 @@ export interface IMessageRepository {
     save(message: Omit<DiscordMessage, "id" | "createdAt">): Promise<DiscordMessage>;
 
     /**
-     * Fetch the full reply chain for the given message, identified by the
+     * Fetch the reply chain for the given message, identified by the
      * (guildId, channelId, discordMessageId) triple.
      * Uses a recursive CTE to walk up the repliesToDiscordId links until the
      * root (null), then returns all messages in chronological order.
@@ -22,12 +22,14 @@ export interface IMessageRepository {
      * @param lookup.startDiscordMessageId - The Discord message ID to start the chain from
      * @param lookup.channelId - The Discord channel snowflake
      * @param lookup.guildId - The Discord guild snowflake, or `"@me"` for DMs
+     * @param lookup.limit - Maximum number of rows to return (default: 10000, guards against infinite loops)
      * @returns Messages ordered chronologically (oldest first), or [] if not found
      */
     fetchChain(lookup: {
         startDiscordMessageId: string;
         channelId: string;
         guildId: string;
+        limit?: number;
     }): Promise<DiscordMessage[]>;
 
     /**

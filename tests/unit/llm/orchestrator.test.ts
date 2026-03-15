@@ -99,6 +99,7 @@ describe("dbMessagesToLangchain", () => {
         repliesToDiscordId: null,
         channelId: "ch-1",
         guildId: "guild-1",
+        retriesLeft: null,
         createdAt: new Date(),
     };
 
@@ -196,6 +197,7 @@ describe("dbMessagesToLangchain — constructor dispatch", () => {
         repliesToDiscordId: null,
         channelId: "ch-1",
         guildId: "guild-1",
+        retriesLeft: null,
         createdAt: new Date(),
     };
 
@@ -284,6 +286,7 @@ describe("dbMessagesToLangchain — thought chunk filtering", () => {
         repliesToDiscordId: null,
         channelId: "ch-1",
         guildId: "guild-1",
+        retriesLeft: null,
         createdAt: new Date(),
     };
 

@@ -44,6 +44,7 @@ function messagePayload(
         guildId: "guild-001",
         role: "human",
         langchainMessages: [new HumanMessage("Hello!").toJSON() as unknown as Record<string, unknown>],
+        retriesLeft: null,
         ...overrides,
     };
 }

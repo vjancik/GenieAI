@@ -48,6 +48,7 @@ function buildInsertMessageStmt(db: Db) {
             guildId: sql.placeholder("guildId"),
             role: sql.placeholder("role"),
             langchainMessages: sql.placeholder("langchainMessages"),
+            retriesLeft: sql.placeholder("retriesLeft"),
         })
         .returning()
         .prepare("message_insert");
@@ -97,6 +98,7 @@ export class PgMessageRepository implements IMessageRepository {
                         guildId: msg.guildId,
                         role: msg.role,
                         langchainMessages: msg.langchainMessages,
+                        retriesLeft: msg.retriesLeft,
                     });
 
                     if (!result) {
@@ -143,6 +145,7 @@ export class PgMessageRepository implements IMessageRepository {
                         langchainMessages: (typeof result.langchainMessages === "string"
                             ? JSON.parse(result.langchainMessages)
                             : result.langchainMessages) as DiscordMessage["langchainMessages"],
+                        retriesLeft: result.retriesLeft ?? null,
                         createdAt: result.createdAt,
                     };
                 } catch (err) {
@@ -194,6 +197,7 @@ export class PgMessageRepository implements IMessageRepository {
                         langchainMessages: (typeof result.langchainMessages === "string"
                             ? JSON.parse(result.langchainMessages)
                             : result.langchainMessages) as DiscordMessage["langchainMessages"],
+                        retriesLeft: result.retriesLeft ?? null,
                         createdAt: result.createdAt,
                     };
                 } catch (err) {
@@ -207,6 +211,7 @@ export class PgMessageRepository implements IMessageRepository {
         startDiscordMessageId: string;
         channelId: string;
         guildId: string;
+        limit?: number;
     }): Promise<DiscordMessage[]> {
         return Sentry.startSpan(
             {
@@ -242,6 +247,8 @@ export class PgMessageRepository implements IMessageRepository {
                  * Note: recursive CTEs cannot be expressed via the Drizzle query builder and
                  * therefore cannot use a prepared statement — raw SQL is required here.
                  */
+                // Default LIMIT guards against referential cycles and unbounded traversal.
+                const rowLimit = lookup.limit ?? 10000;
                 try {
                     const rows = await this.db.execute(sql`
                         WITH RECURSIVE message_chain AS (
@@ -256,7 +263,7 @@ export class PgMessageRepository implements IMessageRepository {
                               AND m.channel_id = mc.channel_id
                               AND m.discord_message_id = mc.replies_to_discord_id
                         )
-                        SELECT * FROM message_chain ORDER BY created_at ASC
+                        SELECT * FROM message_chain ORDER BY created_at ASC LIMIT ${rowLimit}
                     `);
 
                     span.setAttribute("db.result_count", rows.length);
@@ -279,6 +286,7 @@ export class PgMessageRepository implements IMessageRepository {
                         langchainMessages: (typeof row.langchain_messages === "string"
                             ? JSON.parse(row.langchain_messages)
                             : row.langchain_messages) as DiscordMessage["langchainMessages"],
+                        retriesLeft: (row.retries_left as number | null) ?? null,
                         createdAt: row.created_at as Date,
                     }));
                 } catch (err) {

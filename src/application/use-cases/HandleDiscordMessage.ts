@@ -187,6 +187,7 @@ export class HandleDiscordMessageUseCase {
                         // which is incompatible with our DB schema's Record<string, unknown>. Double cast
                         // through unknown bridges the gap — the serialized shape IS a plain JSON object.
                         langchainMessages: [humanMsg.toJSON() as unknown as Record<string, unknown>],
+                        retriesLeft: null,
                     });
 
                     // Two-phase save for each uploaded attachment:
@@ -271,6 +272,8 @@ export class HandleDiscordMessageUseCase {
         channelId: string;
         guildId: string;
         newMessages: BaseMessage[];
+        /** Remaining retries to store on the row. Only set for retryable bot responses. */
+        retriesLeft?: number | null;
     }): Promise<DiscordMessage> {
         return Sentry.startSpan(
             {
@@ -292,6 +295,7 @@ export class HandleDiscordMessageUseCase {
                     // which is incompatible with our DB schema's Record<string, unknown>. Double cast
                     // through unknown bridges the gap — the serialized shape IS a plain JSON object.
                     langchainMessages: params.newMessages.map((m) => m.toJSON() as unknown as Record<string, unknown>),
+                    retriesLeft: params.retriesLeft ?? null,
                 });
 
                 this.logger.debug(

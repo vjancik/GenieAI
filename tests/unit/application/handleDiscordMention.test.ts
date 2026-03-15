@@ -21,6 +21,7 @@ const baseMessage: DiscordMessage = {
     guildId: "guild-789",
     role: "assistant",
     langchainMessages: [prevAiMessage.toJSON() as unknown as Record<string, unknown>],
+    retriesLeft: null,
     createdAt: new Date("2024-01-01T00:00:00Z"),
 };
 

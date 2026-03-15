@@ -37,6 +37,9 @@ const DM_GUILD_TOKEN = "@me";
 /** Custom ID for the Retry button attached to failed bot responses. */
 const RETRY_BUTTON_ID = "retry_mention";
 
+/** Number of retry attempts granted to a retryable bot response. */
+const DEFAULT_RETRIES_LEFT = 3;
+
 /** Custom ID for the Next Page button attached to paginated bot responses. */
 const NEXT_PAGE_BUTTON_ID = "next_page";
 
@@ -323,10 +326,25 @@ export class DiscordGateway {
         newMessages: BaseMessage[];
         isFailure?: boolean;
         isRetryable?: boolean;
+        /**
+         * Retries remaining for this response. Only meaningful when isRetryable is true.
+         * When undefined/null and isRetryable is true, defaults to DEFAULT_RETRIES_LEFT.
+         * When 0 the Retry button is suppressed entirely.
+         */
+        retriesLeft?: number | null;
         thinkingMessagePromise: ReturnType<Message["reply"]>;
         span: Span;
     }): Promise<void> {
-        const { replyTarget, response, newMessages, isFailure, isRetryable, thinkingMessagePromise, span } = params;
+        const {
+            replyTarget,
+            response,
+            newMessages,
+            isFailure,
+            isRetryable,
+            retriesLeft,
+            thinkingMessagePromise,
+            span,
+        } = params;
 
         // Cancel any pending status edit and delete the thinking placeholder before sending
         // the real response so the user is pinged on the final message, not the placeholder.
@@ -346,11 +364,19 @@ export class DiscordGateway {
         // Only populated when the response came from the searchNode (Google Search grounding).
         const sourcesLine = await this.resolveGroundingSources(newMessages);
 
-        // Attach a Retry button when the use case signals a retryable failure
+        // Attach a Retry button when the use case signals a retryable failure and retries remain.
+        // retriesLeft=undefined means this is a fresh response — use DEFAULT_RETRIES_LEFT.
+        // retriesLeft=0 means all retries exhausted — suppress the button.
+        const effectiveRetriesLeft = retriesLeft ?? DEFAULT_RETRIES_LEFT;
         const retryRow =
-            isFailure && isRetryable
+            isFailure && isRetryable && effectiveRetriesLeft > 0
                 ? new ActionRowBuilder<ButtonBuilder>().addComponents(
-                      new ButtonBuilder().setCustomId(RETRY_BUTTON_ID).setLabel("Retry").setStyle(ButtonStyle.Primary),
+                      new ButtonBuilder()
+                          .setCustomId(RETRY_BUTTON_ID)
+                          .setLabel(
+                              `Retry · ${effectiveRetriesLeft} ${effectiveRetriesLeft === 1 ? "Retry" : "Retries"} Left`,
+                          )
+                          .setStyle(ButtonStyle.Primary),
                   )
                 : undefined;
 
@@ -395,6 +421,7 @@ export class DiscordGateway {
                 channelId: botReply.channelId,
                 guildId: botReply.guildId ?? DM_GUILD_TOKEN,
                 newMessages,
+                retriesLeft: isRetryable ? effectiveRetriesLeft - 1 : null,
             });
             // firstPageMessageId = UUID of the saved messages row for the first page
             await this.messagePageRepo.save({
@@ -433,6 +460,7 @@ export class DiscordGateway {
                 channelId: botReply.channelId,
                 guildId: botReply.guildId ?? DM_GUILD_TOKEN,
                 newMessages,
+                retriesLeft: isRetryable ? effectiveRetriesLeft - 1 : null,
             });
 
             // Sources didn't fit in the main message — send as a separate follow-up reply
@@ -466,6 +494,7 @@ export class DiscordGateway {
                 channelId: sourcesReply.channelId,
                 guildId: sourcesReply.guildId ?? DM_GUILD_TOKEN,
                 newMessages: [],
+                retriesLeft: null,
             });
         } catch (err) {
             this.logger.warn({ err }, "Failed to send grounding sources reply");
@@ -536,16 +565,27 @@ export class DiscordGateway {
                 async (span) => {
                     const intent = parseMessageIntent(originalMessage.content);
 
-                    // Check whether the human message was already saved to DB.
-                    // If it was, the failure was in the orchestrator (Scenario A).
-                    // If not, the failure was earlier in the pipeline (Scenario B).
-                    const humanRecord = await this.messageRepo.findByDiscordMessageId({
-                        discordMessageId: originalMessage.id,
+                    // Fetch the tail of the reply chain starting from the failed bot reply.
+                    // With limit=2 we get at most [humanMsg, botReply] in chronological order.
+                    // The bot reply record (last) carries retriesLeft; the human record (second-to-last)
+                    // confirms whether the human message was saved (Scenario A vs B).
+                    const guildId = originalMessage.guildId ?? DM_GUILD_TOKEN;
+                    const chain = await this.messageRepo.fetchChain({
+                        startDiscordMessageId: interaction.message.id,
                         channelId: originalMessage.channelId,
-                        guildId: originalMessage.guildId ?? DM_GUILD_TOKEN,
+                        guildId,
+                        limit: 2,
                     });
 
-                    if (humanRecord) {
+                    // chain is ordered chronologically: [humanMsg, botReply] when both exist,
+                    // or [botReply] / [] when the human message was never saved (Scenario B).
+                    const botRecord = chain.at(-1);
+                    const humanRecord = chain.length >= 2 ? chain.at(-2) : undefined;
+
+                    // retriesLeft from the stored bot reply row — null if not set or record missing.
+                    const retriesLeft = botRecord?.retriesLeft ?? null;
+
+                    if (humanRecord?.role === "human") {
                         // --- Scenario A: human message exists, re-run orchestration only ---
                         span.setAttribute("discord.retry_scenario", "A");
 
@@ -581,7 +621,7 @@ export class DiscordGateway {
                             await this.retryDiscordMessageUseCase.execute({
                                 humanDiscordMessageId: originalMessage.id,
                                 channelId: originalMessage.channelId,
-                                guildId: originalMessage.guildId ?? DM_GUILD_TOKEN,
+                                guildId,
                                 intent,
                                 onStatusUpdate,
                                 attachmentFetcher,
@@ -593,13 +633,14 @@ export class DiscordGateway {
                             newMessages,
                             isFailure,
                             isRetryable,
+                            retriesLeft,
                             thinkingMessagePromise,
                             span,
                         });
                     } else {
                         // --- Scenario B: human message not in DB, run full pipeline ---
                         span.setAttribute("discord.retry_scenario", "B");
-                        await this.handleMessageCreate(originalMessage);
+                        await this.handleMessageCreate(originalMessage, retriesLeft);
                     }
                 },
             );
@@ -692,6 +733,7 @@ export class DiscordGateway {
                         channelId: newBotMessage.channelId,
                         guildId: newBotMessage.guildId ?? DM_GUILD_TOKEN,
                         newMessages: [],
+                        retriesLeft: null,
                     });
 
                     await Promise.allSettled([
@@ -739,7 +781,7 @@ export class DiscordGateway {
         }
     }
 
-    private async handleMessageCreate(message: Message): Promise<void> {
+    private async handleMessageCreate(message: Message, retriesLeft?: number | null): Promise<void> {
         // Ignore all bot messages (including our own) to prevent feedback loops
         if (message.author.bot) return;
 
@@ -765,6 +807,7 @@ export class DiscordGateway {
                 channelId: rateLimitReply.channelId,
                 guildId: rateLimitReply.guildId ?? DM_GUILD_TOKEN,
                 newMessages: [],
+                retriesLeft: null,
             });
             return;
         }
@@ -874,6 +917,7 @@ export class DiscordGateway {
                         newMessages,
                         isFailure,
                         isRetryable,
+                        retriesLeft,
                         thinkingMessagePromise,
                         span,
                     });
@@ -899,6 +943,7 @@ export class DiscordGateway {
                                 channelId: errorReply.channelId,
                                 guildId: errorReply.guildId ?? DM_GUILD_TOKEN,
                                 newMessages: [],
+                                retriesLeft: null,
                             });
                         })
                         .catch((editErr) => {

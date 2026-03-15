@@ -32,5 +32,11 @@ export interface DiscordMessage {
      * Deserialized via load() from @langchain/core/load.
      */
     langchainMessages: Record<string, unknown>[];
+    /**
+     * Remaining retry attempts for this bot response.
+     * Only set on retryable bot responses (fallback model was used).
+     * NULL on human messages and non-retryable bot responses.
+     */
+    retriesLeft: number | null;
     createdAt: Date;
 }

@@ -52,6 +52,7 @@ function messagePayload(
         guildId: "guild-001",
         role: "human",
         langchainMessages: [defaultMsg.toJSON() as unknown as Record<string, unknown>],
+        retriesLeft: null,
         ...overrides,
     };
 }

@@ -52,6 +52,7 @@ async function saveParentMessage(discordMessageId: string): Promise<DiscordMessa
         guildId: "guild-001",
         role: "assistant",
         langchainMessages: [new HumanMessage("stub").toJSON() as unknown as Record<string, unknown>],
+        retriesLeft: null,
     });
 }
 
