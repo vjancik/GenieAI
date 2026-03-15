@@ -27,6 +27,7 @@ import { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { IMessagePageRepository } from "../../domain/message/MessagePage.ts";
 import { shortenRedirectUrl } from "../http/redirectUrl.ts";
 import { InteractionLock } from "./InteractionLock.ts";
+import { RateLimiter } from "./RateLimiter.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
 import { discordMessageToLlmText } from "./textTransformers.ts";
 
@@ -160,6 +161,11 @@ export function extractUserContent(message: Message, botUserId: string, botRoleI
 export class DiscordGateway {
     private readonly client: Client;
     private readonly interactionLock = new InteractionLock();
+    // used only in CreateMessage handler for now
+    private readonly rateLimiter = new RateLimiter([
+        { windowMs: 3_000, limit: 3 },
+        { windowMs: 60_000, limit: 10 },
+    ]);
 
     constructor(
         private readonly token: string,
@@ -747,6 +753,21 @@ export class DiscordGateway {
 
         // Only respond to explicit @mentions or recognized command prefixes
         if (intent === MessageIntent.UNKNOWN && !isExplicitMention(message, botUserId)) return;
+
+        const rateLimit = this.rateLimiter.check(message.author.id);
+        if (!rateLimit.allowed) {
+            const rateLimitReply = await message.reply(
+                "Hi! It seems you have sent too many messages at once recently. Please wait a while before sending more.",
+            );
+            await this.handleDiscordMessageUseCase.saveBotResponse({
+                botDiscordMessageId: rateLimitReply.id,
+                repliesToDiscordId: message.id,
+                channelId: rateLimitReply.channelId,
+                guildId: rateLimitReply.guildId ?? DM_GUILD_TOKEN,
+                newMessages: [],
+            });
+            return;
+        }
         const userContent = extractUserContent(message, botUserId, botRoleId);
         const attachments: DiscordAttachmentInfo[] = [...message.attachments.values()].map((a) => ({
             id: a.id,
@@ -757,10 +778,10 @@ export class DiscordGateway {
             contentType: a.contentType,
         }));
 
-        if (!userContent && attachments.length === 0) {
-            await message.reply("Hi! Mention me with a question or a request.");
-            return;
-        }
+        // No usable content after stripping mentions/commands and no attachments —
+        // substitute a synthetic greeting so the agent can introduce itself.
+        const effectiveUserContent =
+            !userContent && attachments.length === 0 ? "Hi, can you introduce yourself?" : userContent;
 
         this.logger.info(
             {
@@ -831,7 +852,7 @@ export class DiscordGateway {
                     const userName = message.member?.displayName ?? message.author.displayName;
 
                     // Enrich the stripped content with sender attribution for LLM context
-                    const llmContent = discordMessageToLlmText(userName, userContent);
+                    const llmContent = discordMessageToLlmText(userName, effectiveUserContent);
 
                     // handle() never throws — errors are caught internally and returned as a response
                     const { response, newMessages, isFailure, isRetryable } =
@@ -865,9 +886,20 @@ export class DiscordGateway {
                     // message send was initiated. It may also already be deleted if the
                     // error occurred after thinkingMessage.delete(), so swallow any failure.
                     thinkingMessagePromise
-                        ?.then((thinkingMessage) => {
+                        ?.then(async (thinkingMessage) => {
                             this.statusUpdater.cancel(thinkingMessage.id);
-                            return thinkingMessage.edit("Sorry, I encountered an error processing your request.");
+                            const errorReply = await thinkingMessage.edit(
+                                "Sorry, I encountered an error processing your request.",
+                            );
+                            // Persist the error message so it participates in the reply chain.
+                            // The thinking message was never saved, so we save it now after the edit.
+                            await this.handleDiscordMessageUseCase.saveBotResponse({
+                                botDiscordMessageId: errorReply.id,
+                                repliesToDiscordId: message.id,
+                                channelId: errorReply.channelId,
+                                guildId: errorReply.guildId ?? DM_GUILD_TOKEN,
+                                newMessages: [],
+                            });
                         })
                         .catch((editErr) => {
                             this.logger.warn(
