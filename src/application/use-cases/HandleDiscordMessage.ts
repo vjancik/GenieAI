@@ -1,14 +1,16 @@
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
-import type { BaseMessage } from "@langchain/core/messages";
-import { HumanMessage } from "@langchain/core/messages";
+import { AIMessage, type BaseMessage, HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import type { GeminiFile } from "../../domain/message/GeminiFile.ts";
 import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
+import type { DiscordMessage } from "../../domain/message/Message.ts";
 import type { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { AppConfig } from "../config/AppConfig.ts";
+import { discordMessageToLlmText } from "../formatters/textTransformers.ts";
 import type { IAgentOrchestrator } from "../ports/IAgentOrchestrator.ts";
 import type { DiscordAttachmentInfo, IAttachmentDownloader } from "../ports/IAttachmentDownloader.ts";
+import type { DiscordMessageSnapshot, IChatMessageService } from "../ports/IChatMessageService.ts";
 import type { IDiscordAttachmentFetcher } from "../ports/IDiscordAttachmentFetcher.ts";
 import type { IDiskAttachmentDownloader } from "../ports/IDiskAttachmentDownloader.ts";
 import type { IGeminiFileRepository } from "../ports/IGeminiFileRepository.ts";
@@ -44,10 +46,14 @@ type PendingGeminiRecord = {
  *
  * Coordinates:
  * 1. Fetching prior conversation history from the reply chain
- * 2. Downloading and building a multimodal HumanMessage (inline or upload mode)
+ * 2. Downloading and building a multimodal HumanMessage or AIMessage (inline or upload mode)
  * 3. Invoking the LLM orchestrator with history + current message
  *    (the orchestrator handles Gemini file refresh per key attempt internally)
  * 4. Persisting the user's message to the database
+ *
+ * If the DB reply chain is empty but a referencedMessageId exists, falls back to
+ * live-fetching the full Discord reply chain via {@link IChatMessageService}, batch-persisting
+ * all missing messages (with full Gemini upload treatment), and re-fetching from DB.
  *
  * The bot's response message is persisted separately via {@link IMessageRepository.saveAssistantMessage}
  * after it has been sent to Discord, because we need Discord's message ID.
@@ -69,6 +75,7 @@ export class HandleDiscordMessageUseCase {
         private readonly diskDownloader?: IDiskAttachmentDownloader,
         private readonly geminiFileUploader?: IGeminiFileUploader,
         private readonly geminiFileRepo?: IGeminiFileRepository,
+        private readonly chatMessageService?: IChatMessageService,
     ) {
         this.maxInlineBytes = config.maxInlineAttachmentSizeMb * 1024 * 1024;
         this.attachmentMode = config.attachmentMode;
@@ -141,7 +148,7 @@ export class HandleDiscordMessageUseCase {
                     }
 
                     // Fetch existing reply chain if this message is a reply
-                    const dbHistory =
+                    let dbHistory: DiscordMessage[] =
                         params.referencedMessageId !== null
                             ? await this.messageRepo.fetchChain({
                                   startDiscordMessageId: params.referencedMessageId,
@@ -149,6 +156,19 @@ export class HandleDiscordMessageUseCase {
                                   guildId: params.guildId,
                               })
                             : [];
+
+                    // If DB chain is empty but a reply chain exists, fall back to live Discord fetch.
+                    // fetchAndPersistLiveChain throws on failure — the outer try/catch will
+                    // return a retryable error response to the user.
+                    if (dbHistory.length === 0 && params.referencedMessageId !== null && this.chatMessageService) {
+                        dbHistory = await this.fetchAndPersistLiveChain(
+                            this.chatMessageService,
+                            params.referencedMessageId,
+                            params.channelId,
+                            params.guildId,
+                            params.onStatusUpdate,
+                        );
+                    }
 
                     const history = this.orchestrator.buildHistory(dbHistory);
 
@@ -165,15 +185,16 @@ export class HandleDiscordMessageUseCase {
                         "Processing message with history",
                     );
 
-                    // Build the human message — multimodal if attachments are present.
+                    // Build the current turn's message — multimodal if attachments are present.
                     // In upload mode this also returns pending gemini file records that must
                     // be saved AFTER the user's message row exists (FK constraint).
-                    const { humanMsg, pendingRecords } = await this.buildHumanMessage(
-                        params.discordMessageId,
-                        params.userContent,
-                        params.attachments,
-                        params.onStatusUpdate,
-                    );
+                    const { msg, pendingRecords } = await this.buildMessage({
+                        role: "human",
+                        discordMessageId: params.discordMessageId,
+                        content: params.userContent,
+                        attachments: params.attachments,
+                        onStatusUpdate: params.onStatusUpdate,
+                    });
 
                     // Persist the user's message first so gemini_files FK is satisfied.
                     const savedUserMsg = await this.messageRepo.save({
@@ -185,40 +206,20 @@ export class HandleDiscordMessageUseCase {
                         // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
                         // which is incompatible with our DB schema's Record<string, unknown>. Double cast
                         // through unknown bridges the gap — the serialized shape IS a plain JSON object.
-                        langchainMessages: [humanMsg.toJSON() as unknown as Record<string, unknown>],
+                        langchainMessages: [msg.toJSON() as unknown as Record<string, unknown>],
                         retriesLeft: null,
                     });
 
                     // Two-phase save for each uploaded attachment:
                     // 1. saveFile — idempotent insert into gemini_files (permanent anchor)
                     // 2. upsertUpload — insert/update gemini_file_uploads (ephemeral per-key record)
-                    if (pendingRecords.length > 0) {
-                        if (!this.geminiFileRepo || !this.geminiFileUploader) {
-                            throw new Error(
-                                "Upload mode repository dependencies not injected into HandleDiscordMessage",
-                            );
-                        }
-                        const { geminiFileRepo, geminiFileUploader } = this;
-                        for (const { fileAnchor, uploadData } of pendingRecords) {
-                            // TODO: we might have to delete these files in a catch clause if the handler fails as the originalUrl will never get persisted to langchainMessages and this record will never be selected
-                            // Inject the saved message UUID as the FK — messageId was unavailable when fileAnchor was built.
-                            const savedFile = await geminiFileRepo.saveFile({
-                                ...fileAnchor,
-                                messageId: savedUserMsg.id,
-                            });
-                            await geminiFileRepo.upsertUpload({
-                                geminiFileId: savedFile.id,
-                                apiKeyId: geminiFileUploader.apiKeyId,
-                                ...uploadData,
-                            });
-                        }
-                    }
+                    await this.persistPendingGeminiRecords(pendingRecords, savedUserMsg.id);
 
                     // Generate the AI response; the orchestrator handles Gemini file refresh internally
                     // per key attempt, threaded via attachmentFetcher in context.
                     const { content, newMessages, isRetryable } = await this.orchestrator.process(
                         history,
-                        humanMsg,
+                        msg,
                         params.intent,
                         params.onStatusUpdate,
                         params.attachmentFetcher,
@@ -253,48 +254,225 @@ export class HandleDiscordMessageUseCase {
     }
 
     /**
-     * Constructs a HumanMessage from user text and optional file attachments.
-     * Delegates to the appropriate builder based on the configured attachment mode.
+     * Fetches the live Discord reply chain starting from the given message ID,
+     * persists any messages not already in the DB (with full Gemini upload treatment),
+     * then re-fetches the chain from the DB for use as conversation history.
      *
-     * If there are no attachments, always returns a simple string-content HumanMessage.
+     * Throws on Discord API or DB failures — the caller's outer try/catch returns a
+     * retryable error response to the user.
+     */
+    private async fetchAndPersistLiveChain(
+        chatMessageService: IChatMessageService,
+        referencedMessageId: string,
+        channelId: string,
+        guildId: string,
+        onStatusUpdate?: OnStatusUpdate,
+    ): Promise<DiscordMessage[]> {
+        return Sentry.startSpan(
+            {
+                name: "Fetch and persist live chain",
+                op: "app.message.live_chain_fetch",
+                attributes: { "discord.message_id": referencedMessageId },
+            },
+            async (span) => {
+                const snapshots = await chatMessageService.fetchChain({
+                    startDiscordMessageId: referencedMessageId,
+                    channelId,
+                    guildId,
+                });
+
+                span.setAttribute("app.live_chain_length", snapshots.length);
+
+                if (snapshots.length === 0) {
+                    this.logger.debug(
+                        { referencedMessageId },
+                        "Live chain fetch returned no messages — proceeding without history",
+                    );
+                    return [];
+                }
+
+                // Determine which snapshots are already in the DB to avoid re-inserting them
+                const existingIds = await this.messageRepo.findExistingDiscordIds({
+                    guildId,
+                    channelId,
+                    discordMessageIds: snapshots.map((s) => s.id),
+                });
+                const existingIdSet = new Set(existingIds);
+
+                // Only build and persist messages that are not yet in the DB
+                const newSnapshots = snapshots.filter((s) => !existingIdSet.has(s.id));
+
+                span.setAttribute("app.live_chain_new_messages", newSnapshots.length);
+
+                if (newSnapshots.length > 0) {
+                    // Build a LangChain message and collect pending Gemini records for each new snapshot
+                    const built: Array<{
+                        snapshot: DiscordMessageSnapshot;
+                        msg: BaseMessage;
+                        pendingRecords: PendingGeminiRecord[];
+                    }> = [];
+
+                    for (const snapshot of newSnapshots) {
+                        const content = snapshot.isOwnBot
+                            ? snapshot.content
+                            : discordMessageToLlmText(snapshot.authorDisplayName, snapshot.content);
+
+                        const { msg, pendingRecords } = await this.buildMessage({
+                            role: snapshot.isOwnBot ? "assistant" : "human",
+                            discordMessageId: snapshot.id,
+                            content,
+                            attachments: snapshot.attachments,
+                            onStatusUpdate,
+                        });
+
+                        built.push({ snapshot, msg, pendingRecords });
+                    }
+
+                    // Batch-insert all new message rows (conflict = already in DB → silently skip)
+                    const savedRows = await this.messageRepo.saveBatch(
+                        built.map(({ snapshot, msg }) => ({
+                            discordMessageId: snapshot.id,
+                            repliesToDiscordId: snapshot.referencedMessageId,
+                            channelId: snapshot.channelId,
+                            guildId: snapshot.guildId,
+                            role: snapshot.isOwnBot ? "assistant" : ("human" as const),
+                            // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
+                            // which is incompatible with our DB schema's Record<string, unknown>. Double cast
+                            // through unknown bridges the gap — the serialized shape IS a plain JSON object.
+                            langchainMessages: [msg.toJSON() as unknown as Record<string, unknown>],
+                            retriesLeft: null,
+                        })),
+                    );
+
+                    // Build a map of discordMessageId → saved row UUID for Gemini FK resolution.
+                    // saveBatch uses onConflictDoNothing so returned rows may be fewer than input.
+                    const savedRowById = new Map(savedRows.map((r) => [r.discordMessageId, r]));
+
+                    // Two-phase Gemini save for each snapshot that had uploads.
+                    // Match saved row by discordMessageId to get the UUID FK.
+                    for (const { snapshot, pendingRecords } of built) {
+                        if (pendingRecords.length === 0) continue;
+                        const savedRow = savedRowById.get(snapshot.id);
+                        if (!savedRow) {
+                            // Row already existed (race condition) — skip Gemini record creation
+                            // to avoid re-uploading files whose DB anchor already exists.
+                            this.logger.debug(
+                                { discordMessageId: snapshot.id },
+                                "Skipping Gemini record for message not returned by saveBatch (already existed)",
+                            );
+                            continue;
+                        }
+                        await this.persistPendingGeminiRecords(pendingRecords, savedRow.id);
+                    }
+                }
+
+                // Re-fetch from DB now that all messages are persisted — reuses the
+                // established orchestrator.buildHistory() deserialization path.
+                return this.messageRepo.fetchChain({
+                    startDiscordMessageId: referencedMessageId,
+                    channelId,
+                    guildId,
+                });
+            },
+        );
+    }
+
+    /**
+     * Runs the two-phase Gemini file save for each pending record collected during
+     * {@link buildMessage} in upload mode.
+     *
+     * Phase 1: `saveFile` — idempotent insert into `gemini_files` (permanent anchor).
+     * Phase 2: `upsertUpload` — insert/update `gemini_file_uploads` (ephemeral per-key record).
+     *
+     * No-ops when `pendingRecords` is empty or when Gemini deps are not injected.
+     */
+    private async persistPendingGeminiRecords(pendingRecords: PendingGeminiRecord[], messageId: string): Promise<void> {
+        if (pendingRecords.length === 0) return;
+
+        if (!this.geminiFileRepo || !this.geminiFileUploader) {
+            throw new Error("Upload mode repository dependencies not injected into HandleDiscordMessage");
+        }
+
+        const { geminiFileRepo, geminiFileUploader } = this;
+        for (const { fileAnchor, uploadData } of pendingRecords) {
+            // TODO: we might have to delete these files in a catch clause if the handler fails as the originalUrl will never get persisted to langchainMessages and this record will never be selected
+            // Inject the saved message UUID as the FK — messageId was unavailable when fileAnchor was built.
+            const savedFile = await geminiFileRepo.saveFile({
+                ...fileAnchor,
+                messageId,
+            });
+            await geminiFileRepo.upsertUpload({
+                geminiFileId: savedFile.id,
+                apiKeyId: geminiFileUploader.apiKeyId,
+                ...uploadData,
+            });
+        }
+    }
+
+    /**
+     * Constructs a LangChain message from content and optional file attachments.
+     * Produces a {@link HumanMessage} for role "human" and an {@link AIMessage} for role "assistant".
+     * The message class is the only difference — attachment handling and content parts are identical.
+     *
+     * Delegates to the appropriate builder based on the configured attachment mode.
+     * If there are no attachments, always returns a simple string-content message.
      *
      * In upload mode, also returns `pendingRecords` — split GeminiFile + upload data
-     * that must be saved to the DB **after** the user message row exists (FK constraint).
+     * that must be saved to the DB **after** the message row exists (FK constraint).
      * In all other modes `pendingRecords` is always an empty array.
+     *
+     * @param params.role - "human" for user messages, "assistant" for bot messages
+     * @param params.discordMessageId - Discord snowflake for the message (used in Gemini file anchoring)
+     * @param params.content - Formatted message text (already enriched with attribution if needed)
+     * @param params.attachments - File attachments to embed or upload
+     * @param params.onStatusUpdate - Optional status callback for the downloading status update
      */
-    private async buildHumanMessage(
-        discordMessageId: string,
-        userContent: string,
-        attachments: DiscordAttachmentInfo[],
-        onStatusUpdate?: OnStatusUpdate,
-    ): Promise<{
-        humanMsg: HumanMessage;
+    private async buildMessage<R extends "human" | "assistant">(params: {
+        role: R;
+        discordMessageId: string;
+        content: string;
+        attachments: DiscordAttachmentInfo[];
+        onStatusUpdate?: OnStatusUpdate;
+    }): Promise<{
+        msg: R extends "human" ? HumanMessage : AIMessage;
         pendingRecords: PendingGeminiRecord[];
     }> {
+        const { role, discordMessageId, content, attachments, onStatusUpdate } = params;
+
+        // TYPE COERCION: TypeScript cannot narrow a conditional return type (R extends "human" ? ...)
+        // from within the generic implementation body — the union HumanMessage | AIMessage is not
+        // assignable to the unresolved conditional type even though it is always correct at runtime.
+        const wrap = (contentParts: HumanMessage["content"]) =>
+            (role === "human"
+                ? new HumanMessage({ content: contentParts })
+                : new AIMessage({ content: contentParts })) as R extends "human" ? HumanMessage : AIMessage;
+
         if (attachments.length === 0) {
-            return {
-                humanMsg: new HumanMessage(userContent),
-                pendingRecords: [],
-            };
+            return { msg: wrap(content), pendingRecords: [] };
         }
 
         onStatusUpdate?.({ type: AgentStatusType.DOWNLOADING_ATTACHMENTS });
 
         if (this.attachmentMode === "upload") {
-            return this.buildUploadModeMessage(discordMessageId, userContent, attachments);
+            const { contentParts, pendingRecords } = await this.buildUploadModeContentParts(
+                discordMessageId,
+                content,
+                attachments,
+            );
+            return { msg: wrap(contentParts), pendingRecords };
         }
 
-        const humanMsg = await this.buildInlineModeMessage(userContent, attachments);
-        return { humanMsg, pendingRecords: [] };
+        const contentParts = await this.buildInlineModeContentParts(content, attachments);
+        return { msg: wrap(contentParts), pendingRecords: [] };
     }
 
     /**
-     * Inline mode: downloads each attachment to memory as base64, embeds directly in message.
+     * Inline mode: downloads each attachment to memory as base64, embeds directly in message content parts.
      */
-    private async buildInlineModeMessage(
-        userContent: string,
+    private async buildInlineModeContentParts(
+        content: string,
         attachments: DiscordAttachmentInfo[],
-    ): Promise<HumanMessage> {
+    ): Promise<Array<{ type: "text"; text: string } | { type: "media"; mimeType: string; data: string }>> {
         return Sentry.startSpan(
             {
                 name: "Build inline attachment message",
@@ -321,37 +499,33 @@ export class HandleDiscordMessageUseCase {
                 // An attachment-only message (no text) using an unsupported type returns null for all
                 // blocks and is silently dropped from the Gemini contents array.
                 // The legacy path handles { type: "media" } correctly via isMessageContentMedia.
-                const contentParts: Array<
-                    { type: "text"; text: string } | { type: "media"; mimeType: string; data: string }
-                > = [
-                    ...(userContent ? [{ type: "text" as const, text: userContent }] : []),
+                return [
+                    ...(content ? [{ type: "text" as const, text: content }] : []),
                     ...downloaded.map((d) => ({
                         type: "media" as const,
                         mimeType: d.mimeType,
                         data: d.data,
                     })),
                 ];
-
-                return new HumanMessage({ content: contentParts });
             },
         );
     }
 
     /**
      * Upload mode: streams each attachment to a temp file, uploads to Gemini Files API,
-     * then builds a message with Gemini URL references.
+     * then returns content parts with Gemini URL references and pending Gemini records.
      *
      * Temp files are deleted in a try/finally after each upload.
      * Gemini file records are NOT saved here — they are returned as `pendingRecords`
-     * so that `handle()` can persist them after the user message row exists and its
+     * so that the caller can persist them after the message row exists and its
      * UUID primary key is available (required to satisfy the `gemini_files.message_id` FK).
      */
-    private async buildUploadModeMessage(
+    private async buildUploadModeContentParts(
         discordMessageId: string,
-        userContent: string,
+        content: string,
         attachments: DiscordAttachmentInfo[],
     ): Promise<{
-        humanMsg: HumanMessage;
+        contentParts: Array<{ type: "text"; text: string } | { type: "media"; mimeType: string; fileUri: string }>;
         pendingRecords: PendingGeminiRecord[];
     }> {
         return Sentry.startSpan(
@@ -366,8 +540,7 @@ export class HandleDiscordMessageUseCase {
                 }
 
                 // Legacy LangChain media format for file references — uses fileUri instead of data.
-                // See buildInlineModeMessage comment above for why we use type: "media" and
-                // content: rather than contentBlocks: with specific KNOWN_BLOCK_TYPES values.
+                // See buildInlineModeContentParts comment above for why we use type: "media".
                 const uploadedParts: Array<{
                     type: "media";
                     mimeType: string;
@@ -397,7 +570,7 @@ export class HandleDiscordMessageUseCase {
                             "Uploaded attachment to Gemini Files API",
                         );
 
-                        // Collect the split record; saved by handle() after the message row exists.
+                        // Collect the split record; saved by caller after the message row exists.
                         // originalGeminiUrl = geminiUrl on first upload — this is the immutable lookup key
                         // stored in LangChain content blocks and used by GeminiFileRefreshService.
                         pendingRecords.push({
@@ -426,12 +599,8 @@ export class HandleDiscordMessageUseCase {
                     }
                 }
 
-                const contentParts: Array<
-                    { type: "text"; text: string } | { type: "media"; mimeType: string; fileUri: string }
-                > = [...(userContent ? [{ type: "text" as const, text: userContent }] : []), ...uploadedParts];
-
                 return {
-                    humanMsg: new HumanMessage({ content: contentParts }),
+                    contentParts: [...(content ? [{ type: "text" as const, text: content }] : []), ...uploadedParts],
                     pendingRecords,
                 };
             },

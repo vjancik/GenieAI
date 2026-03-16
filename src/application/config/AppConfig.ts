@@ -67,6 +67,14 @@ export interface AppConfig {
      * YT_DLP_HTTP_PROXY is set. Default: 5.
      */
     proxyRetries: number;
+    /**
+     * Optional Discord user ID of a previous bot version. When set, messages
+     * from this user ID in live-fetched reply chains are treated as own-bot
+     * messages (role: "assistant") rather than as external user messages.
+     * Useful when migrating from one bot application to another.
+     * Sourced from PREVIOUS_BOT_ID.
+     */
+    previousBotId: string | undefined;
 }
 
 /**
@@ -159,5 +167,6 @@ export function loadConfig(): AppConfig {
         geminiFileStaleThresholdMinutes: Number(process.env.GEMINI_FILE_STALE_THRESHOLD_MINUTES ?? "15"),
         ytDlpHttpProxy: process.env.YT_DLP_HTTP_PROXY?.trim() || undefined,
         proxyRetries: Number(process.env.PROXY_RETRIES ?? "5"),
+        previousBotId: process.env.PREVIOUS_BOT_ID?.trim() || undefined,
     };
 }

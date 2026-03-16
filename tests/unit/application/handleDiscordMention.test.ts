@@ -3,6 +3,10 @@ import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
 import type { IAgentOrchestrator } from "../../../src/application/ports/IAgentOrchestrator.ts";
 import type { IAttachmentDownloader } from "../../../src/application/ports/IAttachmentDownloader.ts";
+import type {
+    DiscordMessageSnapshot,
+    IChatMessageService,
+} from "../../../src/application/ports/IChatMessageService.ts";
 import type { OnStatusUpdate } from "../../../src/application/types/AgentStatus.ts";
 import { HandleDiscordMessageUseCase } from "../../../src/application/use-cases/HandleDiscordMessage.ts";
 import type { IMessageRepository } from "../../../src/domain/message/IMessageRepository.ts";
@@ -50,6 +54,16 @@ function makeRepo(chainMessages: DiscordMessage[] = []): IMessageRepository {
         fetchChain: mock(async () => chainMessages),
         findById: mock(async () => null),
         findByDiscordMessageId: mock(async () => null),
+        findExistingDiscordIds: mock(async () => []),
+        saveBatch: mock(async (msgs) =>
+            msgs.map((m: DiscordMessage) => ({ ...m, id: `batch-uuid-${m.discordMessageId}`, createdAt: new Date() })),
+        ),
+    };
+}
+
+function makeChatMessageService(snapshots: DiscordMessageSnapshot[] = []): IChatMessageService {
+    return {
+        fetchChain: mock(async () => snapshots),
     };
 }
 
@@ -355,5 +369,198 @@ describe("HandleDiscordMention.handle", () => {
         expect(userMessage).toBeInstanceOf(HumanMessage);
         // Should have structured content (array), not a plain string
         expect(Array.isArray(userMessage.content)).toBe(true);
+    });
+
+    test("calls chatMessageService.fetchChain when DB chain is empty and referencedMessageId is set", async () => {
+        // repo returns empty chain — triggers the live fetch fallback
+        const repo = makeRepo([]);
+        const chatMessageService = makeChatMessageService([]);
+        const handler = new HandleDiscordMessageUseCase(
+            repo,
+            makeOrchestrator() as never,
+            makeDownloader(),
+            testLogger,
+            testConfig,
+            undefined,
+            undefined,
+            undefined,
+            chatMessageService,
+        );
+
+        await handler.handle({
+            discordMessageId: "user-msg-1",
+            referencedMessageId: "ref-123",
+            channelId: "ch-1",
+            guildId: "guild-1",
+            userContent: "Hello",
+            attachments: [],
+            intent: MessageIntent.UNKNOWN,
+        });
+
+        expect(chatMessageService.fetchChain).toHaveBeenCalledWith({
+            startDiscordMessageId: "ref-123",
+            channelId: "ch-1",
+            guildId: "guild-1",
+        });
+    });
+
+    test("does not call chatMessageService.fetchChain when DB chain is non-empty", async () => {
+        const repo = makeRepo([baseMessage]);
+        const chatMessageService = makeChatMessageService([]);
+        const handler = new HandleDiscordMessageUseCase(
+            repo,
+            makeOrchestrator() as never,
+            makeDownloader(),
+            testLogger,
+            testConfig,
+            undefined,
+            undefined,
+            undefined,
+            chatMessageService,
+        );
+
+        await handler.handle({
+            discordMessageId: "user-msg-1",
+            referencedMessageId: "discord-123",
+            channelId: "ch-1",
+            guildId: "guild-1",
+            userContent: "Hello",
+            attachments: [],
+            intent: MessageIntent.UNKNOWN,
+        });
+
+        expect(chatMessageService.fetchChain).not.toHaveBeenCalled();
+    });
+
+    test("does not call chatMessageService.fetchChain when referencedMessageId is null", async () => {
+        const repo = makeRepo([]);
+        const chatMessageService = makeChatMessageService([]);
+        const handler = new HandleDiscordMessageUseCase(
+            repo,
+            makeOrchestrator() as never,
+            makeDownloader(),
+            testLogger,
+            testConfig,
+            undefined,
+            undefined,
+            undefined,
+            chatMessageService,
+        );
+
+        await handler.handle({
+            discordMessageId: "user-msg-1",
+            referencedMessageId: null,
+            channelId: "ch-1",
+            guildId: "@me",
+            userContent: "Hello",
+            attachments: [],
+            intent: MessageIntent.UNKNOWN,
+        });
+
+        expect(chatMessageService.fetchChain).not.toHaveBeenCalled();
+    });
+
+    test("calls saveBatch with only new snapshots when some IDs already exist in DB", async () => {
+        const existingSnapshot: DiscordMessageSnapshot = {
+            id: "snap-existing",
+            content: "old message",
+            authorId: "user-1",
+            authorUsername: "user1",
+            authorDisplayName: "User One",
+            isBot: false,
+            isOwnBot: false,
+            attachments: [],
+            referencedMessageId: null,
+            channelId: "ch-1",
+            guildId: "guild-1",
+            createdAt: new Date(),
+        };
+        const newSnapshot: DiscordMessageSnapshot = {
+            id: "snap-new",
+            content: "new message",
+            authorId: "user-2",
+            authorUsername: "user2",
+            authorDisplayName: "User Two",
+            isBot: false,
+            isOwnBot: false,
+            attachments: [],
+            referencedMessageId: "snap-existing",
+            channelId: "ch-1",
+            guildId: "guild-1",
+            createdAt: new Date(),
+        };
+
+        // repo returns empty initial chain (triggers fallback), then non-empty after batch save
+        const repo = makeRepo([]);
+        // findExistingDiscordIds returns "snap-existing" as already in DB
+        (repo.findExistingDiscordIds as ReturnType<typeof mock>).mockImplementation(async () => ["snap-existing"]);
+        // fetchChain returns populated chain after batch save
+        (repo.fetchChain as ReturnType<typeof mock>)
+            .mockImplementationOnce(async () => [])
+            .mockImplementation(async () => [baseMessage]);
+
+        const chatMessageService = makeChatMessageService([existingSnapshot, newSnapshot]);
+
+        const handler = new HandleDiscordMessageUseCase(
+            repo,
+            makeOrchestrator() as never,
+            makeDownloader(),
+            testLogger,
+            testConfig,
+            undefined,
+            undefined,
+            undefined,
+            chatMessageService,
+        );
+
+        await handler.handle({
+            discordMessageId: "user-msg-1",
+            referencedMessageId: "snap-new",
+            channelId: "ch-1",
+            guildId: "guild-1",
+            userContent: "Hello",
+            attachments: [],
+            intent: MessageIntent.UNKNOWN,
+        });
+
+        // saveBatch should only be called with the new snapshot, not the existing one
+        const batchCall = (repo.saveBatch as ReturnType<typeof mock>).mock.calls[0]?.[0] as DiscordMessage[];
+        expect(batchCall).toHaveLength(1);
+        expect(batchCall[0]?.discordMessageId).toBe("snap-new");
+    });
+
+    test("returns retryable error response when live chain fetch throws", async () => {
+        const repo = makeRepo([]);
+        const chatMessageService: IChatMessageService = {
+            fetchChain: mock(async () => {
+                throw new Error("Discord API down");
+            }),
+        };
+
+        const handler = new HandleDiscordMessageUseCase(
+            repo,
+            makeOrchestrator() as never,
+            makeDownloader(),
+            testLogger,
+            testConfig,
+            undefined,
+            undefined,
+            undefined,
+            chatMessageService,
+        );
+
+        const result = await handler.handle({
+            discordMessageId: "user-msg-1",
+            referencedMessageId: "ref-123",
+            channelId: "ch-1",
+            guildId: "guild-1",
+            userContent: "Hello",
+            attachments: [],
+            intent: MessageIntent.UNKNOWN,
+        });
+
+        expect(result.isFailure).toBe(true);
+        expect(result.isRetryable).toBe(true);
+        expect(result.response).toContain("error");
     });
 });

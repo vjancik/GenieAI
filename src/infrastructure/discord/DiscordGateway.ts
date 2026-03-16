@@ -6,14 +6,13 @@ import {
     ButtonBuilder,
     type ButtonInteraction,
     ButtonStyle,
-    Client,
+    type Client,
     Events,
-    GatewayIntentBits,
     type Message,
 } from "discord.js";
 import { extractWebGroundingChunks, formatGroundingSources } from "../../application/formatters/groundingSources.ts";
 import { splitMarkdown } from "../../application/formatters/markdownSplitter.ts";
-import { llmTextToDiscordText } from "../../application/formatters/textTransformers.ts";
+import { discordMessageToLlmText, llmTextToDiscordText } from "../../application/formatters/textTransformers.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { IDiscordAttachmentFetcher } from "../../application/ports/IDiscordAttachmentFetcher.ts";
 import type { AgentStatusUpdate, OnStatusUpdate } from "../../application/types/AgentStatus.ts";
@@ -26,10 +25,10 @@ import type { IMessageRepository } from "../../domain/message/IMessageRepository
 import { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { IMessagePageRepository } from "../../domain/message/MessagePage.ts";
 import { shortenRedirectUrl } from "../http/redirectUrl.ts";
+import type { DiscordClient } from "./DiscordClient.ts";
 import { InteractionLock } from "./InteractionLock.ts";
 import { RateLimiter } from "./RateLimiter.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
-import { discordMessageToLlmText } from "./textTransformers.ts";
 
 /** Sentinel value stored as guild_id for DM messages, which have no guild. */
 const DM_GUILD_TOKEN = "@me";
@@ -153,15 +152,14 @@ export function extractUserContent(message: Message, botUserId: string, botRoleI
 }
 
 /**
- * Manages the Discord gateway connection and dispatches incoming message events.
+ * Manages Discord event dispatching for incoming messages and button interactions.
  *
- * Requires the following intents:
- * - Guilds: for guild metadata
- * - GuildMessages: for guild message events
- * - MessageContent: for reading message body (privileged intent, must be enabled in Dev Portal)
- * - DirectMessages: for DM support
+ * Lifecycle (start/stop) is delegated to the injected {@link DiscordClient}, which
+ * is solely responsible for the discord.js Client connection. The gateway saves a
+ * direct reference to the underlying discord.js Client for use in event handlers.
  */
 export class DiscordGateway {
+    /** Saved reference to the underlying discord.js Client. */
     private readonly client: Client;
     private readonly interactionLock = new InteractionLock();
     // used only in CreateMessage handler for now
@@ -171,7 +169,7 @@ export class DiscordGateway {
     ]);
 
     constructor(
-        private readonly token: string,
+        discordClient: DiscordClient,
         private readonly handleDiscordMessageUseCase: HandleDiscordMessageUseCase,
         private readonly logger: Logger,
         private readonly statusUpdater: StatusMessageUpdater,
@@ -180,35 +178,11 @@ export class DiscordGateway {
         private readonly retryDiscordMessageUseCase: RetryDiscordMessageUseCase,
         private readonly messageRepo: IMessageRepository,
     ) {
-        this.client = new Client({
-            intents: [
-                GatewayIntentBits.Guilds,
-                GatewayIntentBits.GuildMessages,
-                GatewayIntentBits.MessageContent,
-                GatewayIntentBits.DirectMessages,
-            ],
-        });
-
+        this.client = discordClient.client;
         this.registerEventHandlers();
     }
 
-    /** Connect the bot to Discord's gateway. */
-    async start(): Promise<void> {
-        await this.client.login(this.token);
-        this.logger.info({ tag: this.client.user?.tag }, "Discord bot connected");
-    }
-
-    /** Gracefully disconnect from Discord. */
-    async stop(): Promise<void> {
-        this.client.destroy();
-        this.logger.info("Discord bot disconnected");
-    }
-
     private registerEventHandlers(): void {
-        this.client.once(Events.ClientReady, (client) => {
-            this.logger.info({ tag: client.user.tag }, "Discord bot ready");
-        });
-
         this.client.on(Events.MessageCreate, (message) => {
             // Fire-and-forget; errors are caught and logged internally
             void this.handleMessageCreate(message);

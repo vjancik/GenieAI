@@ -75,4 +75,34 @@ export interface IMessageRepository {
         channelId: string;
         guildId: string;
     }): Promise<DiscordMessage | null>;
+
+    /**
+     * Returns the subset of the given Discord message IDs that are already
+     * persisted for the given guild and channel.
+     *
+     * Used before a batch save to avoid re-inserting messages that already exist
+     * (which would violate the unique guild+channel+discordMessageId constraint).
+     *
+     * @param lookup.guildId - The Discord guild snowflake, or `"@me"` for DMs
+     * @param lookup.channelId - The Discord channel snowflake
+     * @param lookup.discordMessageIds - The Discord snowflake IDs to check
+     * @returns The subset of discordMessageIds that exist in the DB
+     */
+    findExistingDiscordIds(lookup: {
+        guildId: string;
+        channelId: string;
+        discordMessageIds: string[];
+    }): Promise<string[]>;
+
+    /**
+     * Batch-insert multiple message records, skipping any that already exist
+     * (by the unique guild+channel+discordMessageId constraint).
+     *
+     * Used when persisting a live-fetched Discord reply chain so that pre-existing
+     * messages are silently skipped without causing constraint errors.
+     *
+     * @param messages - Array of message data without auto-generated id and createdAt
+     * @returns All successfully inserted rows (excludes silently skipped duplicates)
+     */
+    saveBatch(messages: Omit<DiscordMessage, "id" | "createdAt">[]): Promise<DiscordMessage[]>;
 }

@@ -28,6 +28,8 @@ import { PgGeminiApiKeyRepository } from "./infrastructure/db/repositories/PgGem
 import { PgGeminiFileRepository } from "./infrastructure/db/repositories/PgGeminiFileRepository.ts";
 import { PgMessagePageRepository } from "./infrastructure/db/repositories/PgMessagePageRepository.ts";
 import { PgMessageRepository } from "./infrastructure/db/repositories/PgMessageRepository.ts";
+import { DiscordChatMessageService } from "./infrastructure/discord/DiscordChatMessageService.ts";
+import { DiscordClient } from "./infrastructure/discord/DiscordClient.ts";
 import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
 import { StatusMessageUpdater } from "./infrastructure/discord/StatusMessageUpdater.ts";
 import { AgentOrchestrator, type ModelTimeouts } from "./infrastructure/llm/agents/geminiAgentOrchestrator.ts";
@@ -137,6 +139,16 @@ const agentOrchestrator = new AgentOrchestrator(
 // The refresh service handles uploading for other keys internally during orchestration.
 const primaryUploader = uploaderRegistry.get(freeKeyProvider.currentKey.id);
 
+// Discord client lifecycle wrapper — created before use cases and gateway so both can share it
+const discordClient = new DiscordClient(config.discordToken, logger.child({ module: "discord-client" }));
+
+// Live Discord chain fetch service — used as fallback when DB reply chain is empty
+const discordChatMessageService = new DiscordChatMessageService(
+    discordClient,
+    config.previousBotId,
+    logger.child({ module: "discord-chat" }),
+);
+
 // Application use case
 const handleDiscordMessageUseCase = new HandleDiscordMessageUseCase(
     messageRepository,
@@ -147,6 +159,7 @@ const handleDiscordMessageUseCase = new HandleDiscordMessageUseCase(
     diskDownloader,
     primaryUploader,
     geminiFileRepository,
+    discordChatMessageService,
 );
 
 // Pagination
@@ -163,8 +176,8 @@ const retryDiscordMessageUseCase = new RetryDiscordMessageUseCase(
 
 // Discord gateway
 const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
-const gateway = new DiscordGateway(
-    config.discordToken,
+new DiscordGateway(
+    discordClient,
     handleDiscordMessageUseCase,
     logger.child({ module: "discord" }),
     statusUpdater,
@@ -177,7 +190,7 @@ const gateway = new DiscordGateway(
 // Graceful shutdown
 async function shutdown() {
     logger.info("Shutting down...");
-    await gateway.stop();
+    discordClient.stop();
     await Sentry.flush(2000);
     process.exit(0);
 }
@@ -196,4 +209,4 @@ process.on("uncaughtException", (error) => {
     process.exit(1);
 });
 
-await gateway.start();
+await discordClient.start();

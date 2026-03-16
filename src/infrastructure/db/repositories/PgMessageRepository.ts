@@ -1,6 +1,6 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Logger } from "../../../application/types/Logger.ts";
 import { DatabaseError } from "../../../domain/errors/AppError.ts";
 import type { IMessageRepository } from "../../../domain/message/IMessageRepository.ts";
@@ -235,6 +235,80 @@ export class PgMessageRepository implements IMessageRepository {
                     };
                 } catch (err) {
                     throw new DatabaseError("Failed to find message by Discord ID", err);
+                }
+            },
+        );
+    }
+
+    async findExistingDiscordIds(lookup: {
+        guildId: string;
+        channelId: string;
+        discordMessageIds: string[];
+    }): Promise<string[]> {
+        if (lookup.discordMessageIds.length === 0) return [];
+        try {
+            const rows = await this.db
+                .select({ discordMessageId: messages.discordMessageId })
+                .from(messages)
+                .where(
+                    and(
+                        eq(messages.guildId, lookup.guildId),
+                        eq(messages.channelId, lookup.channelId),
+                        inArray(messages.discordMessageId, lookup.discordMessageIds),
+                    ),
+                );
+            return rows.map((r) => r.discordMessageId);
+        } catch (err) {
+            throw new DatabaseError("Failed to find existing Discord message IDs", err);
+        }
+    }
+
+    async saveBatch(msgs: Omit<DiscordMessage, "id" | "createdAt">[]): Promise<DiscordMessage[]> {
+        if (msgs.length === 0) return [];
+        return Sentry.startSpan(
+            {
+                name: "Batch save messages to database",
+                op: "db.query",
+                attributes: { "db.table": "messages", "app.batch_size": msgs.length },
+            },
+            async () => {
+                try {
+                    const rows = await this.db
+                        .insert(messages)
+                        .values(
+                            msgs.map((m) => ({
+                                discordMessageId: m.discordMessageId,
+                                repliesToDiscordId: m.repliesToDiscordId,
+                                channelId: m.channelId,
+                                guildId: m.guildId,
+                                role: m.role,
+                                langchainMessages: m.langchainMessages,
+                                retriesLeft: m.retriesLeft,
+                            })),
+                        )
+                        .onConflictDoNothing()
+                        .returning();
+
+                    this.logger.debug({ batchSize: msgs.length, insertedCount: rows.length }, "Batch saved messages");
+
+                    return rows.map((row) => ({
+                        id: row.id,
+                        discordMessageId: row.discordMessageId,
+                        repliesToDiscordId: row.repliesToDiscordId ?? null,
+                        channelId: row.channelId,
+                        guildId: row.guildId,
+                        role: row.role,
+                        // TYPE COERCION: the parsed value's shape matches DiscordMessage["langchainMessages"]
+                        // by construction (it was stored from BaseMessage.toJSON()), but TS cannot verify it.
+                        langchainMessages: (typeof row.langchainMessages === "string"
+                            ? JSON.parse(row.langchainMessages)
+                            : row.langchainMessages) as DiscordMessage["langchainMessages"],
+                        retriesLeft: row.retriesLeft ?? null,
+                        createdAt: row.createdAt,
+                    }));
+                } catch (err) {
+                    if (err instanceof DatabaseError) throw err;
+                    throw new DatabaseError("Failed to batch save messages", err);
                 }
             },
         );

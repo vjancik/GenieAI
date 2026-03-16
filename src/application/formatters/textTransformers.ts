@@ -2,6 +2,7 @@
  * Text transformation utilities at the application layer boundary.
  *
  * `llmTextToDiscordText` — sanitizes LLM output for Discord rendering
+ * `discordMessageToLlmText` — enriches a Discord message with sender context for LLM input
  */
 
 /**
@@ -42,4 +43,18 @@ const HORIZONTAL_RULE_RE = /^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$/gm;
  */
 export function llmTextToDiscordText(text: string): string {
     return text.replace(HORIZONTAL_RULE_RE, "").replace(MULTI_BLANK_LINE_RE, "\n").trim();
+}
+
+/**
+ * Wraps a user's message content with a sender attribution header so the LLM
+ * has consistent context about who is speaking.
+ *
+ * The username is resolved by the caller with guild-aware priority:
+ * server nickname > guild display name > global display name.
+ *
+ * @param username - The resolved display name of the message author
+ * @param content  - The stripped message content (bot mention and command prefix already removed)
+ */
+export function discordMessageToLlmText(username: string, content: string): string {
+    return `Message from user ${username}:\n${content}`;
 }

@@ -305,3 +305,114 @@ describe("PgMessageRepository.fetchChain", () => {
         expect((second as AIMessage).content).toBe("final answer");
     });
 });
+
+describe("PgMessageRepository.findExistingDiscordIds", () => {
+    test("returns empty array for empty input", async () => {
+        const result = await repo.findExistingDiscordIds({
+            guildId: "guild-001",
+            channelId: "ch-001",
+            discordMessageIds: [],
+        });
+        expect(result).toEqual([]);
+    });
+
+    test("returns all IDs that exist in DB", async () => {
+        await repo.save(messagePayload({ discordMessageId: "exist-001" }));
+        await repo.save(messagePayload({ discordMessageId: "exist-002" }));
+
+        const result = await repo.findExistingDiscordIds({
+            guildId: "guild-001",
+            channelId: "ch-001",
+            discordMessageIds: ["exist-001", "exist-002", "missing-001"],
+        });
+
+        expect(result).toHaveLength(2);
+        expect(result).toContain("exist-001");
+        expect(result).toContain("exist-002");
+    });
+
+    test("returns empty array when none of the IDs exist", async () => {
+        const result = await repo.findExistingDiscordIds({
+            guildId: "guild-001",
+            channelId: "ch-001",
+            discordMessageIds: ["ghost-001", "ghost-002"],
+        });
+        expect(result).toEqual([]);
+    });
+
+    test("does not return IDs from a different channel", async () => {
+        await repo.save(messagePayload({ discordMessageId: "cross-001", channelId: "ch-other" }));
+
+        const result = await repo.findExistingDiscordIds({
+            guildId: "guild-001",
+            channelId: "ch-001",
+            discordMessageIds: ["cross-001"],
+        });
+        expect(result).toEqual([]);
+    });
+
+    test("does not return IDs from a different guild", async () => {
+        await repo.save(messagePayload({ discordMessageId: "guild-cross-001", guildId: "guild-other" }));
+
+        const result = await repo.findExistingDiscordIds({
+            guildId: "guild-001",
+            channelId: "ch-001",
+            discordMessageIds: ["guild-cross-001"],
+        });
+        expect(result).toEqual([]);
+    });
+});
+
+describe("PgMessageRepository.saveBatch", () => {
+    test("returns empty array for empty input", async () => {
+        const result = await repo.saveBatch([]);
+        expect(result).toEqual([]);
+    });
+
+    test("saves a single row and returns it with id and createdAt", async () => {
+        const payload = messagePayload({ discordMessageId: "batch-001" });
+        const result = await repo.saveBatch([payload]);
+
+        expect(result).toHaveLength(1);
+        expect(result[0]?.discordMessageId).toBe("batch-001");
+        expect(result[0]?.id).toBeDefined();
+        expect(result[0]?.createdAt).toBeInstanceOf(Date);
+    });
+
+    test("saves a batch of multiple rows in order", async () => {
+        const payloads = [
+            messagePayload({ discordMessageId: "batch-multi-1" }),
+            messagePayload({ discordMessageId: "batch-multi-2" }),
+            messagePayload({ discordMessageId: "batch-multi-3" }),
+        ];
+        const result = await repo.saveBatch(payloads);
+
+        expect(result).toHaveLength(3);
+        const ids = result.map((r) => r.discordMessageId);
+        expect(ids).toContain("batch-multi-1");
+        expect(ids).toContain("batch-multi-2");
+        expect(ids).toContain("batch-multi-3");
+    });
+
+    test("skips duplicate discordMessageIds silently (onConflictDoNothing)", async () => {
+        const payload = messagePayload({ discordMessageId: "batch-dup-001" });
+        // First insert succeeds
+        const first = await repo.saveBatch([payload]);
+        expect(first).toHaveLength(1);
+
+        // Second insert with same discordMessageId is skipped
+        const second = await repo.saveBatch([payload]);
+        expect(second).toHaveLength(0);
+    });
+
+    test("partial batch: skips existing, inserts new", async () => {
+        const existing = messagePayload({ discordMessageId: "batch-partial-existing" });
+        await repo.save(existing);
+
+        const result = await repo.saveBatch([existing, messagePayload({ discordMessageId: "batch-partial-new" })]);
+
+        // Only the new one should be returned
+        expect(result).toHaveLength(1);
+        expect(result[0]?.discordMessageId).toBe("batch-partial-new");
+    });
+});
