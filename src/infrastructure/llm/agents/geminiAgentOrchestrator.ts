@@ -651,8 +651,14 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 this.modelTimeouts?.triageTimeoutMs,
             );
 
-            // TODO: we should check if there are more than 1 tool calls and add a log warning
-            const toolCall = triageResponse.tool_calls?.[0];
+            const toolCalls = triageResponse.tool_calls ?? [];
+            if (toolCalls.length > 1) {
+                this.logger.warn(
+                    { toolNames: toolCalls.map((tc) => tc.name) },
+                    "Triage returned multiple tool calls; only the first will be used",
+                );
+            }
+            const toolCall = toolCalls[0];
 
             if (!toolCall) {
                 this.logger.info("Triage made no tool call, routing to general agent");
@@ -754,8 +760,9 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             });
             const lastMsg = state.messages.at(-1);
             const hasToolResult = lastMsg instanceof ToolMessage;
-
-            span.setAttribute("agent.has_tool_result", hasToolResult);
+            const hasVideoCaptions = state.messages.some(
+                (msg) => msg instanceof ToolMessage && msg.name === "get_video_captions",
+            );
 
             const dateStr = new Date().toLocaleDateString("en-US", {
                 weekday: "long",
@@ -763,8 +770,17 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 month: "long",
                 day: "numeric",
             });
+
+            span.setAttributes({
+                "agent.has_tool_result": hasToolResult,
+                "agent.general_node.date_str": dateStr,
+                "agent.general_node.has_video_captions": hasVideoCaptions,
+            });
+
+            this.logger.debug({ dateStr, hasVideoCaptions, hasToolResult }, "General node prompt parameters");
+
             const invokeMessages: BaseMessage[] = [
-                new SystemMessage(buildGeneralSystemPrompt(dateStr)),
+                new SystemMessage(buildGeneralSystemPrompt(dateStr, hasVideoCaptions)),
                 ...state.messages,
             ];
 

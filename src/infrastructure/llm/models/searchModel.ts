@@ -53,7 +53,9 @@ function createSearchModel(
 
     // Bind the native Google Search grounding tool — this uses Gemini's built-in
     // search capability rather than a custom web search implementation.
-    return llm.bindTools([{ googleSearch: {} }]);
+    // NOTE: tool_choice only affects standard tools, not google-specific provider tools which is invoked
+    // and enriches the response regardless of the setting
+    return llm.bindTools([{ googleSearch: {} }], { tool_choice: "none" });
 }
 
 export type SearchModel = ReturnType<typeof createSearchModel>;

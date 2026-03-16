@@ -1,5 +1,5 @@
 /**
- * Fetch proxy preload script — intercepts generateContent API calls and logs the full request body.
+ * Fetch proxy preload script — intercepts generateContent API calls and logs the full request body and response.
  *
  * Load with: bun --preload ./scripts/dev/fetch-proxy.ts <your-script>
  */
@@ -25,9 +25,23 @@ globalThis.fetch = async function proxiedFetch(input: Request | string | URL, in
         }
 
         console.log(`[fetch-proxy] generateContent request\n${JSON.stringify({ url, body }, null, 2)}`);
+
+        const response = await originalFetch(input, init);
+        // Clone so the caller can still consume the original response body
+        const responseBody = await response.clone().text();
+        let parsedResponse: unknown;
+        try {
+            parsedResponse = JSON.parse(responseBody);
+        } catch {
+            parsedResponse = responseBody;
+        }
+        console.log(
+            `[fetch-proxy] generateContent response\n${JSON.stringify({ url, status: response.status, body: parsedResponse }, null, 2)}`,
+        );
+        return response;
     }
 
     return originalFetch(input, init);
 } as typeof globalThis.fetch;
 
-console.log("[fetch-proxy] Fetch proxy active — logging generateContent requests");
+console.log("[fetch-proxy] Fetch proxy active — logging generateContent requests and responses");

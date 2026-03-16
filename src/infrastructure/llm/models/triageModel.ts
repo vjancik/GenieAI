@@ -89,7 +89,7 @@ function createTriageModel(
     });
 
     const tools = [options.getWebsiteTool, options.getVideoCaptionsTool, routeToSearchTool, routeToGeneralTool];
-    return llm.bindTools(tools);
+    return llm.bindTools(tools, { tool_choice: "any" });
 }
 
 export type TriageModel = ReturnType<typeof createTriageModel>;
