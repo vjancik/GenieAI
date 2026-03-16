@@ -43,12 +43,12 @@ export class DiscordChatMessageService implements IChatMessageService {
         const channel = await this.fetchTextChannel(lookup.channelId);
         if (channel === null) return [];
 
+        const botUserId = this.client.user?.id;
         let currentMessageId: string | null = lookup.startDiscordMessageId;
 
         while (currentMessageId !== null && chain.length < limit) {
             try {
                 const message: Message = await channel.messages.fetch(currentMessageId);
-                const botUserId = this.client.user?.id;
                 const authorId = message.author.id;
 
                 const attachments: DiscordAttachmentInfo[] = [...message.attachments.values()].map((a) => ({

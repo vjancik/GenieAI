@@ -98,11 +98,12 @@ export interface IMessageRepository {
      * Batch-insert multiple message records, skipping any that already exist
      * (by the unique guild+channel+discordMessageId constraint).
      *
-     * Used when persisting a live-fetched Discord reply chain so that pre-existing
-     * messages are silently skipped without causing constraint errors.
+     * Uses `ON CONFLICT DO UPDATE SET id = id` (no-op) so that `.returning()` always
+     * yields exactly N rows in insertion order — one per input, including pre-existing
+     * rows. Callers can safely correlate returned UUIDs to inputs by index.
      *
      * @param messages - Array of message data without auto-generated id and createdAt
-     * @returns All successfully inserted rows (excludes silently skipped duplicates)
+     * @returns Always N rows, index-aligned with the input array
      */
     saveBatch(messages: Omit<DiscordMessage, "id" | "createdAt">[]): Promise<DiscordMessage[]>;
 }

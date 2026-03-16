@@ -71,10 +71,16 @@ function makeRepo(entries: RepoEntry[] = []): IGeminiFileRepository {
             }
             return result;
         }),
+        saveFiles: mock(async (records: Omit<GeminiFile, "id">[]) =>
+            records.map((r, i) => ({ id: `file-uuid-${i + 1}`, ...r })),
+        ),
         upsertUpload: mock(async (record) => ({
             id: "upload-uuid-1",
             ...record,
         })),
+        upsertUploads: mock(async (records: Omit<GeminiFileUpload, "id">[]) =>
+            records.map((r, i) => ({ id: `upload-uuid-${i + 1}`, ...r })),
+        ),
     };
 }
 

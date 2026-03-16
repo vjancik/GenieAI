@@ -328,7 +328,9 @@ export class HandleDiscordMessageUseCase {
                         built.push({ snapshot, msg, pendingRecords });
                     }
 
-                    // Batch-insert all new message rows (conflict = already in DB → silently skip)
+                    // Batch-insert all new message rows. saveBatch returns exactly N rows
+                    // (one per input) in insertion order — pre-existing rows are included
+                    // via the no-op conflict update, so index correlation is safe.
                     const savedRows = await this.messageRepo.saveBatch(
                         built.map(({ snapshot, msg }) => ({
                             discordMessageId: snapshot.id,
@@ -344,25 +346,14 @@ export class HandleDiscordMessageUseCase {
                         })),
                     );
 
-                    // Build a map of discordMessageId → saved row UUID for Gemini FK resolution.
-                    // saveBatch uses onConflictDoNothing so returned rows may be fewer than input.
-                    const savedRowById = new Map(savedRows.map((r) => [r.discordMessageId, r]));
-
                     // Two-phase Gemini save for each snapshot that had uploads.
-                    // Match saved row by discordMessageId to get the UUID FK.
-                    for (const { snapshot, pendingRecords } of built) {
+                    // savedRows is index-aligned with built (N in, N out).
+                    for (let i = 0; i < built.length; i++) {
+                        // biome-ignore lint/style/noNonNullAssertion: index always in-bounds (same-length arrays)
+                        const { pendingRecords } = built[i]!;
                         if (pendingRecords.length === 0) continue;
-                        const savedRow = savedRowById.get(snapshot.id);
-                        if (!savedRow) {
-                            // Row already existed (race condition) — skip Gemini record creation
-                            // to avoid re-uploading files whose DB anchor already exists.
-                            this.logger.debug(
-                                { discordMessageId: snapshot.id },
-                                "Skipping Gemini record for message not returned by saveBatch (already existed)",
-                            );
-                            continue;
-                        }
-                        await this.persistPendingGeminiRecords(pendingRecords, savedRow.id);
+                        // biome-ignore lint/style/noNonNullAssertion: index always in-bounds (same-length arrays)
+                        await this.persistPendingGeminiRecords(pendingRecords, savedRows[i]!.id);
                     }
                 }
 
@@ -394,19 +385,25 @@ export class HandleDiscordMessageUseCase {
         }
 
         const { geminiFileRepo, geminiFileUploader } = this;
-        for (const { fileAnchor, uploadData } of pendingRecords) {
-            // TODO: we might have to delete these files in a catch clause if the handler fails as the originalUrl will never get persisted to langchainMessages and this record will never be selected
-            // Inject the saved message UUID as the FK — messageId was unavailable when fileAnchor was built.
-            const savedFile = await geminiFileRepo.saveFile({
-                ...fileAnchor,
-                messageId,
-            });
-            await geminiFileRepo.upsertUpload({
+
+        // Phase 1: batch-insert all file anchors.
+        // ON CONFLICT DO UPDATE (no-op) ensures pre-existing rows are returned too,
+        // so we always have the UUIDs needed for the upload FK.
+        const savedFiles = await geminiFileRepo.saveFiles(
+            pendingRecords.map(({ fileAnchor }) => ({ ...fileAnchor, messageId })),
+        );
+
+        // Phase 2: batch-upsert all upload records using the UUIDs from phase 1.
+        // savedFiles is in insertion order, matching pendingRecords index-for-index.
+        await geminiFileRepo.upsertUploads(
+            savedFiles.map((savedFile, i) => ({
+                // Non-null assertion safe: savedFiles.length === pendingRecords.length (same batch)
                 geminiFileId: savedFile.id,
                 apiKeyId: geminiFileUploader.apiKeyId,
-                ...uploadData,
-            });
-        }
+                // biome-ignore lint/style/noNonNullAssertion: index is always in-bounds (same-length arrays)
+                ...pendingRecords[i]!.uploadData,
+            })),
+        );
     }
 
     /**

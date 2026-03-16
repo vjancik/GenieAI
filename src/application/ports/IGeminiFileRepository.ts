@@ -40,6 +40,18 @@ export interface IGeminiFileRepository {
     ): Promise<Map<string, { file: GeminiFile; upload: GeminiFileUpload | null }>>;
 
     /**
+     * Batch-saves permanent file anchors with Discord metadata.
+     *
+     * ON CONFLICT (original_gemini_url) DO UPDATE SET id = gemini_files.id (no-op)
+     * ensures `.returning()` always yields all rows — including pre-existing ones —
+     * so callers never need a fallback SELECT per row.
+     *
+     * @param records - All fields except `id` (assigned by the database)
+     * @returns The saved (or existing) GeminiFile records, in insertion order
+     */
+    saveFiles(records: Omit<GeminiFile, "id">[]): Promise<GeminiFile[]>;
+
+    /**
      * Inserts or updates the upload record for a (geminiFileId, apiKeyId) pair.
      *
      * ON CONFLICT (gemini_file_id, api_key_id) DO UPDATE SET:
@@ -53,4 +65,14 @@ export interface IGeminiFileRepository {
      * @returns The saved/updated record
      */
     upsertUpload(record: Omit<GeminiFileUpload, "id">): Promise<GeminiFileUpload>;
+
+    /**
+     * Batch inserts or updates upload records for multiple (geminiFileId, apiKeyId) pairs.
+     *
+     * Applies the same ON CONFLICT logic as {@link upsertUpload} for each row.
+     *
+     * @param records - All fields except `id` (assigned by the database)
+     * @returns The saved/updated records
+     */
+    upsertUploads(records: Omit<GeminiFileUpload, "id">[]): Promise<GeminiFileUpload[]>;
 }

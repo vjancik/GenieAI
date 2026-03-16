@@ -124,13 +124,68 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
     private readonly stmtUpsertUpload: ReturnType<typeof buildUpsertUploadStmt>;
 
     constructor(
-        db: Db,
+        private readonly db: Db,
         private readonly logger: Logger,
     ) {
         this.stmtInsertFile = buildInsertFileStmt(db);
         this.stmtFindFileByUrl = buildFindFileByUrlStmt(db);
         this.stmtFindWithUploadState = buildFindWithUploadStateStmt(db);
         this.stmtUpsertUpload = buildUpsertUploadStmt(db);
+    }
+
+    /**
+     * Batch-saves permanent file anchors.
+     *
+     * Uses ON CONFLICT (original_gemini_url) DO UPDATE SET id = gemini_files.id (no-op)
+     * so that `.returning()` always yields every row — pre-existing rows are included
+     * via the dummy update, eliminating the need for N fallback SELECTs.
+     *
+     * Empty input returns immediately without a DB round-trip.
+     */
+    async saveFiles(records: Omit<GeminiFile, "id">[]): Promise<GeminiFile[]> {
+        if (records.length === 0) return [];
+        return Sentry.startSpan(
+            {
+                name: "Batch save Gemini file anchors",
+                op: "db.query",
+                attributes: { "db.table": "gemini_files", "app.batch_size": records.length },
+            },
+            async () => {
+                try {
+                    const rows = await this.db
+                        .insert(geminiFiles)
+                        .values(
+                            records.map((r) => ({
+                                originalGeminiUrl: r.originalGeminiUrl,
+                                discordAttachmentId: r.discordAttachmentId,
+                                discordFilename: r.discordFilename,
+                                messageId: r.messageId,
+                                discordMessageId: r.discordMessageId,
+                            })),
+                        )
+                        .onConflictDoUpdate({
+                            target: geminiFiles.originalGeminiUrl,
+                            // No-op update: id = id forces Postgres to include the existing row
+                            // in RETURNING, so callers always get the UUID without a fallback SELECT.
+                            set: { id: geminiFiles.id },
+                        })
+                        .returning();
+
+                    this.logger.debug({ batchSize: records.length }, "Batch saved Gemini file anchor records");
+
+                    return rows.map((r) => ({
+                        id: r.id,
+                        originalGeminiUrl: r.originalGeminiUrl,
+                        discordAttachmentId: r.discordAttachmentId,
+                        discordFilename: r.discordFilename,
+                        messageId: r.messageId,
+                        discordMessageId: r.discordMessageId,
+                    }));
+                } catch (err) {
+                    throw new DatabaseError("Failed to batch save Gemini file anchors", err);
+                }
+            },
+        );
     }
 
     /**
@@ -339,6 +394,61 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                 } catch (err) {
                     if (err instanceof DatabaseError) throw err;
                     throw new DatabaseError("Failed to upsert Gemini file upload record", err);
+                }
+            },
+        );
+    }
+
+    /**
+     * Batch inserts or updates upload records for multiple (geminiFileId, apiKeyId) pairs.
+     *
+     * Applies the same ON CONFLICT logic as {@link upsertUpload}.
+     * Empty input returns immediately without a DB round-trip.
+     */
+    async upsertUploads(records: Omit<GeminiFileUpload, "id">[]): Promise<GeminiFileUpload[]> {
+        if (records.length === 0) return [];
+        return Sentry.startSpan(
+            {
+                name: "Batch upsert Gemini file upload records",
+                op: "db.query",
+                attributes: { "db.table": "gemini_file_uploads", "app.batch_size": records.length },
+            },
+            async () => {
+                try {
+                    const rows = await this.db
+                        .insert(geminiFileUploads)
+                        .values(
+                            records.map((r) => ({
+                                geminiFileId: r.geminiFileId,
+                                apiKeyId: r.apiKeyId,
+                                geminiFileName: r.geminiFileName,
+                                geminiUrl: r.geminiUrl,
+                                uploadedAt: r.uploadedAt,
+                            })),
+                        )
+                        .onConflictDoUpdate({
+                            target: [geminiFileUploads.geminiFileId, geminiFileUploads.apiKeyId],
+                            set: {
+                                geminiFileName: sql`EXCLUDED.gemini_file_name`,
+                                geminiUrl: sql`EXCLUDED.gemini_url`,
+                                uploadedAt: sql`EXCLUDED.uploaded_at`,
+                            },
+                        })
+                        .returning();
+
+                    this.logger.debug({ batchSize: records.length }, "Batch upserted Gemini file upload records");
+
+                    return rows.map((r) => ({
+                        id: r.id,
+                        geminiFileId: r.geminiFileId,
+                        apiKeyId: r.apiKeyId,
+                        geminiFileName: r.geminiFileName,
+                        geminiUrl: r.geminiUrl,
+                        uploadedAt: r.uploadedAt,
+                    }));
+                } catch (err) {
+                    if (err instanceof DatabaseError) throw err;
+                    throw new DatabaseError("Failed to batch upsert Gemini file upload records", err);
                 }
             },
         );

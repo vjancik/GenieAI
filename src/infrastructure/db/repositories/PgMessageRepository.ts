@@ -1,11 +1,12 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Logger } from "../../../application/types/Logger.ts";
 import { DatabaseError } from "../../../domain/errors/AppError.ts";
 import type { IMessageRepository } from "../../../domain/message/IMessageRepository.ts";
 import type { DiscordMessage } from "../../../domain/message/Message.ts";
 import type { Db } from "../connection.ts";
+import { pgTextArray } from "../pgTextArray.ts";
 import { messages } from "../schema.ts";
 
 /** Prepared statement: fetch a single message by its UUID primary key. */
@@ -36,6 +37,26 @@ function buildFindByDiscordMessageIdGuildStmt(db: Db) {
         )
         .limit(1)
         .prepare("message_find_by_discord_id_guild");
+}
+
+/**
+ * Prepared statement: find which discord_message_ids already exist for a (guild_id, channel_id) pair.
+ *
+ * Uses `= ANY($discordMessageIds)` with a `text[]` placeholder so the query structure is fixed
+ * regardless of how many IDs are checked — a single {@link pgTextArray} value replaces the dynamic list.
+ */
+function buildFindExistingDiscordIdsStmt(db: Db) {
+    return db
+        .select({ discordMessageId: messages.discordMessageId })
+        .from(messages)
+        .where(
+            and(
+                eq(messages.guildId, sql.placeholder("guildId")),
+                eq(messages.channelId, sql.placeholder("channelId")),
+                eq(messages.discordMessageId, sql`ANY(${sql.placeholder("discordMessageIds")})`),
+            ),
+        )
+        .prepare("message_find_existing_discord_ids");
 }
 
 /** Prepared statement: insert a new message row and return it. */
@@ -69,6 +90,7 @@ export class PgMessageRepository implements IMessageRepository {
     private readonly stmtInsertMessage: ReturnType<typeof buildInsertMessageStmt>;
     private readonly stmtFindById: ReturnType<typeof buildFindByIdStmt>;
     private readonly stmtFindByDiscordMessageIdGuild: ReturnType<typeof buildFindByDiscordMessageIdGuildStmt>;
+    private readonly stmtFindExistingDiscordIds: ReturnType<typeof buildFindExistingDiscordIdsStmt>;
 
     constructor(
         private readonly db: Db,
@@ -77,6 +99,7 @@ export class PgMessageRepository implements IMessageRepository {
         this.stmtInsertMessage = buildInsertMessageStmt(db);
         this.stmtFindById = buildFindByIdStmt(db);
         this.stmtFindByDiscordMessageIdGuild = buildFindByDiscordMessageIdGuildStmt(db);
+        this.stmtFindExistingDiscordIds = buildFindExistingDiscordIdsStmt(db);
     }
 
     async save(msg: Omit<DiscordMessage, "id" | "createdAt">): Promise<DiscordMessage> {
@@ -247,16 +270,11 @@ export class PgMessageRepository implements IMessageRepository {
     }): Promise<string[]> {
         if (lookup.discordMessageIds.length === 0) return [];
         try {
-            const rows = await this.db
-                .select({ discordMessageId: messages.discordMessageId })
-                .from(messages)
-                .where(
-                    and(
-                        eq(messages.guildId, lookup.guildId),
-                        eq(messages.channelId, lookup.channelId),
-                        inArray(messages.discordMessageId, lookup.discordMessageIds),
-                    ),
-                );
+            const rows = await this.stmtFindExistingDiscordIds.execute({
+                guildId: lookup.guildId,
+                channelId: lookup.channelId,
+                discordMessageIds: pgTextArray(lookup.discordMessageIds),
+            });
             return rows.map((r) => r.discordMessageId);
         } catch (err) {
             throw new DatabaseError("Failed to find existing Discord message IDs", err);
@@ -286,7 +304,12 @@ export class PgMessageRepository implements IMessageRepository {
                                 retriesLeft: m.retriesLeft,
                             })),
                         )
-                        .onConflictDoNothing()
+                        .onConflictDoUpdate({
+                            target: [messages.guildId, messages.channelId, messages.discordMessageId],
+                            // No-op update: id = id forces Postgres to include pre-existing rows
+                            // in RETURNING, so the result is always N rows matching the N inputs.
+                            set: { id: messages.id },
+                        })
                         .returning();
 
                     this.logger.debug({ batchSize: msgs.length, insertedCount: rows.length }, "Batch saved messages");

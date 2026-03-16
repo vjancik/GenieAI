@@ -394,25 +394,28 @@ describe("PgMessageRepository.saveBatch", () => {
         expect(ids).toContain("batch-multi-3");
     });
 
-    test("skips duplicate discordMessageIds silently (onConflictDoNothing)", async () => {
+    test("returns existing row on duplicate (no-op conflict update, always N rows)", async () => {
         const payload = messagePayload({ discordMessageId: "batch-dup-001" });
-        // First insert succeeds
         const first = await repo.saveBatch([payload]);
         expect(first).toHaveLength(1);
 
-        // Second insert with same discordMessageId is skipped
+        // Second call returns the existing row — same id, same discordMessageId
         const second = await repo.saveBatch([payload]);
-        expect(second).toHaveLength(0);
+        expect(second).toHaveLength(1);
+        expect(second[0]?.discordMessageId).toBe("batch-dup-001");
+        expect(second[0]?.id).toBe(first[0]?.id);
     });
 
-    test("partial batch: skips existing, inserts new", async () => {
+    test("partial batch: returns N rows index-aligned with input (existing + new)", async () => {
         const existing = messagePayload({ discordMessageId: "batch-partial-existing" });
-        await repo.save(existing);
+        const saved = await repo.save(existing);
 
         const result = await repo.saveBatch([existing, messagePayload({ discordMessageId: "batch-partial-new" })]);
 
-        // Only the new one should be returned
-        expect(result).toHaveLength(1);
-        expect(result[0]?.discordMessageId).toBe("batch-partial-new");
+        // Always 2 rows — index 0 is the pre-existing row, index 1 is the new row
+        expect(result).toHaveLength(2);
+        expect(result[0]?.discordMessageId).toBe("batch-partial-existing");
+        expect(result[0]?.id).toBe(saved.id);
+        expect(result[1]?.discordMessageId).toBe("batch-partial-new");
     });
 });
