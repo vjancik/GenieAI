@@ -33,31 +33,13 @@ const mockAiResponse = new AIMessage("AI response");
 
 function makeRepo(chainMessages: DiscordMessage[] = []): IMessageRepository {
     return {
-        save: mock(async (msg) => ({
-            ...msg,
-            id: "new-uuid",
-            createdAt: new Date(),
-        })),
-        saveAssistantMessage: mock(async (params) => ({
-            id: "new-uuid",
-            discordMessageId: params.discordMessageId,
-            repliesToDiscordId: params.repliesToDiscordId,
-            channelId: params.channelId,
-            guildId: params.guildId,
-            role: "assistant" as const,
-            langchainMessages: params.newMessages.map(
-                (m: { toJSON(): unknown }) => m.toJSON() as Record<string, unknown>,
-            ),
-            retriesLeft: params.retriesLeft ?? null,
-            createdAt: new Date(),
-        })),
+        save: mock(async () => ({ id: "new-uuid" })),
+        saveAssistantMessage: mock(async () => ({ id: "new-uuid" })),
         fetchChain: mock(async () => chainMessages),
         findById: mock(async () => null),
         findByDiscordMessageId: mock(async () => null),
         findExistingDiscordIds: mock(async () => []),
-        saveBatch: mock(async (msgs) =>
-            msgs.map((m: DiscordMessage) => ({ ...m, id: `batch-uuid-${m.discordMessageId}`, createdAt: new Date() })),
-        ),
+        saveBatch: mock(async (msgs) => msgs.map((_m: DiscordMessage, i: number) => ({ id: `batch-uuid-${i}` }))),
     };
 }
 

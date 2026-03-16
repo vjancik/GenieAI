@@ -3,7 +3,6 @@ import { HumanMessage } from "@langchain/core/messages";
 import { sql } from "drizzle-orm";
 import pino from "pino";
 import { DatabaseError } from "../../../src/domain/errors/AppError.ts";
-import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
 import type { MessagePage } from "../../../src/domain/message/MessagePage.ts";
 import { createDb } from "../../../src/infrastructure/db/connection.ts";
 import { PgMessagePageRepository } from "../../../src/infrastructure/db/repositories/PgMessagePageRepository.ts";
@@ -45,7 +44,7 @@ afterAll(async () => {
 });
 
 /** Insert a messages row so the FK constraints on message_pages are satisfied. */
-async function saveParentMessage(discordMessageId: string): Promise<DiscordMessage> {
+async function saveParentMessage(discordMessageId: string): Promise<{ id: string }> {
     return messageRepo.save({
         discordMessageId,
         repliesToDiscordId: null,

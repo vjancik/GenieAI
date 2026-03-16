@@ -210,9 +210,6 @@ export class HandleDiscordMessageUseCase {
                         retriesLeft: null,
                     });
 
-                    // Two-phase save for each uploaded attachment:
-                    // 1. saveFile — idempotent insert into gemini_files (permanent anchor)
-                    // 2. upsertUpload — insert/update gemini_file_uploads (ephemeral per-key record)
                     await this.persistPendingGeminiRecords(pendingRecords, savedUserMsg.id);
 
                     // Generate the AI response; the orchestrator handles Gemini file refresh internally
@@ -372,8 +369,8 @@ export class HandleDiscordMessageUseCase {
      * Runs the two-phase Gemini file save for each pending record collected during
      * {@link buildMessage} in upload mode.
      *
-     * Phase 1: `saveFile` — idempotent insert into `gemini_files` (permanent anchor).
-     * Phase 2: `upsertUpload` — insert/update `gemini_file_uploads` (ephemeral per-key record).
+     * Phase 1: `saveFiles` — idempotent batch insert into `gemini_files` (permanent anchors).
+     * Phase 2: `upsertUploads` — batch insert/update `gemini_file_uploads` (ephemeral per-key records).
      *
      * No-ops when `pendingRecords` is empty or when Gemini deps are not injected.
      */

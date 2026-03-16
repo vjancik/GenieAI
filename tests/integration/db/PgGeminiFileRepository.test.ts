@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import pino from "pino";
 import type { GeminiFile } from "../../../src/domain/message/GeminiFile.ts";
 import type { GeminiFileUpload } from "../../../src/domain/message/GeminiFileUpload.ts";
@@ -102,60 +102,12 @@ function uploadPayload(overrides: Partial<Omit<GeminiFileUpload, "id">> = {}): O
     };
 }
 
-// ─── saveFile ───────────────────────────────────────────────────────────────
-
-describe("PgGeminiFileRepository.saveFile", () => {
-    test("inserts a new file anchor and returns it with a generated UUID", async () => {
-        const msg = await insertTestMessage();
-        const payload = filePayload(msg.id);
-
-        const saved = await repo.saveFile(payload);
-
-        expect(saved.id).toBeDefined();
-        expect(typeof saved.id).toBe("string");
-        expect(saved.originalGeminiUrl).toBe(payload.originalGeminiUrl);
-        expect(saved.discordAttachmentId).toBe(payload.discordAttachmentId);
-        expect(saved.discordFilename).toBe(payload.discordFilename);
-        expect(saved.messageId).toBe(payload.messageId);
-        expect(saved.discordMessageId).toBe(payload.discordMessageId);
-    });
-
-    test("is idempotent: second call with same originalGeminiUrl returns the same record", async () => {
-        const msg = await insertTestMessage();
-        const payload = filePayload(msg.id);
-
-        const first = await repo.saveFile(payload);
-        const second = await repo.saveFile(payload);
-
-        // Must be the same UUID — ON CONFLICT DO NOTHING then SELECT
-        expect(second.id).toBe(first.id);
-        expect(second.originalGeminiUrl).toBe(first.originalGeminiUrl);
-
-        // Only one row in the table
-        const rows = await db.select().from(geminiFiles);
-        expect(rows).toHaveLength(1);
-    });
-
-    test("inserts distinct rows for different originalGeminiUrls", async () => {
-        const msg = await insertTestMessage();
-
-        const f1 = await repo.saveFile(
-            filePayload(msg.id, {
-                originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/file-1",
-            }),
-        );
-        const f2 = await repo.saveFile(
-            filePayload(msg.id, {
-                originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/file-2",
-            }),
-        );
-
-        expect(f1.id).not.toBe(f2.id);
-
-        const rows = await db.select().from(geminiFiles);
-        expect(rows).toHaveLength(2);
-    });
-});
+/** Inserts a gemini_files row directly and returns the full row including DB-assigned id. */
+async function insertTestFile(payload: Omit<GeminiFile, "id">): Promise<GeminiFile> {
+    const [row] = await db.insert(geminiFiles).values(payload).returning();
+    if (!row) throw new Error("Failed to insert test gemini file");
+    return row;
+}
 
 // ─── findWithUploadStateForKey ──────────────────────────────────────────────
 
@@ -163,7 +115,7 @@ describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
     test("returns upload: null when no upload exists for the given API key", async () => {
         const msg = await insertTestMessage();
         const apiKeyId = await insertTestApiKey();
-        const savedFile = await repo.saveFile(filePayload(msg.id));
+        const savedFile = await insertTestFile(filePayload(msg.id));
 
         // No upload row inserted — LEFT JOIN should yield upload: null
         const result = await repo.findWithUploadStateForKey([savedFile.originalGeminiUrl], apiKeyId);
@@ -178,16 +130,14 @@ describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
     test("returns both file and upload when an upload exists for the given key", async () => {
         const msg = await insertTestMessage();
         const apiKeyId = await insertTestApiKey();
-        const savedFile = await repo.saveFile(filePayload(msg.id));
+        const savedFile = await insertTestFile(filePayload(msg.id));
 
-        const uploadedAt = new Date();
-        const savedUpload = await repo.upsertUpload(
+        await repo.upsertUpload(
             uploadPayload({
                 geminiFileId: savedFile.id,
                 apiKeyId,
                 geminiFileName: "files/present-uuid",
                 geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/present-uuid",
-                uploadedAt,
             }),
         );
 
@@ -197,7 +147,6 @@ describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
         const entry = result.get(savedFile.originalGeminiUrl);
         expect(entry?.file.id).toBe(savedFile.id);
         expect(entry?.upload).not.toBeNull();
-        expect(entry?.upload?.id).toBe(savedUpload.id);
         expect(entry?.upload?.geminiFileName).toBe("files/present-uuid");
         expect(entry?.upload?.apiKeyId).toBe(apiKeyId);
     });
@@ -206,7 +155,7 @@ describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
         const msg = await insertTestMessage();
         const keyId1 = await insertTestApiKey("key-1");
         const keyId2 = await insertTestApiKey("key-2");
-        const savedFile = await repo.saveFile(filePayload(msg.id));
+        const savedFile = await insertTestFile(filePayload(msg.id));
 
         // Upload exists only for key1
         await repo.upsertUpload(
@@ -244,12 +193,12 @@ describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
         const msg = await insertTestMessage();
         const apiKeyId = await insertTestApiKey();
 
-        const file1 = await repo.saveFile(
+        const file1 = await insertTestFile(
             filePayload(msg.id, {
                 originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/multi-1",
             }),
         );
-        const file2 = await repo.saveFile(
+        const file2 = await insertTestFile(
             filePayload(msg.id, {
                 originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/multi-2",
                 discordAttachmentId: "att-002",
@@ -280,35 +229,35 @@ describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
 // ─── upsertUpload ───────────────────────────────────────────────────────────
 
 describe("PgGeminiFileRepository.upsertUpload", () => {
-    test("inserts a new upload record and returns it with a generated UUID", async () => {
+    test("inserts a new upload record", async () => {
         const msg = await insertTestMessage();
         const apiKeyId = await insertTestApiKey();
-        const savedFile = await repo.saveFile(filePayload(msg.id));
+        const savedFile = await insertTestFile(filePayload(msg.id));
 
-        const payload = uploadPayload({
-            geminiFileId: savedFile.id,
-            apiKeyId,
-            geminiFileName: "files/new-upload-uuid",
-            geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/new-upload-uuid",
-        });
+        await repo.upsertUpload(
+            uploadPayload({
+                geminiFileId: savedFile.id,
+                apiKeyId,
+                geminiFileName: "files/new-upload-uuid",
+                geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/new-upload-uuid",
+            }),
+        );
 
-        const result = await repo.upsertUpload(payload);
-
-        expect(result.id).toBeDefined();
-        expect(result.geminiFileId).toBe(savedFile.id);
-        expect(result.apiKeyId).toBe(apiKeyId);
-        expect(result.geminiFileName).toBe("files/new-upload-uuid");
-        expect(result.geminiUrl).toBe("https://generativelanguage.googleapis.com/v1beta/files/new-upload-uuid");
+        const rows = await db.select().from(geminiFileUploads);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.geminiFileId).toBe(savedFile.id);
+        expect(rows[0]?.apiKeyId).toBe(apiKeyId);
+        expect(rows[0]?.geminiFileName).toBe("files/new-upload-uuid");
     });
 
     test("ON CONFLICT DO UPDATE: updates geminiUrl and uploadedAt for same (geminiFileId, apiKeyId)", async () => {
         const msg = await insertTestMessage();
         const apiKeyId = await insertTestApiKey();
-        const savedFile = await repo.saveFile(filePayload(msg.id));
+        const savedFile = await insertTestFile(filePayload(msg.id));
 
         // Initial upload — use a recent timestamp so the stale-cleanup trigger
         // does not delete it before the second upsert fires the conflict.
-        const initial = await repo.upsertUpload(
+        await repo.upsertUpload(
             uploadPayload({
                 geminiFileId: savedFile.id,
                 apiKeyId,
@@ -319,7 +268,7 @@ describe("PgGeminiFileRepository.upsertUpload", () => {
         );
 
         // Re-upload (refresh): new fileName and URL, newer timestamp
-        const refreshed = await repo.upsertUpload(
+        await repo.upsertUpload(
             uploadPayload({
                 geminiFileId: savedFile.id,
                 apiKeyId,
@@ -329,23 +278,18 @@ describe("PgGeminiFileRepository.upsertUpload", () => {
             }),
         );
 
-        // Same logical row (same geminiFileId + apiKeyId)
-        expect(refreshed.id).toBe(initial.id);
-        // Updated fields
-        expect(refreshed.geminiFileName).toBe("files/refreshed-uuid");
-        expect(refreshed.geminiUrl).toBe("https://generativelanguage.googleapis.com/v1beta/files/refreshed-uuid");
-        expect(refreshed.uploadedAt).toBeInstanceOf(Date);
-
-        // Only one row in the table
         const rows = await db.select().from(geminiFileUploads);
+        // Only one row — the upsert updated in place
         expect(rows).toHaveLength(1);
+        expect(rows[0]?.geminiFileName).toBe("files/refreshed-uuid");
+        expect(rows[0]?.geminiUrl).toBe("https://generativelanguage.googleapis.com/v1beta/files/refreshed-uuid");
     });
 
     test("allows separate upload records for the same file with different API keys", async () => {
         const msg = await insertTestMessage();
         const keyId1 = await insertTestApiKey("key-alpha");
         const keyId2 = await insertTestApiKey("key-beta");
-        const savedFile = await repo.saveFile(filePayload(msg.id));
+        const savedFile = await insertTestFile(filePayload(msg.id));
 
         await repo.upsertUpload(
             uploadPayload({
@@ -366,5 +310,82 @@ describe("PgGeminiFileRepository.upsertUpload", () => {
 
         const rows = await db.select().from(geminiFileUploads);
         expect(rows).toHaveLength(2);
+    });
+});
+
+// ─── saveFiles ───────────────────────────────────────────────────────────────
+
+describe("PgGeminiFileRepository.saveFiles", () => {
+    test("returns empty array for empty input without DB round-trip", async () => {
+        const result = await repo.saveFiles([]);
+        expect(result).toEqual([]);
+    });
+
+    test("inserts records and returns UUIDs index-aligned with input", async () => {
+        const msg = await insertTestMessage();
+        const payload = filePayload(msg.id);
+
+        const result = await repo.saveFiles([payload]);
+
+        expect(result).toHaveLength(1);
+        expect(result[0]?.id).toBeDefined();
+        expect(typeof result[0]?.id).toBe("string");
+
+        const rows = await db.select().from(geminiFiles);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.id).toBe(result[0]?.id);
+    });
+
+    test("ON CONFLICT: returns existing UUID for a duplicate originalGeminiUrl", async () => {
+        const msg = await insertTestMessage();
+        const payload = filePayload(msg.id);
+
+        const [first] = await repo.saveFiles([payload]);
+        const [second] = await repo.saveFiles([payload]);
+
+        expect(second?.id).toBe(first?.id);
+
+        const rows = await db.select().from(geminiFiles);
+        expect(rows).toHaveLength(1);
+    });
+
+    test("inserts multiple records with distinct originalGeminiUrls", async () => {
+        const msg = await insertTestMessage();
+
+        const result = await repo.saveFiles([
+            filePayload(msg.id, {
+                originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/file-1",
+            }),
+            filePayload(msg.id, {
+                originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/file-2",
+                discordAttachmentId: "att-002",
+            }),
+        ]);
+
+        expect(result).toHaveLength(2);
+        expect(result[0]?.id).not.toBe(result[1]?.id);
+
+        const rows = await db.select().from(geminiFiles);
+        expect(rows).toHaveLength(2);
+    });
+
+    test("returned UUIDs can be used as FKs for upsertUpload", async () => {
+        const msg = await insertTestMessage();
+        const apiKeyId = await insertTestApiKey();
+        const saved = await repo.saveFiles([filePayload(msg.id)]);
+        const savedId = saved[0]?.id;
+        if (!savedId) throw new Error("saveFiles returned no rows");
+
+        await repo.upsertUpload(
+            uploadPayload({
+                geminiFileId: savedId,
+                apiKeyId,
+                geminiFileName: "files/fk-test",
+                geminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/fk-test",
+            }),
+        );
+
+        const uploadRows = await db.select().from(geminiFileUploads).where(eq(geminiFileUploads.geminiFileId, savedId));
+        expect(uploadRows).toHaveLength(1);
     });
 });

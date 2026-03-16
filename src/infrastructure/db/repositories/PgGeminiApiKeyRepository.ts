@@ -30,7 +30,7 @@ function buildUpsertKeyStmt(db: Db) {
                 isActive: true,
             },
         })
-        .returning()
+        .returning({ id: geminiApiKeys.id, apiKey: geminiApiKeys.apiKey, isPaid: geminiApiKeys.isPaid })
         .prepare("gemini_api_key_upsert");
 }
 

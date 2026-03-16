@@ -13,18 +13,6 @@ import type { GeminiFileUpload } from "../../domain/message/GeminiFileUpload.ts"
  */
 export interface IGeminiFileRepository {
     /**
-     * Saves a permanent file anchor with Discord metadata.
-     *
-     * Idempotent on `originalGeminiUrl` — if a file with the same original URL
-     * already exists, returns the existing record without error. This handles
-     * rare race conditions where the same attachment is uploaded twice.
-     *
-     * @param record - All fields except `id` (assigned by the database)
-     * @returns The saved (or existing) GeminiFile record
-     */
-    saveFile(record: Omit<GeminiFile, "id">): Promise<GeminiFile>;
-
-    /**
      * LEFT JOINs `gemini_files` with `gemini_file_uploads` for the given original
      * URLs and API key. Always returns a GeminiFile entry (discord context); the
      * upload field is null if no upload record exists for the specified API key
@@ -47,9 +35,9 @@ export interface IGeminiFileRepository {
      * so callers never need a fallback SELECT per row.
      *
      * @param records - All fields except `id` (assigned by the database)
-     * @returns The saved (or existing) GeminiFile records, in insertion order
+     * @returns The DB-assigned UUIDs, index-aligned with the input array
      */
-    saveFiles(records: Omit<GeminiFile, "id">[]): Promise<GeminiFile[]>;
+    saveFiles(records: Omit<GeminiFile, "id">[]): Promise<{ id: string }[]>;
 
     /**
      * Inserts or updates the upload record for a (geminiFileId, apiKeyId) pair.
@@ -62,9 +50,8 @@ export interface IGeminiFileRepository {
      * Used both for initial uploads and for refreshes (re-uploads with new URLs).
      *
      * @param record - All fields except `id` (assigned by the database)
-     * @returns The saved/updated record
      */
-    upsertUpload(record: Omit<GeminiFileUpload, "id">): Promise<GeminiFileUpload>;
+    upsertUpload(record: Omit<GeminiFileUpload, "id">): Promise<void>;
 
     /**
      * Batch inserts or updates upload records for multiple (geminiFileId, apiKeyId) pairs.
@@ -72,7 +59,6 @@ export interface IGeminiFileRepository {
      * Applies the same ON CONFLICT logic as {@link upsertUpload} for each row.
      *
      * @param records - All fields except `id` (assigned by the database)
-     * @returns The saved/updated records
      */
-    upsertUploads(records: Omit<GeminiFileUpload, "id">[]): Promise<GeminiFileUpload[]>;
+    upsertUploads(records: Omit<GeminiFileUpload, "id">[]): Promise<void>;
 }

@@ -10,9 +10,9 @@ export interface IMessageRepository {
     /**
      * Persist a single message record.
      * @param message - Message data without auto-generated id and createdAt
-     * @returns The saved message including generated id and createdAt
+     * @returns The DB-assigned UUID of the inserted row
      */
-    save(message: Omit<DiscordMessage, "id" | "createdAt">): Promise<DiscordMessage>;
+    save(message: Omit<DiscordMessage, "id" | "createdAt">): Promise<{ id: string }>;
 
     /**
      * Fetch the reply chain for the given message, identified by the
@@ -43,6 +43,7 @@ export interface IMessageRepository {
      * @param params.guildId - Discord guild snowflake, or `"@me"` for DMs
      * @param params.newMessages - All LangChain messages generated during this turn
      * @param params.retriesLeft - Remaining retries to store on the row; only set for retryable responses
+     * @returns The DB-assigned UUID of the inserted row
      */
     saveAssistantMessage(params: {
         discordMessageId: string;
@@ -51,7 +52,7 @@ export interface IMessageRepository {
         guildId: string;
         newMessages: BaseMessage[];
         retriesLeft?: number | null;
-    }): Promise<DiscordMessage>;
+    }): Promise<{ id: string }>;
 
     /**
      * Fetch a single message by its UUID primary key.
@@ -103,7 +104,7 @@ export interface IMessageRepository {
      * rows. Callers can safely correlate returned UUIDs to inputs by index.
      *
      * @param messages - Array of message data without auto-generated id and createdAt
-     * @returns Always N rows, index-aligned with the input array
+     * @returns Always N `{ id }` objects, index-aligned with the input array
      */
-    saveBatch(messages: Omit<DiscordMessage, "id" | "createdAt">[]): Promise<DiscordMessage[]>;
+    saveBatch(messages: Omit<DiscordMessage, "id" | "createdAt">[]): Promise<{ id: string }[]>;
 }

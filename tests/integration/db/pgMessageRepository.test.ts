@@ -58,7 +58,7 @@ function messagePayload(
 }
 
 describe("PgMessageRepository.save", () => {
-    test("saves a message and returns it with id and createdAt", async () => {
+    test("saves a message and returns the DB-assigned id", async () => {
         const humanMsg = new HumanMessage("Hello!");
         const payload = messagePayload({
             langchainMessages: [humanMsg.toJSON() as unknown as Record<string, unknown>],
@@ -67,10 +67,6 @@ describe("PgMessageRepository.save", () => {
 
         expect(saved.id).toBeDefined();
         expect(typeof saved.id).toBe("string");
-        expect(saved.discordMessageId).toBe(payload.discordMessageId);
-        expect(saved.role).toBe("human");
-        expect(saved.langchainMessages).toHaveLength(1);
-        expect(saved.createdAt).toBeInstanceOf(Date);
     });
 
     test("throws DatabaseError on duplicate discordMessageId", async () => {
@@ -80,21 +76,22 @@ describe("PgMessageRepository.save", () => {
         expect(repo.save(payload)).rejects.toBeInstanceOf(DatabaseError);
     });
 
-    test("saves message with null repliesToDiscordId (chain root)", async () => {
-        const payload = messagePayload({ repliesToDiscordId: null });
-        const saved = await repo.save(payload);
-        expect(saved.repliesToDiscordId).toBeNull();
-    });
-
     test("saves message with a repliesToDiscordId reference", async () => {
-        const root = await repo.save(messagePayload({ discordMessageId: "root-001" }));
-        const child = await repo.save(
+        await repo.save(messagePayload({ discordMessageId: "root-001" }));
+        // child row links to root by discordMessageId — fetchChain verifies the link
+        await repo.save(
             messagePayload({
                 discordMessageId: "child-001",
-                repliesToDiscordId: root.discordMessageId,
+                repliesToDiscordId: "root-001",
             }),
         );
-        expect(child.repliesToDiscordId).toBe("root-001");
+        const chain = await repo.fetchChain({
+            startDiscordMessageId: "child-001",
+            channelId: "ch-001",
+            guildId: "guild-001",
+        });
+        expect(chain).toHaveLength(2);
+        expect(chain[1]?.repliesToDiscordId).toBe("root-001");
     });
 });
 
@@ -126,7 +123,7 @@ describe("PgMessageRepository.fetchChain", () => {
         const humanMsg = new HumanMessage("User question");
         const aiMsg = new AIMessage("Bot response");
 
-        const root = await repo.save(
+        await repo.save(
             messagePayload({
                 discordMessageId: "chain2-root",
                 role: "human",
@@ -137,17 +134,17 @@ describe("PgMessageRepository.fetchChain", () => {
         // Brief delay to ensure distinct createdAt timestamps
         await Bun.sleep(10);
 
-        const child = await repo.save(
+        await repo.save(
             messagePayload({
                 discordMessageId: "chain2-child",
-                repliesToDiscordId: root.discordMessageId,
+                repliesToDiscordId: "chain2-root",
                 role: "assistant",
                 langchainMessages: [aiMsg.toJSON() as unknown as Record<string, unknown>],
             }),
         );
 
         const chain = await repo.fetchChain({
-            startDiscordMessageId: child.discordMessageId,
+            startDiscordMessageId: "chain2-child",
             channelId: "ch-001",
             guildId: "guild-001",
         });
@@ -252,7 +249,7 @@ describe("PgMessageRepository.fetchChain", () => {
 
     test("preserves langchainMessages JSON round-trip correctly for a single message", async () => {
         const originalMsg = new HumanMessage("Hello, round-trip!");
-        const saved = await repo.save(
+        await repo.save(
             messagePayload({
                 discordMessageId: "json-001",
                 langchainMessages: [originalMsg.toJSON() as unknown as Record<string, unknown>],
@@ -260,7 +257,7 @@ describe("PgMessageRepository.fetchChain", () => {
         );
 
         const chain = await repo.fetchChain({
-            startDiscordMessageId: saved.discordMessageId,
+            startDiscordMessageId: "json-001",
             channelId: "ch-001",
             guildId: "guild-001",
         });
@@ -278,7 +275,7 @@ describe("PgMessageRepository.fetchChain", () => {
         const triageMsg = new AIMessage("triage response");
         const finalMsg = new AIMessage("final answer");
 
-        const saved = await repo.save(
+        await repo.save(
             messagePayload({
                 discordMessageId: "multi-001",
                 role: "assistant",
@@ -290,7 +287,7 @@ describe("PgMessageRepository.fetchChain", () => {
         );
 
         const chain = await repo.fetchChain({
-            startDiscordMessageId: saved.discordMessageId,
+            startDiscordMessageId: "multi-001",
             channelId: "ch-001",
             guildId: "guild-001",
         });
@@ -369,17 +366,16 @@ describe("PgMessageRepository.saveBatch", () => {
         expect(result).toEqual([]);
     });
 
-    test("saves a single row and returns it with id and createdAt", async () => {
+    test("saves a single row and returns its id", async () => {
         const payload = messagePayload({ discordMessageId: "batch-001" });
         const result = await repo.saveBatch([payload]);
 
         expect(result).toHaveLength(1);
-        expect(result[0]?.discordMessageId).toBe("batch-001");
         expect(result[0]?.id).toBeDefined();
-        expect(result[0]?.createdAt).toBeInstanceOf(Date);
+        expect(typeof result[0]?.id).toBe("string");
     });
 
-    test("saves a batch of multiple rows in order", async () => {
+    test("saves a batch of multiple rows and returns N ids", async () => {
         const payloads = [
             messagePayload({ discordMessageId: "batch-multi-1" }),
             messagePayload({ discordMessageId: "batch-multi-2" }),
@@ -388,34 +384,31 @@ describe("PgMessageRepository.saveBatch", () => {
         const result = await repo.saveBatch(payloads);
 
         expect(result).toHaveLength(3);
-        const ids = result.map((r) => r.discordMessageId);
-        expect(ids).toContain("batch-multi-1");
-        expect(ids).toContain("batch-multi-2");
-        expect(ids).toContain("batch-multi-3");
+        // All ids should be distinct strings
+        const ids = result.map((r) => r.id);
+        expect(new Set(ids).size).toBe(3);
     });
 
-    test("returns existing row on duplicate (no-op conflict update, always N rows)", async () => {
+    test("returns existing id on duplicate (no-op conflict update, always N rows)", async () => {
         const payload = messagePayload({ discordMessageId: "batch-dup-001" });
         const first = await repo.saveBatch([payload]);
         expect(first).toHaveLength(1);
 
-        // Second call returns the existing row — same id, same discordMessageId
+        // Second call returns the existing row's id
         const second = await repo.saveBatch([payload]);
         expect(second).toHaveLength(1);
-        expect(second[0]?.discordMessageId).toBe("batch-dup-001");
         expect(second[0]?.id).toBe(first[0]?.id);
     });
 
-    test("partial batch: returns N rows index-aligned with input (existing + new)", async () => {
+    test("partial batch: returns N ids index-aligned with input (existing + new)", async () => {
         const existing = messagePayload({ discordMessageId: "batch-partial-existing" });
-        const saved = await repo.save(existing);
+        const { id: existingId } = await repo.save(existing);
 
         const result = await repo.saveBatch([existing, messagePayload({ discordMessageId: "batch-partial-new" })]);
 
         // Always 2 rows — index 0 is the pre-existing row, index 1 is the new row
         expect(result).toHaveLength(2);
-        expect(result[0]?.discordMessageId).toBe("batch-partial-existing");
-        expect(result[0]?.id).toBe(saved.id);
-        expect(result[1]?.discordMessageId).toBe("batch-partial-new");
+        expect(result[0]?.id).toBe(existingId);
+        expect(result[1]?.id).toBeDefined();
     });
 });

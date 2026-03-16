@@ -9,31 +9,6 @@ import type { Db } from "../connection.ts";
 import { pgTextArray } from "../pgTextArray.ts";
 import { geminiFiles, geminiFileUploads } from "../schema.ts";
 
-/** Prepared statement: insert a gemini_files row, ignoring conflicts on originalGeminiUrl. */
-function buildInsertFileStmt(db: Db) {
-    return db
-        .insert(geminiFiles)
-        .values({
-            originalGeminiUrl: sql.placeholder("originalGeminiUrl"),
-            discordAttachmentId: sql.placeholder("discordAttachmentId"),
-            discordFilename: sql.placeholder("discordFilename"),
-            messageId: sql.placeholder("messageId"),
-            discordMessageId: sql.placeholder("discordMessageId"),
-        })
-        .onConflictDoNothing()
-        .returning()
-        .prepare("gemini_file_insert");
-}
-
-/** Prepared statement: fetch a gemini_files row by its unique originalGeminiUrl. */
-function buildFindFileByUrlStmt(db: Db) {
-    return db
-        .select()
-        .from(geminiFiles)
-        .where(eq(geminiFiles.originalGeminiUrl, sql.placeholder("originalGeminiUrl")))
-        .prepare("gemini_file_find_by_url");
-}
-
 /**
  * Prepared statement: LEFT JOIN gemini_files with gemini_file_uploads for a given
  * set of original URLs and a specific API key.
@@ -95,7 +70,6 @@ function buildUpsertUploadStmt(db: Db) {
                 uploadedAt: sql`EXCLUDED.uploaded_at`,
             },
         })
-        .returning()
         .prepare("gemini_file_upload_upsert");
 }
 
@@ -118,8 +92,6 @@ function buildUpsertUploadStmt(db: Db) {
  * the parameter list.
  */
 export class PgGeminiFileRepository implements IGeminiFileRepository {
-    private readonly stmtInsertFile: ReturnType<typeof buildInsertFileStmt>;
-    private readonly stmtFindFileByUrl: ReturnType<typeof buildFindFileByUrlStmt>;
     private readonly stmtFindWithUploadState: ReturnType<typeof buildFindWithUploadStateStmt>;
     private readonly stmtUpsertUpload: ReturnType<typeof buildUpsertUploadStmt>;
 
@@ -127,8 +99,6 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
         private readonly db: Db,
         private readonly logger: Logger,
     ) {
-        this.stmtInsertFile = buildInsertFileStmt(db);
-        this.stmtFindFileByUrl = buildFindFileByUrlStmt(db);
         this.stmtFindWithUploadState = buildFindWithUploadStateStmt(db);
         this.stmtUpsertUpload = buildUpsertUploadStmt(db);
     }
@@ -142,7 +112,7 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
      *
      * Empty input returns immediately without a DB round-trip.
      */
-    async saveFiles(records: Omit<GeminiFile, "id">[]): Promise<GeminiFile[]> {
+    async saveFiles(records: Omit<GeminiFile, "id">[]): Promise<{ id: string }[]> {
         if (records.length === 0) return [];
         return Sentry.startSpan(
             {
@@ -169,94 +139,13 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                             // in RETURNING, so callers always get the UUID without a fallback SELECT.
                             set: { id: geminiFiles.id },
                         })
-                        .returning();
+                        .returning({ id: geminiFiles.id });
 
                     this.logger.debug({ batchSize: records.length }, "Batch saved Gemini file anchor records");
 
-                    return rows.map((r) => ({
-                        id: r.id,
-                        originalGeminiUrl: r.originalGeminiUrl,
-                        discordAttachmentId: r.discordAttachmentId,
-                        discordFilename: r.discordFilename,
-                        messageId: r.messageId,
-                        discordMessageId: r.discordMessageId,
-                    }));
+                    return rows;
                 } catch (err) {
                     throw new DatabaseError("Failed to batch save Gemini file anchors", err);
-                }
-            },
-        );
-    }
-
-    /**
-     * Idempotently saves a permanent file anchor.
-     *
-     * Uses ON CONFLICT DO NOTHING so concurrent inserts of the same
-     * `originalGeminiUrl` are safe. Falls back to a SELECT when a conflict
-     * occurs so the caller always receives the persisted record with its UUID.
-     */
-    async saveFile(record: Omit<GeminiFile, "id">): Promise<GeminiFile> {
-        return Sentry.startSpan(
-            {
-                name: "Save Gemini file anchor",
-                op: "db.query",
-                attributes: { "db.table": "gemini_files" },
-            },
-            async () => {
-                try {
-                    const [inserted] = await this.stmtInsertFile.execute({
-                        originalGeminiUrl: record.originalGeminiUrl,
-                        discordAttachmentId: record.discordAttachmentId,
-                        discordFilename: record.discordFilename,
-                        messageId: record.messageId,
-                        discordMessageId: record.discordMessageId,
-                    });
-
-                    if (inserted) {
-                        this.logger.debug(
-                            { originalGeminiUrl: record.originalGeminiUrl },
-                            "Saved new Gemini file anchor record",
-                        );
-                        return {
-                            id: inserted.id,
-                            originalGeminiUrl: inserted.originalGeminiUrl,
-                            discordAttachmentId: inserted.discordAttachmentId,
-                            discordFilename: inserted.discordFilename,
-                            messageId: inserted.messageId,
-                            discordMessageId: inserted.discordMessageId,
-                        };
-                    }
-
-                    // Conflict case: row already exists — fetch it by the unique URL
-                    const [existing] = await this.stmtFindFileByUrl.execute({
-                        originalGeminiUrl: record.originalGeminiUrl,
-                    });
-
-                    if (!existing) {
-                        throw new DatabaseError(
-                            "Failed to save or retrieve GeminiFile record after ON CONFLICT DO NOTHING",
-                        );
-                    }
-
-                    this.logger.debug(
-                        {
-                            originalGeminiUrl: record.originalGeminiUrl,
-                            existingId: existing.id,
-                        },
-                        "GeminiFile anchor already exists; using existing record",
-                    );
-
-                    return {
-                        id: existing.id,
-                        originalGeminiUrl: existing.originalGeminiUrl,
-                        discordAttachmentId: existing.discordAttachmentId,
-                        discordFilename: existing.discordFilename,
-                        messageId: existing.messageId,
-                        discordMessageId: existing.discordMessageId,
-                    };
-                } catch (err) {
-                    if (err instanceof DatabaseError) throw err;
-                    throw new DatabaseError("Failed to save Gemini file anchor", err);
                 }
             },
         );
@@ -350,7 +239,7 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
      * The BEFORE INSERT trigger on `gemini_file_uploads` fires here, cleaning
      * any rows older than 48 hours before the new row is inserted.
      */
-    async upsertUpload(record: Omit<GeminiFileUpload, "id">): Promise<GeminiFileUpload> {
+    async upsertUpload(record: Omit<GeminiFileUpload, "id">): Promise<void> {
         return Sentry.startSpan(
             {
                 name: "Upsert Gemini file upload record",
@@ -362,17 +251,13 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
             },
             async () => {
                 try {
-                    const [result] = await this.stmtUpsertUpload.execute({
+                    await this.stmtUpsertUpload.execute({
                         geminiFileId: record.geminiFileId,
                         apiKeyId: record.apiKeyId,
                         geminiFileName: record.geminiFileName,
                         geminiUrl: record.geminiUrl,
                         uploadedAt: record.uploadedAt,
                     });
-
-                    if (!result) {
-                        throw new DatabaseError("Gemini file upload upsert returned no result");
-                    }
 
                     this.logger.debug(
                         {
@@ -382,17 +267,7 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                         },
                         "Upserted Gemini file upload record",
                     );
-
-                    return {
-                        id: result.id,
-                        geminiFileId: result.geminiFileId,
-                        apiKeyId: result.apiKeyId,
-                        geminiFileName: result.geminiFileName,
-                        geminiUrl: result.geminiUrl,
-                        uploadedAt: result.uploadedAt,
-                    };
                 } catch (err) {
-                    if (err instanceof DatabaseError) throw err;
                     throw new DatabaseError("Failed to upsert Gemini file upload record", err);
                 }
             },
@@ -405,8 +280,8 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
      * Applies the same ON CONFLICT logic as {@link upsertUpload}.
      * Empty input returns immediately without a DB round-trip.
      */
-    async upsertUploads(records: Omit<GeminiFileUpload, "id">[]): Promise<GeminiFileUpload[]> {
-        if (records.length === 0) return [];
+    async upsertUploads(records: Omit<GeminiFileUpload, "id">[]): Promise<void> {
+        if (records.length === 0) return;
         return Sentry.startSpan(
             {
                 name: "Batch upsert Gemini file upload records",
@@ -415,7 +290,7 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
             },
             async () => {
                 try {
-                    const rows = await this.db
+                    await this.db
                         .insert(geminiFileUploads)
                         .values(
                             records.map((r) => ({
@@ -433,21 +308,10 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                                 geminiUrl: sql`EXCLUDED.gemini_url`,
                                 uploadedAt: sql`EXCLUDED.uploaded_at`,
                             },
-                        })
-                        .returning();
+                        });
 
                     this.logger.debug({ batchSize: records.length }, "Batch upserted Gemini file upload records");
-
-                    return rows.map((r) => ({
-                        id: r.id,
-                        geminiFileId: r.geminiFileId,
-                        apiKeyId: r.apiKeyId,
-                        geminiFileName: r.geminiFileName,
-                        geminiUrl: r.geminiUrl,
-                        uploadedAt: r.uploadedAt,
-                    }));
                 } catch (err) {
-                    if (err instanceof DatabaseError) throw err;
                     throw new DatabaseError("Failed to batch upsert Gemini file upload records", err);
                 }
             },

@@ -59,7 +59,7 @@ function buildFindExistingDiscordIdsStmt(db: Db) {
         .prepare("message_find_existing_discord_ids");
 }
 
-/** Prepared statement: insert a new message row and return it. */
+/** Prepared statement: insert a new message row and return the assigned UUID. */
 function buildInsertMessageStmt(db: Db) {
     return db
         .insert(messages)
@@ -72,7 +72,7 @@ function buildInsertMessageStmt(db: Db) {
             langchainMessages: sql.placeholder("langchainMessages"),
             retriesLeft: sql.placeholder("retriesLeft"),
         })
-        .returning()
+        .returning({ id: messages.id })
         .prepare("message_insert");
 }
 
@@ -102,7 +102,7 @@ export class PgMessageRepository implements IMessageRepository {
         this.stmtFindExistingDiscordIds = buildFindExistingDiscordIdsStmt(db);
     }
 
-    async save(msg: Omit<DiscordMessage, "id" | "createdAt">): Promise<DiscordMessage> {
+    async save(msg: Omit<DiscordMessage, "id" | "createdAt">): Promise<{ id: string }> {
         return Sentry.startSpan(
             {
                 name: "Save message to database",
@@ -153,7 +153,7 @@ export class PgMessageRepository implements IMessageRepository {
         guildId: string;
         newMessages: BaseMessage[];
         retriesLeft?: number | null;
-    }): Promise<DiscordMessage> {
+    }): Promise<{ id: string }> {
         const saved = await this.save({
             discordMessageId: params.discordMessageId,
             repliesToDiscordId: params.repliesToDiscordId,
@@ -281,7 +281,7 @@ export class PgMessageRepository implements IMessageRepository {
         }
     }
 
-    async saveBatch(msgs: Omit<DiscordMessage, "id" | "createdAt">[]): Promise<DiscordMessage[]> {
+    async saveBatch(msgs: Omit<DiscordMessage, "id" | "createdAt">[]): Promise<{ id: string }[]> {
         if (msgs.length === 0) return [];
         return Sentry.startSpan(
             {
@@ -310,25 +310,11 @@ export class PgMessageRepository implements IMessageRepository {
                             // in RETURNING, so the result is always N rows matching the N inputs.
                             set: { id: messages.id },
                         })
-                        .returning();
+                        .returning({ id: messages.id });
 
                     this.logger.debug({ batchSize: msgs.length, insertedCount: rows.length }, "Batch saved messages");
 
-                    return rows.map((row) => ({
-                        id: row.id,
-                        discordMessageId: row.discordMessageId,
-                        repliesToDiscordId: row.repliesToDiscordId ?? null,
-                        channelId: row.channelId,
-                        guildId: row.guildId,
-                        role: row.role,
-                        // TYPE COERCION: the parsed value's shape matches DiscordMessage["langchainMessages"]
-                        // by construction (it was stored from BaseMessage.toJSON()), but TS cannot verify it.
-                        langchainMessages: (typeof row.langchainMessages === "string"
-                            ? JSON.parse(row.langchainMessages)
-                            : row.langchainMessages) as DiscordMessage["langchainMessages"],
-                        retriesLeft: row.retriesLeft ?? null,
-                        createdAt: row.createdAt,
-                    }));
+                    return rows;
                 } catch (err) {
                     if (err instanceof DatabaseError) throw err;
                     throw new DatabaseError("Failed to batch save messages", err);
