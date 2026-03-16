@@ -38,9 +38,9 @@ const routeToGeneralTool = tool(async () => JSON.stringify({ route: "general" })
  * Instructs the model to classify and route — not to answer directly.
  */
 export const TRIAGE_SYSTEM_PROMPT =
-    "You are a routing assistant. Your ONLY job is to classify the user's message " +
-    "and call exactly one of the available tools to route or handle it. " +
-    "Do NOT answer the user directly — always call a tool. " +
+    "You are a request analysis agent. Your job is to intelligently respond to the user's message with the right " +
+    "tools and call exactly one route tool to route the request to another agent or one or more data retrieval " +
+    "tools to retrieve the necessary information to satisfy the request." +
     "Rules:\n" +
     "- If the message contains web page URLs to analyze: call get_website\n" +
     "- If the message contains video URLs (YouTube, social media, etc.): call get_video_captions\n" +

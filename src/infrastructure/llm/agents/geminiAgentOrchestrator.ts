@@ -652,34 +652,43 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             );
 
             const toolCalls = triageResponse.tool_calls ?? [];
-            if (toolCalls.length > 1) {
-                this.logger.warn(
-                    { toolNames: toolCalls.map((tc) => tc.name) },
-                    "Triage returned multiple tool calls; only the first will be used",
-                );
-            }
-            const toolCall = toolCalls[0];
 
-            if (!toolCall) {
-                this.logger.info("Triage made no tool call, routing to general agent");
+            if (toolCalls.length === 0) {
+                this.logger.warn("Triage made no tool call, routing to general agent");
                 span.setAttribute("agent.triage_route", "general");
                 return new Command({ goto: OrchestratorNode.GENERAL });
             }
 
-            this.logger.info({ toolName: toolCall.name }, "Triage selected route");
-            span.setAttribute("agent.triage_route", toolCall.name);
+            // Partition tool calls into content fetchers and routing sentinels.
+            // A single triage response may request multiple content tools (e.g. two URLs
+            // of different types), all of which must be executed before the general node runs.
+            // TODO: populate dynamically instead of hard coding
+            const CONTENT_TOOLS = new Set(["get_website", "get_video_captions"]);
+            const contentCalls = toolCalls.filter((tc) => CONTENT_TOOLS.has(tc.name));
+            const routingCalls = toolCalls.filter((tc) => !CONTENT_TOOLS.has(tc.name));
 
-            switch (toolCall.name) {
-                case "get_website":
-                case "get_video_captions": {
-                    // Real tool call: add triage AIMessage to state so the ToolMessage
-                    // created in executeToolNode has a valid tool_call_id in history.
-                    return new Command({
-                        goto: OrchestratorNode.EXECUTE_TOOL,
-                        update: { messages: [triageResponse] },
-                    });
-                }
+            this.logger.info(
+                { contentTools: contentCalls.map((tc) => tc.name), routingTools: routingCalls.map((tc) => tc.name) },
+                "Triage tool calls",
+            );
+            span.setAttribute("agent.triage_route", toolCalls.map((tc) => tc.name).join(","));
 
+            if (contentCalls.length > 0) {
+                // Real tool calls: add triage AIMessage to state so each ToolMessage
+                // created in executeToolNode has a valid tool_call_id in history.
+                return new Command({
+                    goto: OrchestratorNode.EXECUTE_TOOL,
+                    update: { messages: [triageResponse] },
+                });
+            }
+
+            // Only routing sentinels — inspect the first one (mixed routing is undefined behavior)
+            const routingCall = routingCalls[0];
+            if (!routingCall) {
+                this.logger.warn({ toolNames: toolCalls.map((tc) => tc.name) }, "Triage emitted only unknown tools, falling back to general");
+                return new Command({ goto: OrchestratorNode.GENERAL });
+            }
+            switch (routingCall.name) {
                 case "route_to_search":
                     // Routing sentinel: do NOT add triage message to state
                     return new Command({ goto: OrchestratorNode.SEARCH });
@@ -689,17 +698,18 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     return new Command({ goto: OrchestratorNode.GENERAL });
 
                 default:
-                    this.logger.warn({ toolName: toolCall.name }, "Unknown triage tool, falling back to general");
+                    this.logger.warn({ toolName: routingCall.name }, "Unknown triage tool, falling back to general");
                     return new Command({ goto: OrchestratorNode.GENERAL });
             }
         });
     }
 
     /**
-     * Execute tool node: runs the content tool whose call was placed in state by triageNode.
+     * Execute tool node: runs all content tool calls placed in state by triageNode.
      *
-     * Reads the last message (the triage AIMessage with tool_calls) to determine which
-     * tool to run and with what arguments. Always routes to the general node via static edge.
+     * Reads the last message (the triage AIMessage with tool_calls) and invokes each
+     * content tool in parallel, producing one ToolMessage per call. Always routes to
+     * the general node via static edge.
      */
     private async executeToolNode(state: GraphState, config: NodeConfig): Promise<{ messages: BaseMessage[] }> {
         return Sentry.startSpan({ name: "Execute tool node", op: "agent.node.execute_tool" }, async (span) => {
@@ -707,39 +717,39 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 type: AgentStatusType.FETCHING_CONTENT,
             });
             const lastMsg = state.messages.at(-1);
-            const toolCall = lastMsg instanceof AIMessage ? lastMsg.tool_calls?.[0] : undefined;
+            const toolCalls = lastMsg instanceof AIMessage ? (lastMsg.tool_calls ?? []) : [];
 
-            if (!toolCall) {
+            if (toolCalls.length === 0) {
                 throw new AppError(
                     "ORCHESTRATOR_MISSING_TOOL_CALL",
                     "executeToolNode reached without a tool call in state",
                 );
             }
 
-            span.setAttribute("agent.tool_name", toolCall.name);
+            span.setAttribute("agent.tool_names", toolCalls.map((tc) => tc.name).join(","));
 
             // TYPE COERCION: LangChain tool_calls args are typed as Record<string, unknown>;
             // the Zod schema on each tool guarantees the urls: string[] shape at parse time.
-            let toolResult:
-                | Awaited<ReturnType<typeof this.getWebsiteTool.invoke>>
-                | Awaited<ReturnType<typeof this.getVideoCaptionsTool.invoke>>;
-            if (toolCall.name === "get_website") {
-                toolResult = await this.getWebsiteTool.invoke(toolCall.args as { urls: string[] });
-            } else {
-                toolResult = await this.getVideoCaptionsTool.invoke(toolCall.args as { urls: string[] });
-            }
+            const toolMessages = await Promise.all(
+                toolCalls.map(async (toolCall) => {
+                    const toolResult =
+                        toolCall.name === "get_website"
+                            ? await this.getWebsiteTool.invoke(toolCall.args as { urls: string[] })
+                            : await this.getVideoCaptionsTool.invoke(toolCall.args as { urls: string[] });
 
-            // TODO: distinguish between partial / total tool failures and don't forward to general if the tool call is a complete failure as Gemini loves to make stuff up when it has no context. Either respond to user directly or insert a message with instructions that the model should report to the user the retrieval failed.
+                    // TODO: distinguish between partial / total tool failures and don't forward to general if the tool call is a complete failure as Gemini loves to make stuff up when it has no context. Either respond to user directly or insert a message with instructions that the model should report to the user the retrieval failed.
 
-            const toolMessage = new ToolMessage({
-                // TYPE COERCION: ToolMessage.content types don't include object arrays,
-                // but LangChain and Gemini both accept structured JSON arrays at runtime.
-                content: toolResult as unknown as [] | string,
-                name: toolCall.name,
-                tool_call_id: toolCall.id ?? "",
-            });
+                    return new ToolMessage({
+                        // TYPE COERCION: ToolMessage.content types don't include object arrays,
+                        // but LangChain and Gemini both accept structured JSON arrays at runtime.
+                        content: toolResult as unknown as [] | string,
+                        name: toolCall.name,
+                        tool_call_id: toolCall.id ?? "",
+                    });
+                }),
+            );
 
-            return { messages: [toolMessage] };
+            return { messages: toolMessages };
         });
     }
 
