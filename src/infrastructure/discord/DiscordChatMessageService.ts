@@ -1,8 +1,8 @@
 import type { Client, Message, TextBasedChannel } from "discord.js";
-import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { DiscordMessageSnapshot, IChatMessageService } from "../../application/ports/IChatMessageService.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import type { DiscordClient } from "./DiscordClient.ts";
+import { buildSnapshot } from "./messageExtractors.ts";
 
 /** Default maximum number of messages to walk when fetching a reply chain. */
 const DEFAULT_CHAIN_LIMIT = 100;
@@ -49,39 +49,13 @@ export class DiscordChatMessageService implements IChatMessageService {
         while (currentMessageId !== null && chain.length < limit) {
             try {
                 const message: Message = await channel.messages.fetch(currentMessageId);
-                const authorId = message.author.id;
+                const snapshot = buildSnapshot(message, botUserId, this.previousBotId);
 
-                const attachments: DiscordAttachmentInfo[] = [...message.attachments.values()].map((a) => ({
-                    id: a.id,
-                    url: a.url,
-                    proxyURL: a.proxyURL,
-                    name: a.name ?? "attachment",
-                    size: a.size,
-                    contentType: a.contentType,
-                }));
-
-                const snapshot: DiscordMessageSnapshot = {
-                    id: message.id,
-                    content: message.content,
-                    authorId,
-                    authorUsername: message.author.username,
-                    // Guild-aware display name resolution: nickname > globalName > username
-                    authorDisplayName: message.member?.displayName ?? message.author.displayName,
-                    isBot: message.author.bot,
-                    isOwnBot:
-                        (botUserId !== undefined && authorId === botUserId) ||
-                        (this.previousBotId !== undefined && authorId === this.previousBotId),
-                    attachments,
-                    referencedMessageId: message.reference?.messageId ?? null,
-                    channelId: message.channelId,
-                    // DMs have no guild — use the same sentinel used throughout the codebase
-                    guildId: message.guildId ?? "@me",
-                    createdAt: message.createdAt,
-                };
-
-                // Prepend so we accumulate root-first after reversal
+                // Prepend so we accumulate root-first
                 chain.unshift(snapshot);
-                currentMessageId = message.reference?.messageId ?? null;
+                // For forwarded messages buildSnapshot sets referencedMessageId to null,
+                // which naturally terminates the traversal here
+                currentMessageId = snapshot.referencedMessageId;
             } catch (err) {
                 // Stop traversal on any fetch failure; return what was collected
                 this.logger.warn(

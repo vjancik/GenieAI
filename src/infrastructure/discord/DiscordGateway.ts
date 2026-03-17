@@ -27,6 +27,7 @@ import type { IMessagePageRepository } from "../../domain/message/MessagePage.ts
 import { shortenRedirectUrl } from "../http/redirectUrl.ts";
 import type { DiscordClient } from "./DiscordClient.ts";
 import { InteractionLock } from "./InteractionLock.ts";
+import { buildSnapshot, extractAttachments } from "./messageExtractors.ts";
 import { RateLimiter } from "./RateLimiter.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
 
@@ -790,14 +791,7 @@ export class DiscordGateway {
             return;
         }
         const userContent = extractUserContent(message, botUserId, botRoleId);
-        const attachments: DiscordAttachmentInfo[] = [...message.attachments.values()].map((a) => ({
-            id: a.id,
-            url: a.url,
-            proxyURL: a.proxyURL,
-            name: a.name ?? "attachment",
-            size: a.size,
-            contentType: a.contentType,
-        }));
+        const attachments: DiscordAttachmentInfo[] = extractAttachments(message);
 
         // No usable content after stripping mentions/commands and no attachments —
         // substitute a synthetic greeting so the agent can introduce itself.
@@ -867,13 +861,13 @@ export class DiscordGateway {
                         });
                     };
 
-                    // Resolve display name with guild-aware priority:
-                    // member.displayName = nickname ?? globalName ?? username (discord.js computed)
-                    // falls back to author.displayName (globalName ?? username) for DMs
-                    const userName = message.member?.displayName ?? message.author.displayName;
+                    // Build the application-layer snapshot from the discord.js Message.
+                    // previousBotId is not relevant here — isOwnBot detection is only needed
+                    // in the live chain fallback path, not for the current user message.
+                    const rawSnapshot = buildSnapshot(message, botUserId, undefined);
 
-                    // Enrich the stripped content with sender attribution for LLM context
-                    const llmContent = discordMessageToLlmText(userName, effectiveUserContent);
+                    // Enrich the stripped content with sender attribution and embed context for LLM
+                    const llmContent = discordMessageToLlmText({ ...rawSnapshot, content: effectiveUserContent });
 
                     // handle() never throws — errors are caught internally and returned as a response
                     const { response, newMessages, isFailure, isRetryable } =

@@ -685,7 +685,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             // Only routing sentinels — inspect the first one (mixed routing is undefined behavior)
             const routingCall = routingCalls[0];
             if (!routingCall) {
-                this.logger.warn({ toolNames: toolCalls.map((tc) => tc.name) }, "Triage emitted only unknown tools, falling back to general");
+                this.logger.warn(
+                    { toolNames: toolCalls.map((tc) => tc.name) },
+                    "Triage emitted only unknown tools, falling back to general",
+                );
                 return new Command({ goto: OrchestratorNode.GENERAL });
             }
             switch (routingCall.name) {

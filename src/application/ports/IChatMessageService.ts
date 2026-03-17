@@ -1,6 +1,23 @@
 import type { DiscordAttachmentInfo } from "./IAttachmentDownloader.ts";
 
 /**
+ * Metadata from a Discord embed, extracted for LLM context.
+ * URL fields (video, image, thumbnail) are captured but not rendered as LLM text —
+ * reserved for future media handling.
+ */
+export interface DiscordEmbedInfo {
+    /** Embed type — e.g. "rich", "image", "video", "gifv", "article", "link". */
+    type: string;
+    title?: string;
+    description?: string;
+    author?: { name: string };
+    provider?: { name: string };
+    video?: { url: string; proxyURL?: string };
+    image?: { url: string; proxyURL?: string };
+    thumbnail?: { url: string; proxyURL?: string };
+}
+
+/**
  * A type-safe subset of a Discord message, containing only the fields needed
  * by the application layer. Prevents discord.js types from leaking into use cases.
  */
@@ -26,6 +43,15 @@ export interface DiscordMessageSnapshot {
     isOwnBot: boolean;
     /** File attachments on the message. */
     attachments: DiscordAttachmentInfo[];
+    /** Embeds attached to this message. */
+    embeds?: DiscordEmbedInfo[];
+    /**
+     * Content of the forwarded source message(s), when this message is a Discord "forward".
+     * The nested snapshots have no author info — Discord's MessageSnapshot type does not carry it.
+     */
+    messageSnapshots?: DiscordMessageSnapshot[];
+    /** True when this message is a Discord forward (MessageReferenceType.Forward). */
+    isForwarded?: boolean;
     /** Discord snowflake ID of the message this is replying to, or null for chain roots. */
     referencedMessageId: string | null;
     /** Discord channel snowflake. */

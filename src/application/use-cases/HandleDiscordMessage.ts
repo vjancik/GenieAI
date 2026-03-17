@@ -310,9 +310,7 @@ export class HandleDiscordMessageUseCase {
                     }> = [];
 
                     for (const snapshot of newSnapshots) {
-                        const content = snapshot.isOwnBot
-                            ? snapshot.content
-                            : discordMessageToLlmText(snapshot.authorDisplayName, snapshot.content);
+                        const content = snapshot.isOwnBot ? snapshot.content : discordMessageToLlmText(snapshot);
 
                         const { msg, pendingRecords } = await this.buildMessage({
                             role: snapshot.isOwnBot ? "assistant" : "human",
