@@ -18,6 +18,9 @@ type MockEmbed = {
     description: string | null;
     author: { name: string } | null;
     provider: { name?: string } | null;
+    timestamp: string | null;
+    footer: { text: string } | null;
+    fields: Array<{ name: string; value: string }>;
     video: { url?: string; proxyURL?: string } | null;
     image: { url: string; proxyURL?: string } | null;
     thumbnail: { url: string; proxyURL?: string } | null;
@@ -334,6 +337,9 @@ describe("DiscordChatMessageService.fetchChain", () => {
                     description: "Embed Description",
                     author: { name: "Embed Author" },
                     provider: { name: "Embed Provider" },
+                    timestamp: null,
+                    footer: null,
+                    fields: [],
                     video: null,
                     image: null,
                     thumbnail: null,

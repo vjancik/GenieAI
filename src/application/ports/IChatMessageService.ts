@@ -12,6 +12,10 @@ export interface DiscordEmbedInfo {
     description?: string;
     author?: { name: string };
     provider?: { name: string };
+    /** ISO 8601 timestamp string, pre-converted to a human-readable local date/time. */
+    timestamp?: string;
+    footer?: { text: string };
+    fields?: Array<{ name: string; value: string }>;
     video?: { url: string; proxyURL?: string };
     image?: { url: string; proxyURL?: string };
     thumbnail?: { url: string; proxyURL?: string };

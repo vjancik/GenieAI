@@ -32,6 +32,21 @@ export function extractAttachments(source: AttachmentSource): DiscordAttachmentI
     }));
 }
 
+/** Formats a Date verbosely in UTC, e.g. "Monday, March 17, 2024 at 02:35:00 PM UTC". */
+function formatUtcTimestamp(d: Date): string {
+    // Explicit 'en-US' locale pins the output format regardless of server locale settings
+    return `${d.toLocaleString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        timeZone: "UTC",
+    })} UTC`;
+}
+
 /**
  * Extracts embed metadata from a Discord message or message snapshot into the
  * application-layer {@link DiscordEmbedInfo} type.
@@ -50,6 +65,15 @@ export function extractEmbeds(source: EmbedSource): DiscordEmbedInfo[] {
         if (embed.description) info.description = embed.description;
         if (embed.author?.name) info.author = { name: embed.author.name };
         if (embed.provider?.name) info.provider = { name: embed.provider.name };
+
+        // timestamp is an ISO 8601 string from the API; convert to a fixed verbose UTC string
+        // (avoid toLocaleString() — output varies by server locale settings)
+        if (embed.timestamp) info.timestamp = formatUtcTimestamp(new Date(embed.timestamp));
+
+        if (embed.footer?.text) info.footer = { text: embed.footer.text };
+
+        const fields = embed.fields.filter((f) => f.name || f.value);
+        if (fields.length > 0) info.fields = fields.map((f) => ({ name: f.name, value: f.value }));
 
         const vid = embed.video;
         // APIEmbedVideo.url is optional (Discord omits it for some video types)

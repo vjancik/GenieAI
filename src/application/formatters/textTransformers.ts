@@ -79,6 +79,14 @@ function renderEmbed(embed: DiscordEmbedInfo): string {
     if (embed.description && embed.provider?.name !== "YouTube") lines.push(`Description: ${embed.description}`);
     if (embed.author?.name) lines.push(`Author: ${embed.author.name}`);
     if (embed.provider?.name) lines.push(`Source: ${embed.provider.name}`);
+    if (embed.timestamp) lines.push(`Date: ${embed.timestamp}`);
+    if (embed.fields?.length) {
+        lines.push("Fields: ");
+        for (const field of embed.fields) {
+            lines.push(`${field.name}: ${field.value}`);
+        }
+    }
+    if (embed.footer?.text) lines.push(`Footer: ${embed.footer.text}`);
     // URL fields (video/image/thumbnail) are intentionally omitted — used for media, not text context
     return lines.join("\n");
 }
