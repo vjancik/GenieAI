@@ -793,7 +793,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             this.logger.debug({ dateStr, hasVideoCaptions, hasToolResult }, "General node prompt parameters");
 
             const invokeMessages: BaseMessage[] = [
-                new SystemMessage(buildGeneralSystemPrompt(dateStr, hasVideoCaptions)),
+                new SystemMessage(buildGeneralSystemPrompt(dateStr, hasVideoCaptions, hasToolResult)),
                 ...state.messages,
             ];
 

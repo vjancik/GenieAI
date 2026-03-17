@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/bun";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import type { GeminiApiKey } from "../../../domain/message/GeminiApiKey.ts";
 import { ModelProvider } from "../ModelProvider.ts";
+import { BASE_USER_FACING_PROMPT, SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
 
 /**
  * System prompt for the search agent.
@@ -11,9 +12,11 @@ import { ModelProvider } from "../ModelProvider.ts";
  * whether to invoke grounding based on prompt content — it cannot be forced programmatically.
  */
 export const SEARCH_SYSTEM_PROMPT =
+    BASE_USER_FACING_PROMPT +
+    "\n" +
     "If the user asks a question that may require information that's more recent than January 2025, use Google Search to search the web for relevant information to answer the question.\n" +
-    "Also use Google Search if the user asks a niche question that may not be answerable with your base knowledge.\n" +
-    "Your answers should be shorter than 1500 characters.";
+    "Also use Google Search if the user asks a niche question that may not be answerable with your base knowledge." +
+    SYSTEM_PROMPT_FOOTER;
 
 /** Dependencies for constructing a search model provider instance. */
 interface SearchModelOptions {
