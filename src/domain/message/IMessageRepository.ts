@@ -96,6 +96,17 @@ export interface IMessageRepository {
     }): Promise<string[]>;
 
     /**
+     * Delete a single message row by its Discord message ID, guild, and channel.
+     * Cascades to message_pages and gemini_files rows via DB foreign keys.
+     * No-ops silently if the row does not exist.
+     *
+     * @param lookup.discordMessageId - The Discord snowflake ID of the message to delete
+     * @param lookup.channelId - The Discord channel snowflake
+     * @param lookup.guildId - The Discord guild snowflake, or `"@me"` for DMs
+     */
+    deleteByDiscordMessageId(lookup: { discordMessageId: string; channelId: string; guildId: string }): Promise<void>;
+
+    /**
      * Batch-insert multiple message records, skipping any that already exist
      * (by the unique guild+channel+discordMessageId constraint).
      *

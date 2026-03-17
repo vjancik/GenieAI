@@ -30,10 +30,11 @@ export const messages = pgTable(
         /** Serialized LangChain BaseMessage objects stored as JSON array */
         langchainMessages: json("langchain_messages").notNull().$type<DiscordMessage["langchainMessages"]>(),
         /**
-         * Number of retries remaining for this message.
-         * Only set on bot response rows where the response is retryable (fallback model was used).
+         * Number of retries shown on the Retry button for this message.
+         * Only set on bot response rows where the response is retryable.
          * NULL on human messages and non-retryable bot responses.
-         * Decremented by the gateway on each retry; the Retry button is hidden when this reaches 0.
+         * Read by the gateway on retry click, decremented, and stored on the new response row.
+         * The Retry button is hidden when this reaches 0.
          */
         retriesLeft: integer("retries_left"),
         createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

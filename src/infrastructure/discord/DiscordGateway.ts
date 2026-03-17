@@ -396,7 +396,7 @@ export class DiscordGateway {
                 channelId: botReply.channelId,
                 guildId: botReply.guildId ?? DM_GUILD_TOKEN,
                 newMessages,
-                retriesLeft: isRetryable ? effectiveRetriesLeft - 1 : null,
+                retriesLeft: isRetryable ? effectiveRetriesLeft : null,
             });
             // messageId = UUID of the saved messages row for this page; firstPageMessageId = same for page 1
             await this.messagePageRepo.save({
@@ -435,7 +435,7 @@ export class DiscordGateway {
                 channelId: botReply.channelId,
                 guildId: botReply.guildId ?? DM_GUILD_TOKEN,
                 newMessages,
-                retriesLeft: isRetryable ? effectiveRetriesLeft - 1 : null,
+                retriesLeft: isRetryable ? effectiveRetriesLeft : null,
             });
 
             // Sources didn't fit in the main message — send as a separate follow-up reply
@@ -523,9 +523,10 @@ export class DiscordGateway {
             // Acknowledge the interaction immediately so Discord doesn't show "interaction failed"
             await interaction.deferUpdate();
 
-            // Delete the old failed bot reply before sending a fresh response
+            // Delete the old failed bot reply from Discord before sending a fresh response.
+            // DB deletion happens later inside the span, after retriesLeft has been read.
             await interaction.message.delete().catch((err) => {
-                this.logger.warn({ err }, "Failed to delete old failed bot reply on retry");
+                this.logger.warn({ err }, "Failed to delete old failed bot reply from Discord on retry");
             });
 
             await Sentry.startSpan(
@@ -557,8 +558,22 @@ export class DiscordGateway {
                     const botRecord = chain.at(-1);
                     const humanRecord = chain.length >= 2 ? chain.at(-2) : undefined;
 
-                    // retriesLeft from the stored bot reply row — null if not set or record missing.
-                    const retriesLeft = botRecord?.retriesLeft ?? null;
+                    // Decrement retriesLeft from the stored bot reply row — each click consumes one retry.
+                    // null if not set or record missing (sendBotReply will fall back to DEFAULT_RETRIES_LEFT).
+                    const storedRetriesLeft = botRecord?.retriesLeft ?? null;
+                    const retriesLeft = storedRetriesLeft !== null ? storedRetriesLeft - 1 : null;
+
+                    // Delete the old failed bot reply from DB now that retriesLeft has been read.
+                    // Fire-and-forget — failure here doesn't block the retry from proceeding.
+                    this.messageRepo
+                        .deleteByDiscordMessageId({
+                            discordMessageId: interaction.message.id,
+                            channelId: originalMessage.channelId,
+                            guildId,
+                        })
+                        .catch((err) => {
+                            this.logger.warn({ err }, "Failed to delete old failed bot reply from DB on retry");
+                        });
 
                     if (humanRecord?.role === "human") {
                         // --- Scenario A: human message exists, re-run orchestration only ---

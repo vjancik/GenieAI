@@ -59,6 +59,20 @@ function buildFindExistingDiscordIdsStmt(db: Db) {
         .prepare("message_find_existing_discord_ids");
 }
 
+/** Prepared statement: delete a message row by the (guildId, channelId, discordMessageId) triple. */
+function buildDeleteByDiscordMessageIdStmt(db: Db) {
+    return db
+        .delete(messages)
+        .where(
+            and(
+                eq(messages.guildId, sql.placeholder("guildId")),
+                eq(messages.channelId, sql.placeholder("channelId")),
+                eq(messages.discordMessageId, sql.placeholder("discordMessageId")),
+            ),
+        )
+        .prepare("message_delete_by_discord_id");
+}
+
 /** Prepared statement: insert a new message row and return the assigned UUID. */
 function buildInsertMessageStmt(db: Db) {
     return db
@@ -88,6 +102,7 @@ function buildInsertMessageStmt(db: Db) {
  */
 export class PgMessageRepository implements IMessageRepository {
     private readonly stmtInsertMessage: ReturnType<typeof buildInsertMessageStmt>;
+    private readonly stmtDeleteByDiscordMessageId: ReturnType<typeof buildDeleteByDiscordMessageIdStmt>;
     private readonly stmtFindById: ReturnType<typeof buildFindByIdStmt>;
     private readonly stmtFindByDiscordMessageIdGuild: ReturnType<typeof buildFindByDiscordMessageIdGuildStmt>;
     private readonly stmtFindExistingDiscordIds: ReturnType<typeof buildFindExistingDiscordIdsStmt>;
@@ -97,6 +112,7 @@ export class PgMessageRepository implements IMessageRepository {
         private readonly logger: Logger,
     ) {
         this.stmtInsertMessage = buildInsertMessageStmt(db);
+        this.stmtDeleteByDiscordMessageId = buildDeleteByDiscordMessageIdStmt(db);
         this.stmtFindById = buildFindByIdStmt(db);
         this.stmtFindByDiscordMessageIdGuild = buildFindByDiscordMessageIdGuildStmt(db);
         this.stmtFindExistingDiscordIds = buildFindExistingDiscordIdsStmt(db);
@@ -176,6 +192,31 @@ export class PgMessageRepository implements IMessageRepository {
         );
 
         return saved;
+    }
+
+    async deleteByDiscordMessageId(lookup: {
+        discordMessageId: string;
+        channelId: string;
+        guildId: string;
+    }): Promise<void> {
+        return Sentry.startSpan(
+            {
+                name: "Delete message from database",
+                op: "db.query",
+                attributes: {
+                    "db.table": "messages",
+                    "discord.message_id": lookup.discordMessageId,
+                },
+            },
+            async () => {
+                try {
+                    await this.stmtDeleteByDiscordMessageId.execute(lookup);
+                    this.logger.debug({ discordMessageId: lookup.discordMessageId }, "Deleted message from database");
+                } catch (err) {
+                    throw new DatabaseError("Failed to delete message", err);
+                }
+            },
+        );
     }
 
     async findById(id: string): Promise<DiscordMessage | null> {
