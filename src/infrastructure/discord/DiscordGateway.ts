@@ -7,8 +7,10 @@ import {
     type ButtonInteraction,
     ButtonStyle,
     type Client,
+    ComponentType,
     Events,
     type Message,
+    type TopLevelComponent,
 } from "discord.js";
 import { extractWebGroundingChunks, formatGroundingSources } from "../../application/formatters/groundingSources.ts";
 import { splitMarkdown } from "../../application/formatters/markdownSplitter.ts";
@@ -152,6 +154,50 @@ export function extractUserContent(message: Message, botUserId: string, botRoleI
 }
 
 /**
+ * Returns a components array with the button matching `removeId` filtered out.
+ * Preserves all other buttons so, e.g., removing the Next Page button leaves
+ * any co-located Retry button intact (and vice versa).
+ * Passing the result to `message.edit({ components })` replaces the row in-place.
+ */
+function withoutButton(
+    message: Message,
+    removeId: string,
+): (TopLevelComponent | ActionRowBuilder<ButtonBuilder>)[] {
+    const result: (TopLevelComponent | ActionRowBuilder<ButtonBuilder>)[] = [];
+    for (const row of message.components) {
+        if (row.type !== ComponentType.ActionRow) {
+            result.push(row);
+            continue;
+        }
+        const remaining = row.components.filter(
+            (c) => c.type !== ComponentType.Button || c.customId !== removeId,
+        );
+        if (remaining.length === 0) continue;
+        result.push(
+            new ActionRowBuilder({ components: remaining })
+        );
+    }
+    return result;
+}
+
+async function resolveGroundingSources(newMessages: BaseMessage[]): Promise<string | null> {
+    const lastMessage = newMessages.at(-1);
+    if (!(lastMessage instanceof AIMessage)) return null;
+
+    const rawChunks = extractWebGroundingChunks(lastMessage.additional_kwargs);
+    if (rawChunks.length === 0) return null;
+
+    const sources = await Promise.all(
+        rawChunks.map(async ({ uri, title }) => ({
+            title,
+            url: await shortenRedirectUrl(uri),
+        })),
+    );
+
+    return formatGroundingSources(sources);
+}
+
+/**
  * Manages Discord event dispatching for incoming messages and button interactions.
  *
  * Lifecycle (start/stop) is delegated to the injected {@link DiscordClient}, which
@@ -216,23 +262,6 @@ export class DiscordGateway {
      * Returns `null` if the last message is not an AIMessage, has no web sources,
      * or formatting produces nothing.
      */
-    private async resolveGroundingSources(newMessages: BaseMessage[]): Promise<string | null> {
-        const lastMessage = newMessages.at(-1);
-        if (!(lastMessage instanceof AIMessage)) return null;
-
-        const rawChunks = extractWebGroundingChunks(lastMessage.additional_kwargs);
-        if (rawChunks.length === 0) return null;
-
-        const sources = await Promise.all(
-            rawChunks.map(async ({ uri, title }) => ({
-                title,
-                url: await shortenRedirectUrl(uri),
-            })),
-        );
-
-        return formatGroundingSources(sources);
-    }
-
     /**
      * Shared post-processing step after the LLM produces a response.
      *
@@ -298,7 +327,7 @@ export class DiscordGateway {
 
         // Resolve grounding sources in parallel with the response being sent.
         // Only populated when the response came from the searchNode (Google Search grounding).
-        const sourcesLine = await this.resolveGroundingSources(newMessages);
+        const sourcesLine = await resolveGroundingSources(newMessages);
 
         // Attach a Retry button when the use case signals a retryable failure and retries remain.
         // retriesLeft=undefined means this is a fresh response — use DEFAULT_RETRIES_LEFT.
@@ -330,15 +359,17 @@ export class DiscordGateway {
                 throw new Error("splitMarkdown did not return pageCount for paginated content");
             }
 
-            const nextPageRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            // When both a Next Page and Retry button are present, combine them into
+            // a single row so they render side by side (Next Page first).
+            const firstPageRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
                 new ButtonBuilder()
                     .setCustomId(NEXT_PAGE_BUTTON_ID)
                     .setLabel(`Next Page · Page 1 of ${totalPages}`)
                     .setStyle(ButtonStyle.Primary),
+                ...(retryRow ? retryRow.components : []),
             );
 
-            const components: ActionRowBuilder<ButtonBuilder>[] = [nextPageRow];
-            if (retryRow) components.push(retryRow);
+            const components: ActionRowBuilder<ButtonBuilder>[] = [firstPageRow];
 
             const botReply = await replyTarget.reply({
                 content: page1Content,
@@ -476,7 +507,9 @@ export class DiscordGateway {
                         content: "Original message is missing, retry is no longer possible.",
                         ephemeral: true,
                     }),
-                    interaction.message.edit({ components: [] }),
+                    interaction.message.edit({
+                        components: withoutButton(interaction.message, RETRY_BUTTON_ID),
+                    }),
                 ]);
                 return;
             }
@@ -636,15 +669,22 @@ export class DiscordGateway {
                     } catch (err) {
                         this.logger.error({ err, currentBotMessageId }, "Failed to compute next page");
                         Sentry.captureException(err);
-                        await interaction.message.edit({ components: [] }).catch(() => {});
+                        await interaction.message
+                            .edit({ components: withoutButton(interaction.message, NEXT_PAGE_BUTTON_ID) })
+                            .catch(() => {});
                         return;
                     }
 
                     if (!result) {
                         // No pending page state — stale button click
-                        await interaction.message.edit({ components: [] }).catch((err) => {
-                            this.logger.warn({ err, currentBotMessageId }, "Failed to remove stale Next Page button");
-                        });
+                        await interaction.message
+                            .edit({ components: withoutButton(interaction.message, NEXT_PAGE_BUTTON_ID) })
+                            .catch((err) => {
+                                this.logger.warn(
+                                    { err, currentBotMessageId },
+                                    "Failed to remove stale Next Page button",
+                                );
+                            });
                         return;
                     }
 
@@ -708,13 +748,16 @@ export class DiscordGateway {
                                   })
                             : Promise.resolve(),
 
-                        // Remove the Next Page button from the OLD bot message
-                        interaction.message.edit({ components: [] }).catch((err) => {
-                            this.logger.warn(
-                                { err, currentBotMessageId },
-                                "Failed to remove Next Page button from old message",
-                            );
-                        }),
+                        // Remove only the Next Page button from the OLD bot message,
+                        // preserving any Retry button that may also be present.
+                        interaction.message
+                            .edit({ components: withoutButton(interaction.message, NEXT_PAGE_BUTTON_ID) })
+                            .catch((err) => {
+                                this.logger.warn(
+                                    { err, currentBotMessageId },
+                                    "Failed to remove Next Page button from old message",
+                                );
+                            }),
                     ]);
 
                     this.logger.info(

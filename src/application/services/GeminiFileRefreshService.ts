@@ -18,6 +18,7 @@ const GEMINI_URL_PREFIX = "https://generativelanguage.googleapis.com";
 
 /** Temp directory base path for streamed attachment files. */
 // NOTE: must be absolute or use path resolve
+// TODO: extend for use on Windows
 const TEMP_DIR = "/var/tmp/genie-attachments";
 
 /**
