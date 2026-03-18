@@ -7,7 +7,7 @@ import { randomUUIDv7 } from "bun";
 import type { GeminiFile } from "../../domain/message/GeminiFile.ts";
 import type { GeminiFileUpload } from "../../domain/message/GeminiFileUpload.ts";
 import type { AppConfig } from "../config/AppConfig.ts";
-import type { IDiscordAttachmentFetcher } from "../ports/IDiscordAttachmentFetcher.ts";
+import type { IDiscordMediaService } from "../ports/IDiscordMediaService.ts";
 import type { IDiskAttachmentDownloader } from "../ports/IDiskAttachmentDownloader.ts";
 import type { IGeminiFileRepository } from "../ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploaderRegistry } from "../ports/IGeminiFileUploaderRegistry.ts";
@@ -88,6 +88,7 @@ export class GeminiFileRefreshService {
         private readonly geminiFileRepo: IGeminiFileRepository,
         private readonly uploaderRegistry: IGeminiFileUploaderRegistry,
         private readonly diskDownloader: IDiskAttachmentDownloader,
+        private readonly mediaService: IDiscordMediaService,
         private readonly logger: Logger,
         config: Pick<AppConfig, "geminiFileStaleThresholdMinutes">,
     ) {
@@ -104,15 +105,10 @@ export class GeminiFileRefreshService {
      * Content blocks whose Discord attachment is no longer available are removed.
      *
      * @param messages - Conversation history (may contain Gemini URL blocks)
-     * @param attachmentFetcher - Per-request Discord attachment fetcher for the current channel
      * @param apiKeyId - The DB UUID of the API key currently being used for LLM invocation
      * @returns New message array with fresh Gemini URLs substituted
      */
-    async refreshHistory(
-        messages: BaseMessage[],
-        attachmentFetcher: IDiscordAttachmentFetcher,
-        apiKeyId: string,
-    ): Promise<BaseMessage[]> {
+    async refreshHistory(messages: BaseMessage[], apiKeyId: string): Promise<BaseMessage[]> {
         return Sentry.startSpan(
             {
                 name: "Refresh Gemini file history",
@@ -138,7 +134,7 @@ export class GeminiFileRefreshService {
                 for (const [originalUrl, { file, upload }] of fileStateMap) {
                     if (upload === null) {
                         // Never uploaded for this key (new key or trigger-cleaned row)
-                        const newUrl = await this.refreshOne(originalUrl, file, null, apiKeyId, attachmentFetcher);
+                        const newUrl = await this.refreshOne(originalUrl, file, null, apiKeyId);
                         urlSubstitutions.set(originalUrl, newUrl);
                     } else if (now - upload.uploadedAt.getTime() >= this.staleThresholdMs) {
                         // Upload exists but is approaching or past expiry
@@ -150,7 +146,7 @@ export class GeminiFileRefreshService {
                             },
                             "Gemini file upload is stale; refreshing",
                         );
-                        const newUrl = await this.refreshOne(originalUrl, file, upload, apiKeyId, attachmentFetcher);
+                        const newUrl = await this.refreshOne(originalUrl, file, upload, apiKeyId);
                         urlSubstitutions.set(originalUrl, newUrl);
                     } else if (upload.geminiUrl !== originalUrl) {
                         // Fresh upload exists but with a different URL (prior refresh updated the URL in DB
@@ -189,7 +185,6 @@ export class GeminiFileRefreshService {
         file: GeminiFile,
         existingUpload: GeminiFileUpload | null,
         apiKeyId: string,
-        attachmentFetcher: IDiscordAttachmentFetcher,
     ): Promise<string | null> {
         return Sentry.startSpan(
             {
@@ -201,8 +196,11 @@ export class GeminiFileRefreshService {
                 },
             },
             async () => {
-                // Re-fetch the Discord attachment to get a fresh CDN URL
-                const attachment = await attachmentFetcher.fetchAttachment(
+                // Re-fetch the Discord attachment to get a fresh CDN URL.
+                // discordChannelId is stored on the gemini_files anchor — all messages in a
+                // reply chain share the same channel, so this is always valid for re-fetching.
+                const attachment = await this.mediaService.fetchAttachment(
+                    file.discordChannelId,
                     file.discordMessageId,
                     file.discordAttachmentId,
                 );

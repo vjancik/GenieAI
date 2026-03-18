@@ -40,6 +40,7 @@ function makeRepo(chainMessages: DiscordMessage[] = []): IMessageRepository {
         findByDiscordMessageId: mock(async () => null),
         findExistingDiscordIds: mock(async () => []),
         saveBatch: mock(async (msgs) => msgs.map((_m: DiscordMessage, i: number) => ({ id: `batch-uuid-${i}` }))),
+        deleteByDiscordMessageId: mock(async () => {}),
     };
 }
 

@@ -37,7 +37,11 @@ export interface IGeminiFileRepository {
      * @param records - All fields except `id` (assigned by the database)
      * @returns The DB-assigned UUIDs, index-aligned with the input array
      */
-    saveFiles(records: Omit<GeminiFile, "id">[]): Promise<{ id: string }[]>;
+    /**
+     * `discordMessageId` and `discordChannelId` are intentionally excluded — they are
+     * not stored on `gemini_files` and are sourced from the joined `messages` row at read time.
+     */
+    saveFiles(records: Omit<GeminiFile, "id" | "discordMessageId" | "discordChannelId">[]): Promise<{ id: string }[]>;
 
     /**
      * Inserts or updates the upload record for a (geminiFileId, apiKeyId) pair.

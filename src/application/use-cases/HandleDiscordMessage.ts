@@ -12,7 +12,6 @@ import { discordMessageToLlmText } from "../formatters/textTransformers.ts";
 import type { IAgentOrchestrator } from "../ports/IAgentOrchestrator.ts";
 import type { DiscordAttachmentInfo, IAttachmentDownloader } from "../ports/IAttachmentDownloader.ts";
 import type { DiscordMessageSnapshot, IChatMessageService } from "../ports/IChatMessageService.ts";
-import type { IDiscordAttachmentFetcher } from "../ports/IDiscordAttachmentFetcher.ts";
 import type { IDiskAttachmentDownloader } from "../ports/IDiskAttachmentDownloader.ts";
 import type { IGeminiFileRepository } from "../ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploader } from "../ports/IGeminiFileUploader.ts";
@@ -33,8 +32,13 @@ const UPLOAD_TEMP_DIR = "/var/tmp/genie-attachments";
  * - `uploadData` → upserted into `gemini_file_uploads` (ephemeral, per-key)
  */
 type PendingGeminiRecord = {
-    /** fileAnchor excludes id and messageId — messageId is filled in after the message row is saved (FK requires UUID PK). */
-    fileAnchor: Omit<GeminiFile, "id" | "messageId">;
+    /**
+     * fileAnchor excludes id, messageId, discordMessageId, and discordChannelId.
+     * messageId is filled in after the message row is saved (FK requires UUID PK).
+     * discordMessageId and discordChannelId are NOT stored on gemini_files — they
+     * are sourced at read time from the joined messages row.
+     */
+    fileAnchor: Omit<GeminiFile, "id" | "messageId" | "discordMessageId" | "discordChannelId">;
     uploadData: {
         geminiFileName: string;
         geminiUrl: string;
@@ -92,7 +96,6 @@ export class HandleDiscordMessageUseCase {
      * @param params.userContent - Message content with bot mention stripped
      * @param params.attachments - File attachments on the Discord message
      * @param params.onStatusUpdate - Optional callback forwarded to the orchestrator for live status updates
-     * @param params.attachmentFetcher - Per-request Discord attachment fetcher (required in upload mode)
      * @returns The AI-generated response string and the new LangChain messages generated,
      *          or an error string if attachments exceed the size limit (inline mode only)
      */
@@ -105,7 +108,6 @@ export class HandleDiscordMessageUseCase {
         attachments: DiscordAttachmentInfo[];
         intent: MessageIntent;
         onStatusUpdate?: OnStatusUpdate;
-        attachmentFetcher?: IDiscordAttachmentFetcher;
     }): Promise<{
         response: string;
         newMessages: BaseMessage[];
@@ -191,7 +193,6 @@ export class HandleDiscordMessageUseCase {
                     // be saved AFTER the user's message row exists (FK constraint).
                     const { msg, pendingRecords } = await this.buildMessage({
                         role: "human",
-                        discordMessageId: params.discordMessageId,
                         content: params.userContent,
                         attachments: params.attachments,
                         onStatusUpdate: params.onStatusUpdate,
@@ -220,7 +221,6 @@ export class HandleDiscordMessageUseCase {
                         msg,
                         params.intent,
                         params.onStatusUpdate,
-                        params.attachmentFetcher,
                     );
 
                     if (!content) {
@@ -315,7 +315,6 @@ export class HandleDiscordMessageUseCase {
 
                         const { msg, pendingRecords } = await this.buildMessage({
                             role: snapshot.isOwnBot ? "assistant" : "human",
-                            discordMessageId: snapshot.id,
                             content,
                             attachments: snapshot.attachments,
                             onStatusUpdate,
@@ -415,14 +414,12 @@ export class HandleDiscordMessageUseCase {
      * In all other modes `pendingRecords` is always an empty array.
      *
      * @param params.role - "human" for user messages, "assistant" for bot messages
-     * @param params.discordMessageId - Discord snowflake for the message (used in Gemini file anchoring)
      * @param params.content - Formatted message text (already enriched with attribution if needed)
      * @param params.attachments - File attachments to embed or upload
      * @param params.onStatusUpdate - Optional status callback for the downloading status update
      */
     private async buildMessage<R extends "human" | "assistant">(params: {
         role: R;
-        discordMessageId: string;
         content: string;
         attachments: DiscordAttachmentInfo[];
         onStatusUpdate?: OnStatusUpdate;
@@ -430,7 +427,7 @@ export class HandleDiscordMessageUseCase {
         msg: R extends "human" ? HumanMessage : AIMessage;
         pendingRecords: PendingGeminiRecord[];
     }> {
-        const { role, discordMessageId, content, attachments, onStatusUpdate } = params;
+        const { role, content, attachments, onStatusUpdate } = params;
 
         // TYPE COERCION: TypeScript cannot narrow a conditional return type (R extends "human" ? ...)
         // from within the generic implementation body — the union HumanMessage | AIMessage is not
@@ -447,11 +444,7 @@ export class HandleDiscordMessageUseCase {
         onStatusUpdate?.({ type: AgentStatusType.DOWNLOADING_ATTACHMENTS });
 
         if (this.attachmentMode === "upload") {
-            const { contentParts, pendingRecords } = await this.buildUploadModeContentParts(
-                discordMessageId,
-                content,
-                attachments,
-            );
+            const { contentParts, pendingRecords } = await this.buildUploadModeContentParts(content, attachments);
             return { msg: wrap(contentParts), pendingRecords };
         }
 
@@ -514,7 +507,6 @@ export class HandleDiscordMessageUseCase {
      * UUID primary key is available (required to satisfy the `gemini_files.message_id` FK).
      */
     private async buildUploadModeContentParts(
-        discordMessageId: string,
         content: string,
         attachments: DiscordAttachmentInfo[],
     ): Promise<{
@@ -571,7 +563,6 @@ export class HandleDiscordMessageUseCase {
                                 originalGeminiUrl: uploaded.geminiUrl,
                                 discordAttachmentId: attachment.id,
                                 discordFilename: attachment.name,
-                                discordMessageId,
                             },
                             uploadData: {
                                 geminiFileName: uploaded.geminiFileName,

@@ -31,6 +31,7 @@ import { PgMessageRepository } from "./infrastructure/db/repositories/PgMessageR
 import { DiscordChatMessageService } from "./infrastructure/discord/DiscordChatMessageService.ts";
 import { DiscordClient } from "./infrastructure/discord/DiscordClient.ts";
 import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
+import { DiscordMediaService } from "./infrastructure/discord/DiscordMediaService.ts";
 import { StatusMessageUpdater } from "./infrastructure/discord/StatusMessageUpdater.ts";
 import { AgentOrchestrator, type ModelTimeouts } from "./infrastructure/llm/agents/geminiAgentOrchestrator.ts";
 import { GeneralModelProvider } from "./infrastructure/llm/models/generalModel.ts";
@@ -111,11 +112,16 @@ const searchProvider = new SearchModelProvider(paidKey.apiKey, {
     includeLLMThoughts: config.includeLLMThoughts,
 });
 
-// Gemini file refresh service — used by the orchestrator per key attempt
+// Discord client lifecycle wrapper — created before use cases and gateway so both can share it
+const discordClient = new DiscordClient(config.discordToken, logger.child({ module: "discord-client" }));
+
+// Gemini file refresh service — depends on discordMediaService for re-fetching expired CDN URLs
+const discordMediaService = new DiscordMediaService(discordClient);
 const geminiFileRefreshService = new GeminiFileRefreshService(
     geminiFileRepository,
     uploaderRegistry,
     diskDownloader,
+    discordMediaService,
     logger.child({ module: "attachments:refresh" }),
     config,
 );
@@ -138,9 +144,6 @@ const agentOrchestrator = new AgentOrchestrator(
 // The primary uploader for new uploads in HandleDiscordMessage uses the current free key.
 // The refresh service handles uploading for other keys internally during orchestration.
 const primaryUploader = uploaderRegistry.get(freeKeyProvider.currentKey.id);
-
-// Discord client lifecycle wrapper — created before use cases and gateway so both can share it
-const discordClient = new DiscordClient(config.discordToken, logger.child({ module: "discord-client" }));
 
 // Live Discord chain fetch service — used as fallback when DB reply chain is empty
 const discordChatMessageService = new DiscordChatMessageService(

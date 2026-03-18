@@ -7,7 +7,7 @@ import type { GeminiFile } from "../../../domain/message/GeminiFile.ts";
 import type { GeminiFileUpload } from "../../../domain/message/GeminiFileUpload.ts";
 import type { Db } from "../connection.ts";
 import { pgTextArray } from "../pgTextArray.ts";
-import { geminiFiles, geminiFileUploads } from "../schema.ts";
+import { geminiFiles, geminiFileUploads, messages } from "../schema.ts";
 
 /**
  * Prepared statement: LEFT JOIN gemini_files with gemini_file_uploads for a given
@@ -25,7 +25,10 @@ function buildFindWithUploadStateStmt(db: Db) {
             fileDiscordAttachmentId: geminiFiles.discordAttachmentId,
             fileDiscordFilename: geminiFiles.discordFilename,
             fileMessageId: geminiFiles.messageId,
-            fileDiscordMessageId: geminiFiles.discordMessageId,
+            // discordMessageId and channelId are joined from messages to avoid storing
+            // them redundantly on gemini_files — cheap join on indexed PK/FK.
+            msgDiscordMessageId: messages.discordMessageId,
+            msgChannelId: messages.channelId,
             uploadId: geminiFileUploads.id,
             uploadGeminiFileId: geminiFileUploads.geminiFileId,
             uploadApiKeyId: geminiFileUploads.apiKeyId,
@@ -34,6 +37,7 @@ function buildFindWithUploadStateStmt(db: Db) {
             uploadUploadedAt: geminiFileUploads.uploadedAt,
         })
         .from(geminiFiles)
+        .innerJoin(messages, eq(messages.id, geminiFiles.messageId))
         .leftJoin(
             geminiFileUploads,
             and(
@@ -112,7 +116,9 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
      *
      * Empty input returns immediately without a DB round-trip.
      */
-    async saveFiles(records: Omit<GeminiFile, "id">[]): Promise<{ id: string }[]> {
+    async saveFiles(
+        records: Omit<GeminiFile, "id" | "discordMessageId" | "discordChannelId">[],
+    ): Promise<{ id: string }[]> {
         if (records.length === 0) return [];
         return Sentry.startSpan(
             {
@@ -130,7 +136,6 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                                 discordAttachmentId: r.discordAttachmentId,
                                 discordFilename: r.discordFilename,
                                 messageId: r.messageId,
-                                discordMessageId: r.discordMessageId,
                             })),
                         )
                         .onConflictDoUpdate({
@@ -201,7 +206,8 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                             discordAttachmentId: row.fileDiscordAttachmentId,
                             discordFilename: row.fileDiscordFilename,
                             messageId: row.fileMessageId,
-                            discordMessageId: row.fileDiscordMessageId,
+                            discordMessageId: row.msgDiscordMessageId,
+                            discordChannelId: row.msgChannelId,
                         };
 
                         // Presence of uploadId indicates a matching upload row was found

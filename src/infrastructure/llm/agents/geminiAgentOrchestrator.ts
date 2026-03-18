@@ -1,18 +1,9 @@
 import type { BaseMessage } from "@langchain/core/messages";
-import {
-    AIMessage,
-    ChatMessage,
-    FunctionMessage,
-    HumanMessage,
-    RemoveMessage,
-    SystemMessage,
-    ToolMessage,
-} from "@langchain/core/messages";
+import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import { Command, END, MessagesValue, ReducedValue, START, StateGraph, StateSchema } from "@langchain/langgraph";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
 import type { IAgentOrchestrator } from "../../../application/ports/IAgentOrchestrator.ts";
-import type { IDiscordAttachmentFetcher } from "../../../application/ports/IDiscordAttachmentFetcher.ts";
 import type { IFreeKeyProvider } from "../../../application/ports/IFreeKeyProvider.ts";
 import type { IModelProvider } from "../../../application/ports/IModelProvider.ts";
 import type { GeminiFileRefreshService } from "../../../application/services/GeminiFileRefreshService.ts";
@@ -26,13 +17,14 @@ import { MessageIntent } from "../../../domain/message/MessageIntent.ts";
 import type { AppConfig } from "../../config/config.ts";
 import { is429Error } from "../errors/is429Error.ts";
 import { isModelFallbackError } from "../errors/isModelFallbackError.ts";
-import { filterHistoryForInlineSize } from "../inlineAttachmentFilter.ts";
 import { buildGeneralSystemPrompt, type GeneralModel } from "../models/generalModel.ts";
 import { SEARCH_SYSTEM_PROMPT, type SearchModel } from "../models/searchModel.ts";
 import type { TriageModel } from "../models/triageModel.ts";
 import { TRIAGE_SYSTEM_PROMPT } from "../models/triageModel.ts";
 import type { GetVideoCaptionsTool } from "../tools/getVideoCaptionsTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
+import { filterHistoryForInlineSize } from "../utils/inlineAttachmentFilter.ts";
+import { dbMessagesToLangchain, extractContent } from "../utils/messageTransformers.ts";
 
 const GLOBAL_MODEL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes per invoke
 
@@ -69,7 +61,6 @@ const OrchestratorStateSchema = new StateSchema({
  */
 const OrchestratorContextSchema = z.object({
     onStatusUpdate: z.custom<OnStatusUpdate>().optional(),
-    attachmentFetcher: z.custom<IDiscordAttachmentFetcher>().optional(),
 });
 
 type OrchestratorContext = z.infer<typeof OrchestratorContextSchema>;
@@ -80,157 +71,6 @@ type OrchestratorContext = z.infer<typeof OrchestratorContextSchema>;
  * node functions always receive a config object, so `config` itself is non-optional.
  */
 type NodeConfig = { context?: OrchestratorContext };
-
-/**
- * Returns a copy of the serialized message JSON with thought: true content parts removed.
- * Only modifies messages whose kwargs.content is an array (structured content).
- * String content messages pass through unchanged.
- */
-function stripThoughtChunks(json: Record<string, unknown>): Record<string, unknown> {
-    // TYPE COERCION: json.kwargs is unknown in the generic record; cast to the known LangChain
-    // serialization shape (kwargs is always a record of named constructor arguments).
-    const kwargs = json.kwargs as Record<string, unknown> | undefined;
-    if (!Array.isArray(kwargs?.content)) return json;
-    return {
-        ...json,
-        kwargs: {
-            ...kwargs,
-            // TYPE COERCION: kwargs.content is unknown after the Array.isArray check;
-            // each element is a structured content part (object with at least a type field).
-            content: (kwargs.content as Record<string, unknown>[]).filter(
-                // TODO: this should be it's own predicate function somewhere else
-                (part) => !(typeof part === "object" && part !== null && part.thought === true),
-            ),
-        },
-    };
-}
-
-/**
- * Reconstructs a LangChain {@link BaseMessage} from a stored `.toJSON()` object.
- * Dispatches on the last element of the `id` array to select the correct constructor.
- *
- * - {@link SystemMessage} in history is a programmatic error (they are injected dynamically,
- *   not stored). Logs an error and throws in non-production environments.
- * - {@link ChatMessage}, {@link FunctionMessage}, {@link RemoveMessage} are unexpected but
- *   valid — logged as warnings and reconstructed.
- * - Completely unknown types log a warning and throw an {@link AppError}.
- */
-function deserializeMessage(json: Record<string, unknown>, logger: Logger): BaseMessage {
-    // TYPE COERCION: json.id is unknown; per LangChain's serialization format it is a string[]
-    // representing the module path (e.g. ["langchain_core", "messages", "HumanMessage"]).
-    const className = (json.id as string[]).at(-1);
-    // TYPE COERCION: json.kwargs is unknown; it is always a Record of named constructor
-    // arguments in LangChain's serialization format.
-    const kwargs = json.kwargs as Record<string, unknown>;
-
-    // TODO: some potentially important properties might be missing from kwargs, see if this is the right way to deserialize
-    switch (className) {
-        case "HumanMessage":
-            return new HumanMessage(kwargs);
-        case "AIMessage":
-            return new AIMessage(kwargs);
-        case "ToolMessage":
-            // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
-            // ToolMessage's strict constructor union type; double cast through unknown is required.
-            return new ToolMessage(kwargs as unknown as ConstructorParameters<typeof ToolMessage>[0]);
-        case "ChatMessage":
-            logger.warn({ className }, "Unexpected message type in history chain");
-            // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
-            // ChatMessage's strict constructor union type; double cast through unknown is required.
-            return new ChatMessage(kwargs as unknown as ConstructorParameters<typeof ChatMessage>[0]);
-        case "FunctionMessage":
-            logger.warn({ className }, "Unexpected message type in history chain");
-            // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
-            // FunctionMessage's strict constructor union type; double cast through unknown is required.
-            return new FunctionMessage(kwargs as unknown as ConstructorParameters<typeof FunctionMessage>[0]);
-        case "RemoveMessage":
-            logger.warn({ className }, "Unexpected message type in history chain");
-            // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
-            // RemoveMessage's strict constructor union type; double cast through unknown is required.
-            return new RemoveMessage(kwargs as unknown as ConstructorParameters<typeof RemoveMessage>[0]);
-        case "SystemMessage": {
-            logger.error(
-                { className },
-                "SystemMessage found in stored history — this is a programmatic error; SystemMessages should be injected dynamically, not persisted",
-            );
-            if (process.env.NODE_ENV !== "production") {
-                throw new AppError(
-                    "INVALID_STORED_MESSAGE_TYPE",
-                    "SystemMessage must not be stored in history — inject it dynamically instead",
-                );
-            }
-            return new SystemMessage(kwargs);
-        }
-        default:
-            logger.warn({ className }, "Unknown message type in history chain");
-            throw new AppError("UNKNOWN_MESSAGE_TYPE", `Cannot deserialize unknown message type: ${className}`);
-    }
-}
-
-/**
- * Converts persisted {@link DiscordMessage} records into LangChain {@link BaseMessage} objects.
- *
- * Each DiscordMessage can contain multiple serialized LangChain messages
- * (e.g. a bot turn with tool use stores [triageAIMessage, ToolMessage, finalAIMessage]).
- * All messages are deserialized by dispatching on the serialized class name and flattened
- * into a single chronological array.
- *
- * Optionally strips thought chunks (thought: true) from content arrays before construction,
- * reducing LLM request size. Gemini uses thoughtSignatures for context continuity, not the
- * thought text itself, so stripping is safe.
- *
- * @param records - Chronologically ordered DB message records
- * @param logger - Logger for warnings/errors on unexpected message types
- * @param filterThoughtChunks - Strip thought: true content parts before reconstruction (default: true)
- */
-export function dbMessagesToLangchain(
-    records: DiscordMessage[],
-    logger: Logger,
-    filterThoughtChunks = true,
-): BaseMessage[] {
-    return records.flatMap((r) =>
-        r.langchainMessages.map((json) => {
-            const prepared = filterThoughtChunks ? stripThoughtChunks(json) : json;
-            return deserializeMessage(prepared, logger);
-        }),
-    );
-}
-
-/** A structured content part that is a plain text segment. */
-type TextContentPart = { type: "text"; text: string };
-
-/**
- * Type guard: returns true if a content array element is a visible text part.
- *
- * Excludes Gemini thought chunks (`thought: true`), which are internal reasoning
- * that should be preserved in storage but never shown to users.
- */
-function isVisibleTextPart(part: unknown): part is TextContentPart {
-    if (typeof part !== "object" || part === null) return false;
-    // TYPE COERCION: part is narrowed to object but object doesn't allow index access;
-    // cast to Record to read structured content fields by name.
-    const p = part as Record<string, unknown>;
-    if (p.type !== "text" || typeof p.text !== "string") return false;
-    // Exclude Gemini thought chunks (thought: true marks internal reasoning)
-    return p.thought !== true;
-}
-
-/**
- * Extracts the displayable text content from a model response, handling both
- * string and structured array formats. Filters out Gemini thought chunks
- * (internal reasoning marked with thought: true) which should not be shown to users,
- * while preserving them in the stored message for context continuity.
- */
-function extractContent(response: BaseMessage): string {
-    if (typeof response.content === "string") {
-        return response.content;
-    }
-    // For structured content arrays, join all non-thought text parts
-    return response.content
-        .filter(isVisibleTextPart)
-        .map((part) => part.text)
-        .join("");
-}
 
 /** Graph state type — messages + intent seeded at invocation. */
 type GraphState = typeof OrchestratorStateSchema.State;
@@ -271,7 +111,8 @@ type InvokableModel<T extends BaseMessage> = {
  * Orchestrates the multi-agent triage routing pipeline as a LangGraph StateGraph.
  *
  * Graph topology:
- *   START → triage → executeTool → general → END
+ *   START → triage → fetchContent → general → END
+ *                  ↘            ↘ END (all tools failed)
  *                  ↘ general → END
  *                  ↘ search  → END
  *
@@ -280,6 +121,8 @@ type InvokableModel<T extends BaseMessage> = {
  * to the messages state, preventing context bloat in subsequent turns.
  * Real tool calls (get_website, get_video_captions) DO add their triage
  * AIMessage to state because it is required for the ToolMessage to be valid context.
+ * If all tool calls fail, fetchContent short-circuits to END with a programmatic
+ * error AIMessage, bypassing the general node to prevent hallucination.
  *
  * Free-key rotation: triage and general nodes iterate over free API keys on HTTP 429,
  * refreshing Gemini file upload state per key before each model invocation. The search
@@ -355,7 +198,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         userMessage: HumanMessage,
         intent: MessageIntent,
         onStatusUpdate?: OnStatusUpdate,
-        attachmentFetcher?: IDiscordAttachmentFetcher,
     ): Promise<{ content: string; newMessages: BaseMessage[]; isRetryable: boolean }> {
         return Sentry.startSpan(
             {
@@ -367,7 +209,8 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 const initialMessages = [...history, userMessage];
                 const result = await this.graph.invoke(
                     { messages: initialMessages, intent },
-                    { context: { onStatusUpdate, attachmentFetcher } },
+                    // TODO: factor out into it's own service that uses a fire-and-forget messaging pattern
+                    { context: { onStatusUpdate } },
                 );
 
                 // Everything after the initial seed is "new" — generated during this turn
@@ -408,7 +251,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         getModel: (key: GeminiApiKey) => InvokableModel<T>,
         getFallbackModel: ((key: GeminiApiKey) => InvokableModel<T> | undefined) | undefined,
         messages: BaseMessage[],
-        attachmentFetcher: IDiscordAttachmentFetcher | undefined,
         timeoutMs?: number,
     ): Promise<{ result: T; usedFallback: boolean }> {
         return Sentry.startSpan(
@@ -429,14 +271,11 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     let filtered: BaseMessage[] = [];
                     try {
                         // Refresh Gemini file uploads for this specific API key before invoking
-                        const refreshed =
-                            this.geminiFileRefreshService && attachmentFetcher
-                                ? await this.geminiFileRefreshService.refreshHistory(
-                                      messages,
-                                      attachmentFetcher,
-                                      key.id,
-                                  )
-                                : messages;
+                        // TODO: make a mandatory dependency until there's a way to make this work in inline mode
+                        // with pre-existing gemini file URLs in history
+                        const refreshed = this.geminiFileRefreshService
+                            ? await this.geminiFileRefreshService.refreshHistory(messages, key.id)
+                            : messages;
 
                         filtered =
                             this.attachmentMode === "inline"
@@ -512,7 +351,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         model: InvokableModel<T>,
         fallbackModel: InvokableModel<T> | undefined,
         messages: BaseMessage[],
-        attachmentFetcher: IDiscordAttachmentFetcher | undefined,
         timeoutMs?: number,
     ): Promise<{ result: T; usedFallback: boolean }> {
         return Sentry.startSpan(
@@ -522,14 +360,11 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 attributes: { "llm.api_key_id": this.paidApiKey.id },
             },
             async (span) => {
-                const refreshed =
-                    this.geminiFileRefreshService && attachmentFetcher
-                        ? await this.geminiFileRefreshService.refreshHistory(
-                              messages,
-                              attachmentFetcher,
-                              this.paidApiKey.id,
-                          )
-                        : messages;
+                // TODO: make a mandatory dependency until there's a way to make this work in inline mode
+                // with pre-existing gemini file URLs in history
+                const refreshed = this.geminiFileRefreshService
+                    ? await this.geminiFileRefreshService.refreshHistory(messages, this.paidApiKey.id)
+                    : messages;
 
                 const filtered =
                     this.attachmentMode === "inline"
@@ -648,7 +483,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 this.triageProvider.get.bind(this.triageProvider),
                 this.triageProvider.getFallback.bind(this.triageProvider),
                 messages,
-                config.context?.attachmentFetcher,
                 this.modelTimeouts?.triageTimeoutMs,
             );
 
@@ -854,7 +688,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 this.generalProvider.get.bind(this.generalProvider),
                 this.generalProvider.getFallback.bind(this.generalProvider),
                 invokeMessages,
-                config.context?.attachmentFetcher,
                 this.modelTimeouts?.generalTimeoutMs,
             );
             return { messages: [response], isRetryable: usedFallback };
@@ -878,7 +711,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 this.searchProvider.get(this.paidApiKey),
                 this.searchProvider.getFallback(this.paidApiKey),
                 messages,
-                config.context?.attachmentFetcher,
                 this.modelTimeouts?.searchTimeoutMs,
             );
             return { messages: [response], isRetryable: usedFallback };

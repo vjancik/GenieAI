@@ -79,13 +79,15 @@ async function insertTestApiKey(apiKey = "test-api-key", isPaid = false): Promis
 }
 
 /** Builds a minimal GeminiFile input payload (without id). Requires the messages row UUID as messageId. */
-function filePayload(messageId: string, overrides: Partial<Omit<GeminiFile, "id">> = {}): Omit<GeminiFile, "id"> {
+function filePayload(
+    messageId: string,
+    overrides: Partial<Omit<GeminiFile, "id" | "discordMessageId" | "discordChannelId">> = {},
+): Omit<GeminiFile, "id" | "discordMessageId" | "discordChannelId"> {
     return {
         originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/test-file",
         discordAttachmentId: "att-001",
         discordFilename: "photo.png",
         messageId,
-        discordMessageId: "test-msg-001",
         ...overrides,
     };
 }
@@ -102,8 +104,10 @@ function uploadPayload(overrides: Partial<Omit<GeminiFileUpload, "id">> = {}): O
     };
 }
 
-/** Inserts a gemini_files row directly and returns the full row including DB-assigned id. */
-async function insertTestFile(payload: Omit<GeminiFile, "id">): Promise<GeminiFile> {
+/** Inserts a gemini_files row directly and returns the DB row (id + stored columns only). */
+async function insertTestFile(
+    payload: Omit<GeminiFile, "id" | "discordMessageId" | "discordChannelId">,
+): Promise<{ id: string; originalGeminiUrl: string }> {
     const [row] = await db.insert(geminiFiles).values(payload).returning();
     if (!row) throw new Error("Failed to insert test gemini file");
     return row;

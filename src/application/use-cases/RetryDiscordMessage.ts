@@ -3,7 +3,6 @@ import * as Sentry from "@sentry/bun";
 import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
 import type { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { IAgentOrchestrator } from "../ports/IAgentOrchestrator.ts";
-import type { IDiscordAttachmentFetcher } from "../ports/IDiscordAttachmentFetcher.ts";
 import type { OnStatusUpdate } from "../types/AgentStatus.ts";
 import type { Logger } from "../types/Logger.ts";
 
@@ -35,7 +34,6 @@ export class RetryDiscordMessageUseCase {
      * @param params.guildId - Discord guild snowflake, or `"@me"` for DMs
      * @param params.intent - The message intent (re-derived by the caller from the original Discord message)
      * @param params.onStatusUpdate - Optional callback for live status updates
-     * @param params.attachmentFetcher - Optional Discord attachment fetcher for Gemini file refresh
      */
     async execute(params: {
         humanDiscordMessageId: string;
@@ -43,7 +41,6 @@ export class RetryDiscordMessageUseCase {
         guildId: string;
         intent: MessageIntent;
         onStatusUpdate?: OnStatusUpdate;
-        attachmentFetcher?: IDiscordAttachmentFetcher;
     }): Promise<{
         response: string;
         newMessages: BaseMessage[];
@@ -124,7 +121,6 @@ export class RetryDiscordMessageUseCase {
                         humanMsg,
                         params.intent,
                         params.onStatusUpdate,
-                        params.attachmentFetcher,
                     );
 
                     if (!content) {

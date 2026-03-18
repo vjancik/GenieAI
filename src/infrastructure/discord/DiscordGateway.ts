@@ -14,7 +14,6 @@ import { extractWebGroundingChunks, formatGroundingSources } from "../../applica
 import { splitMarkdown } from "../../application/formatters/markdownSplitter.ts";
 import { discordMessageToLlmText, llmTextToDiscordText } from "../../application/formatters/textTransformers.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
-import type { IDiscordAttachmentFetcher } from "../../application/ports/IDiscordAttachmentFetcher.ts";
 import type { AgentStatusUpdate, OnStatusUpdate } from "../../application/types/AgentStatus.ts";
 import { AgentStatusType, assertNever } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";
@@ -202,44 +201,6 @@ export class DiscordGateway {
             this.logger.error({ err }, "Discord client error");
             Sentry.captureException(err);
         });
-    }
-
-    /**
-     * Creates an {@link IDiscordAttachmentFetcher} bound to a specific Discord channel.
-     *
-     * Fetches fresh CDN URLs for Discord attachments by re-fetching the message from the
-     * API. Used by GeminiFileRefreshService in upload mode when a Gemini file URI has expired.
-     * All messages in a reply chain share the same channel, so a single fetcher per request
-     * is sufficient.
-     *
-     * @param channelId - The Discord channel snowflake to fetch messages from
-     */
-    private createAttachmentFetcher(channelId: string): IDiscordAttachmentFetcher {
-        const client = this.client;
-        return {
-            async fetchAttachment(
-                messageDiscordId: string,
-                attachmentId: string,
-            ): Promise<DiscordAttachmentInfo | null> {
-                try {
-                    const channel = await client.channels.fetch(channelId);
-                    if (!channel?.isTextBased()) return null;
-                    const msg = await channel.messages.fetch(messageDiscordId);
-                    const att = msg.attachments.get(attachmentId);
-                    if (!att) return null;
-                    return {
-                        id: att.id,
-                        url: att.url,
-                        proxyURL: att.proxyURL,
-                        name: att.name ?? "attachment",
-                        size: att.size,
-                        contentType: att.contentType,
-                    };
-                } catch {
-                    return null;
-                }
-            },
-        };
     }
 
     /**
@@ -579,8 +540,6 @@ export class DiscordGateway {
                         // --- Scenario A: human message exists, re-run orchestration only ---
                         span.setAttribute("discord.retry_scenario", "A");
 
-                        const attachmentFetcher = this.createAttachmentFetcher(originalMessage.channelId);
-
                         // Send thinking placeholder — awaited so we have the message before
                         // the first status update can arrive.
                         let thinkingMessagePromise = originalMessage.reply({
@@ -614,7 +573,6 @@ export class DiscordGateway {
                                 guildId,
                                 intent,
                                 onStatusUpdate,
-                                attachmentFetcher,
                             });
 
                         await this.sendBotReply({
@@ -851,8 +809,6 @@ export class DiscordGateway {
                         allowedMentions: { repliedUser: false },
                     });
 
-                    const attachmentFetcher = this.createAttachmentFetcher(message.channelId);
-
                     const onStatusUpdate: OnStatusUpdate = (update) => {
                         // Await the thinking message promise so we have the message ID before
                         // scheduling an edit. The promise resolves on the first call and is
@@ -895,7 +851,6 @@ export class DiscordGateway {
                             attachments,
                             intent,
                             onStatusUpdate,
-                            attachmentFetcher,
                         });
 
                     await this.sendBotReply({

@@ -184,7 +184,6 @@ describe("PgGeminiApiKeyRepository.deactivateNotIn", () => {
                 discordAttachmentId: "att-deactivate",
                 discordFilename: "test.png",
                 messageId: msgRow.id,
-                discordMessageId: "msg-deactivate-test",
             })
             .returning();
         if (!fileRow) throw new Error("Failed to insert test gemini file");

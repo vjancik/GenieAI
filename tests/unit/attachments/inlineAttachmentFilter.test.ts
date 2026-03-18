@@ -4,7 +4,7 @@ import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import {
     filterHistoryForInlineSize,
     getInlineAttachmentBytes,
-} from "../../../src/infrastructure/llm/inlineAttachmentFilter.ts";
+} from "../../../src/infrastructure/llm/utils/inlineAttachmentFilter.ts";
 
 /** Builds a HumanMessage with one text block and the given attachment blocks. */
 function humanWithAttachments(

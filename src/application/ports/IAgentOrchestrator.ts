@@ -2,7 +2,6 @@ import type { BaseMessage, HumanMessage } from "@langchain/core/messages";
 import type { DiscordMessage } from "../../domain/message/Message.ts";
 import type { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { OnStatusUpdate } from "../types/AgentStatus.ts";
-import type { IDiscordAttachmentFetcher } from "./IDiscordAttachmentFetcher.ts";
 
 /**
  * Port for the LLM orchestration layer.
@@ -35,6 +34,5 @@ export interface IAgentOrchestrator {
         userMessage: HumanMessage,
         intent: MessageIntent,
         onStatusUpdate?: OnStatusUpdate,
-        attachmentFetcher?: IDiscordAttachmentFetcher,
     ): Promise<{ content: string; newMessages: BaseMessage[]; isRetryable: boolean }>;
 }

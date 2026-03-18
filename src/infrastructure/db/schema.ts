@@ -144,16 +144,12 @@ export const geminiFiles = pgTable("gemini_files", {
     /**
      * UUID primary key of the messages row that originally created this upload.
      * FK → messages(id); ON DELETE CASCADE removes file records when the originating message is deleted.
+     * `discordMessageId` and `discordChannelId` are NOT stored here — they are joined from
+     * the messages row at query time to avoid duplication.
      */
     messageId: uuid("message_id")
         .notNull()
         .references(() => messages.id, { onDelete: "cascade" }),
-    /**
-     * Discord message snowflake of the message that originally uploaded this file.
-     * Kept as a plain column (no FK) for re-fetching the attachment from the Discord CDN
-     * via {@link IDiscordAttachmentFetcher} — Discord snowflakes are not stored as PKs in our schema.
-     */
-    discordMessageId: text("discord_message_id").notNull(),
 });
 
 /**

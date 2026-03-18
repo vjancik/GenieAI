@@ -76,13 +76,8 @@ async function insertTestApiKey(apiKey = "trigger-test-key"): Promise<string> {
 /**
  * Inserts a gemini_files row and returns its UUID.
  * `messageId` must be the UUID PK of an existing messages row.
- * `discordMessageId` is kept for Discord CDN re-fetching.
  */
-async function insertTestFile(
-    originalGeminiUrl: string,
-    messageId: string,
-    discordMessageId = "trigger-test-msg",
-): Promise<string> {
+async function insertTestFile(originalGeminiUrl: string, messageId: string): Promise<string> {
     const [row] = await db
         .insert(geminiFiles)
         .values({
@@ -90,7 +85,6 @@ async function insertTestFile(
             discordAttachmentId: `att-${originalGeminiUrl.slice(-4)}`,
             discordFilename: "test.png",
             messageId,
-            discordMessageId,
         })
         .returning();
     if (!row) throw new Error("Failed to insert test gemini file");
@@ -108,12 +102,10 @@ describe("gemini_file_uploads_stale_cleanup trigger", () => {
         const staleFileId = await insertTestFile(
             "https://generativelanguage.googleapis.com/v1beta/files/stale-file",
             msg.id,
-            msg.discordMessageId,
         );
         const freshFileId = await insertTestFile(
             "https://generativelanguage.googleapis.com/v1beta/files/fresh-file",
             msg.id,
-            msg.discordMessageId,
         );
 
         // Step 1: Insert stale row (49h ago).
@@ -156,12 +148,10 @@ describe("gemini_file_uploads_stale_cleanup trigger", () => {
         const recentFileId = await insertTestFile(
             "https://generativelanguage.googleapis.com/v1beta/files/recent-file",
             msg.id,
-            msg.discordMessageId,
         );
         const freshFileId = await insertTestFile(
             "https://generativelanguage.googleapis.com/v1beta/files/another-fresh-file",
             msg.id,
-            msg.discordMessageId,
         );
 
         // Insert a "recent" row uploaded 47h ago — within the 48h window, so NOT stale
@@ -200,17 +190,14 @@ describe("gemini_file_uploads_stale_cleanup trigger", () => {
         const staleFile1Id = await insertTestFile(
             "https://generativelanguage.googleapis.com/v1beta/files/stale-multi-1",
             msg.id,
-            msg.discordMessageId,
         );
         const staleFile2Id = await insertTestFile(
             "https://generativelanguage.googleapis.com/v1beta/files/stale-multi-2",
             msg.id,
-            msg.discordMessageId,
         );
         const freshFileId = await insertTestFile(
             "https://generativelanguage.googleapis.com/v1beta/files/fresh-multi",
             msg.id,
-            msg.discordMessageId,
         );
 
         const staleTime = new Date(Date.now() - 49 * 60 * 60 * 1000);

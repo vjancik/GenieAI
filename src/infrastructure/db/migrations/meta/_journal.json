@@ -15,6 +15,13 @@
             "when": 1773612096822,
             "tag": "0001_stale_cleanup_trigger",
             "breakpoints": true
+        },
+        {
+            "idx": 2,
+            "version": "7",
+            "when": 1773843767351,
+            "tag": "0002_lethal_gauntlet",
+            "breakpoints": true
         }
     ]
 }
