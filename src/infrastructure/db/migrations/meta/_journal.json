@@ -1,27 +1,34 @@
 {
-    "version": "7",
-    "dialect": "postgresql",
-    "entries": [
-        {
-            "idx": 0,
-            "version": "7",
-            "when": 1773612057189,
-            "tag": "0000_robust_the_liberteens",
-            "breakpoints": true
-        },
-        {
-            "idx": 1,
-            "version": "7",
-            "when": 1773612096822,
-            "tag": "0001_stale_cleanup_trigger",
-            "breakpoints": true
-        },
-        {
-            "idx": 2,
-            "version": "7",
-            "when": 1773843767351,
-            "tag": "0002_lethal_gauntlet",
-            "breakpoints": true
-        }
-    ]
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1773612057189,
+      "tag": "0000_robust_the_liberteens",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1773612096822,
+      "tag": "0001_stale_cleanup_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1773843767351,
+      "tag": "0002_lethal_gauntlet",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1773873437155,
+      "tag": "0003_high_toxin",
+      "breakpoints": true
+    }
+  ]
 }

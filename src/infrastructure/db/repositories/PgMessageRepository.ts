@@ -83,8 +83,10 @@ function buildInsertMessageStmt(db: Db) {
             channelId: sql.placeholder("channelId"),
             guildId: sql.placeholder("guildId"),
             role: sql.placeholder("role"),
+            discordAuthorId: sql.placeholder("discordAuthorId"),
             langchainMessages: sql.placeholder("langchainMessages"),
             retriesLeft: sql.placeholder("retriesLeft"),
+            usedFallback: sql.placeholder("usedFallback"),
         })
         .returning({ id: messages.id })
         .prepare("message_insert");
@@ -137,8 +139,10 @@ export class PgMessageRepository implements IMessageRepository {
                         channelId: msg.channelId,
                         guildId: msg.guildId,
                         role: msg.role,
+                        discordAuthorId: msg.discordAuthorId,
                         langchainMessages: msg.langchainMessages,
                         retriesLeft: msg.retriesLeft,
+                        usedFallback: msg.usedFallback,
                     });
 
                     if (!result) {
@@ -167,8 +171,10 @@ export class PgMessageRepository implements IMessageRepository {
         repliesToDiscordId: string;
         channelId: string;
         guildId: string;
+        discordAuthorId: string;
         newMessages: BaseMessage[];
         retriesLeft?: number | null;
+        usedFallback?: boolean | null;
     }): Promise<{ id: string }> {
         const saved = await this.save({
             discordMessageId: params.discordMessageId,
@@ -176,11 +182,13 @@ export class PgMessageRepository implements IMessageRepository {
             channelId: params.channelId,
             guildId: params.guildId,
             role: "assistant",
+            discordAuthorId: params.discordAuthorId,
             // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
             // which is incompatible with our DB schema's Record<string, unknown>. Double cast
             // through unknown bridges the gap — the serialized shape IS a plain JSON object.
             langchainMessages: params.newMessages.map((m) => m.toJSON() as unknown as Record<string, unknown>),
             retriesLeft: params.retriesLeft ?? null,
+            usedFallback: params.usedFallback ?? null,
         });
 
         this.logger.debug(
@@ -237,12 +245,14 @@ export class PgMessageRepository implements IMessageRepository {
                         channelId: result.channelId,
                         guildId: result.guildId,
                         role: result.role,
+                        discordAuthorId: result.discordAuthorId,
                         // TYPE COERCION: the parsed value's shape matches DiscordMessage["langchainMessages"]
                         // by construction (it was stored from BaseMessage.toJSON()), but TS cannot verify it.
                         langchainMessages: (typeof result.langchainMessages === "string"
                             ? JSON.parse(result.langchainMessages)
                             : result.langchainMessages) as DiscordMessage["langchainMessages"],
                         retriesLeft: result.retriesLeft ?? null,
+                        usedFallback: result.usedFallback ?? null,
                         createdAt: result.createdAt,
                     };
                 } catch (err) {
@@ -287,6 +297,7 @@ export class PgMessageRepository implements IMessageRepository {
                         channelId: result.channelId,
                         guildId: result.guildId,
                         role: result.role,
+                        discordAuthorId: result.discordAuthorId,
                         // langchain_messages is a JSON column; Bun's SQL driver may return it as either a
                         // pre-parsed JS value or a raw JSON string — handle both cases defensively.
                         // TYPE COERCION: the parsed value's shape matches DiscordMessage["langchainMessages"]
@@ -295,6 +306,7 @@ export class PgMessageRepository implements IMessageRepository {
                             ? JSON.parse(result.langchainMessages)
                             : result.langchainMessages) as DiscordMessage["langchainMessages"],
                         retriesLeft: result.retriesLeft ?? null,
+                        usedFallback: result.usedFallback ?? null,
                         createdAt: result.createdAt,
                     };
                 } catch (err) {
@@ -341,8 +353,10 @@ export class PgMessageRepository implements IMessageRepository {
                                 channelId: m.channelId,
                                 guildId: m.guildId,
                                 role: m.role,
+                                discordAuthorId: m.discordAuthorId,
                                 langchainMessages: m.langchainMessages,
                                 retriesLeft: m.retriesLeft,
+                                usedFallback: m.usedFallback,
                             })),
                         )
                         .onConflictDoUpdate({
@@ -437,6 +451,7 @@ export class PgMessageRepository implements IMessageRepository {
                         channelId: row.channel_id as string,
                         guildId: row.guild_id as string,
                         role: row.role as DiscordMessage["role"],
+                        discordAuthorId: row.discord_author_id as string,
                         // langchain_messages is a JSON column; Bun's SQL driver may return it as either a
                         // pre-parsed JS value or a raw JSON string — handle both cases defensively.
                         // TYPE COERCION: the parsed value's shape matches DiscordMessage["langchainMessages"]
@@ -445,6 +460,7 @@ export class PgMessageRepository implements IMessageRepository {
                             ? JSON.parse(row.langchain_messages)
                             : row.langchain_messages) as DiscordMessage["langchainMessages"],
                         retriesLeft: (row.retries_left as number | null) ?? null,
+                        usedFallback: (row.used_fallback as boolean | null) ?? null,
                         createdAt: row.created_at as Date,
                     }));
                 } catch (err) {
