@@ -420,7 +420,7 @@ export class PgMessageRepository implements IMessageRepository {
                               AND m.channel_id = mc.channel_id
                               AND m.discord_message_id = mc.replies_to_discord_id
                         )
-                        SELECT * FROM message_chain ORDER BY created_at ASC LIMIT ${rowLimit}
+                        SELECT * FROM message_chain ORDER BY created_at DESC LIMIT ${rowLimit}
                     `);
 
                     span.setAttribute("db.result_count", rows.length);
@@ -429,7 +429,8 @@ export class PgMessageRepository implements IMessageRepository {
 
                     // TYPE COERCION: Drizzle's db.execute() returns Record<string, unknown>[] for raw SQL —
                     // column types cannot be inferred statically, so each field is asserted from the known schema.
-                    return rows.map((row) => ({
+                    // Rows arrive newest-first (DESC); reverse to restore chronological (ASC) order.
+                    return rows.reverse().map((row) => ({
                         id: row.id as string,
                         discordMessageId: row.discord_message_id as string,
                         repliesToDiscordId: (row.replies_to_discord_id as string | null) ?? null,
