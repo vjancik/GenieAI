@@ -230,22 +230,6 @@ export class DiscordGateway {
 
     private registerEventHandlers(): void {
         this.client.on(Events.MessageCreate, (message) => {
-            if (this.shutdownPending) {
-                void message
-                    .reply("*A restart is pending, try again later.*")
-                    .then((reply) =>
-                        this.messageRepo.saveAssistantMessage({
-                            discordMessageId: reply.id,
-                            repliesToDiscordId: message.id,
-                            channelId: reply.channelId,
-                            guildId: reply.guildId ?? DM_GUILD_TOKEN,
-                            newMessages: [],
-                            retriesLeft: null,
-                        }),
-                    )
-                    .catch(() => {});
-                return;
-            }
             this.trackHandler(this.handleMessageCreate(message));
         });
 
@@ -834,6 +818,19 @@ export class DiscordGateway {
 
         // Only respond to explicit @mentions or recognized command prefixes
         if (intent === MessageIntent.UNKNOWN && !isExplicitMention(message, botUserId)) return;
+
+        if (this.shutdownPending) {
+            const reply = await message.reply("*A restart is pending, try again later.*");
+            await this.messageRepo.saveAssistantMessage({
+                discordMessageId: reply.id,
+                repliesToDiscordId: message.id,
+                channelId: reply.channelId,
+                guildId: reply.guildId ?? DM_GUILD_TOKEN,
+                newMessages: [],
+                retriesLeft: null,
+            });
+            return;
+        }
 
         const rateLimit = this.rateLimiter.check(message.author.id);
         if (!rateLimit.allowed) {
