@@ -63,6 +63,7 @@ async function insertTestMessage(discordMessageId = "test-msg-001"): Promise<{ i
             channelId: "ch-test",
             guildId: "@me",
             role: "human",
+            discordAuthorId: "user-test",
             // TYPE COERCION: empty array satisfies the column type for test isolation;
             // actual LangChain message content is irrelevant to these DB tests.
             langchainMessages: [] as unknown as Record<string, unknown>[],

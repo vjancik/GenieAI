@@ -104,6 +104,8 @@ export class HandleDiscordMessageUseCase {
         referencedMessageId: string | null;
         channelId: string;
         guildId: string;
+        /** Discord snowflake of the user who sent this message. Persisted for Retry button authorship checks. */
+        discordAuthorId: string;
         userContent: string;
         attachments: DiscordAttachmentInfo[];
         intent: MessageIntent;
@@ -206,11 +208,13 @@ export class HandleDiscordMessageUseCase {
                         channelId: params.channelId,
                         guildId: params.guildId,
                         role: "human",
+                        discordAuthorId: params.discordAuthorId,
                         // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
                         // which is incompatible with our DB schema's Record<string, unknown>. Double cast
                         // through unknown bridges the gap — the serialized shape IS a plain JSON object.
                         langchainMessages: [msg.toJSON() as unknown as Record<string, unknown>],
                         retriesLeft: null,
+                        usedFallback: null,
                     });
 
                     await this.persistPendingGeminiRecords(pendingRecords, savedUserMsg.id);
@@ -339,11 +343,13 @@ export class HandleDiscordMessageUseCase {
                             channelId: snapshot.channelId,
                             guildId: snapshot.guildId,
                             role: snapshot.isOwnBot ? "assistant" : ("human" as const),
+                            discordAuthorId: snapshot.authorId,
                             // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
                             // which is incompatible with our DB schema's Record<string, unknown>. Double cast
                             // through unknown bridges the gap — the serialized shape IS a plain JSON object.
                             langchainMessages: [msg.toJSON() as unknown as Record<string, unknown>],
                             retriesLeft: null,
+                            usedFallback: null,
                         })),
                     );
 

@@ -173,8 +173,8 @@ export class PgMessageRepository implements IMessageRepository {
         guildId: string;
         discordAuthorId: string;
         newMessages: BaseMessage[];
-        retriesLeft?: number | null;
-        usedFallback?: boolean | null;
+        retriesLeft: number | null;
+        usedFallback: boolean;
     }): Promise<{ id: string }> {
         const saved = await this.save({
             discordMessageId: params.discordMessageId,
@@ -187,8 +187,8 @@ export class PgMessageRepository implements IMessageRepository {
             // which is incompatible with our DB schema's Record<string, unknown>. Double cast
             // through unknown bridges the gap — the serialized shape IS a plain JSON object.
             langchainMessages: params.newMessages.map((m) => m.toJSON() as unknown as Record<string, unknown>),
-            retriesLeft: params.retriesLeft ?? null,
-            usedFallback: params.usedFallback ?? null,
+            retriesLeft: params.retriesLeft,
+            usedFallback: params.usedFallback,
         });
 
         this.logger.debug(

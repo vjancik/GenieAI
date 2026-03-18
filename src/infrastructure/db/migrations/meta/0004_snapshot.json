@@ -1,6 +1,6 @@
 {
-    "id": "e4831ef2-2cda-4224-b2c7-4abc8ba46ba3",
-    "prevId": "9cda04ff-83fa-43be-8a82-e7f84e7996fb",
+    "id": "00e5868c-8a63-4625-b445-ae82e5327db0",
+    "prevId": "e4831ef2-2cda-4224-b2c7-4abc8ba46ba3",
     "version": "7",
     "dialect": "postgresql",
     "tables": {
@@ -368,8 +368,7 @@
                     "name": "discord_author_id",
                     "type": "text",
                     "primaryKey": false,
-                    "notNull": true,
-                    "default": "''"
+                    "notNull": true
                 },
                 "langchain_messages": {
                     "name": "langchain_messages",

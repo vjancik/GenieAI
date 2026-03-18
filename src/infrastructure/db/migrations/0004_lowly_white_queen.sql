@@ -1,0 +1,1 @@
+ALTER TABLE "messages" ALTER COLUMN "discord_author_id" DROP DEFAULT;

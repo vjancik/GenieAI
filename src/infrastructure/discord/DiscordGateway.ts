@@ -429,8 +429,10 @@ export class DiscordGateway {
                 repliesToDiscordId: replyTarget.id,
                 channelId: botReply.channelId,
                 guildId: botReply.guildId ?? DM_GUILD_TOKEN,
+                discordAuthorId: this.client.user?.id ?? "",
                 newMessages,
                 retriesLeft: isRetryable ? effectiveRetriesLeft : null,
+                usedFallback: usedFallback ?? false,
             });
             // messageId = UUID of the saved messages row for this page; firstPageMessageId = same for page 1
             await this.messagePageRepo.save({
@@ -469,8 +471,10 @@ export class DiscordGateway {
                 repliesToDiscordId: replyTarget.id,
                 channelId: botReply.channelId,
                 guildId: botReply.guildId ?? DM_GUILD_TOKEN,
+                discordAuthorId: this.client.user?.id ?? "",
                 newMessages,
                 retriesLeft: isRetryable ? effectiveRetriesLeft : null,
+                usedFallback: usedFallback ?? false,
             });
 
             // Sources didn't fit in the main message — send as a separate follow-up reply
@@ -503,8 +507,10 @@ export class DiscordGateway {
                 repliesToDiscordId: replyTo.id,
                 channelId: sourcesReply.channelId,
                 guildId: sourcesReply.guildId ?? DM_GUILD_TOKEN,
+                discordAuthorId: this.client.user?.id ?? "",
                 newMessages: [],
                 retriesLeft: null,
+                usedFallback: false,
             });
         } catch (err) {
             this.logger.warn({ err }, "Failed to send grounding sources reply");
@@ -525,80 +531,97 @@ export class DiscordGateway {
      * In both scenarios, the old failed bot reply is deleted before sending a new response.
      */
     private async handleRetryButton(interaction: ButtonInteraction): Promise<void> {
-        if (this.interactionLock.isLocked(interaction.message.id, interaction.customId)) {
-            await interaction.deferUpdate();
+        const originalMessageId = interaction.message.reference?.messageId;
+        const channel = interaction.channel;
+
+        let originalMessage: Message | undefined;
+        if (originalMessageId && channel?.isTextBased()) {
+            try {
+                originalMessage = await channel.messages.fetch(originalMessageId);
+            } catch {
+                // fetch failed — original message was deleted
+            }
+        }
+
+        if (!originalMessage) {
+            // Original message is gone or unreachable — remove the button and notify ephemerally
+            await Promise.allSettled([
+                interaction.reply({
+                    content: "Original message is missing, retry is no longer possible.",
+                    ephemeral: true,
+                }),
+                interaction.message.edit({
+                    components: withoutButton(interaction.message, RETRY_BUTTON_ID),
+                }),
+            ]);
             return;
         }
-        this.interactionLock.setLocked(interaction.message.id, interaction.customId);
-        try {
-            const originalMessageId = interaction.message.reference?.messageId;
-            const channel = interaction.channel;
 
-            let originalMessage: Message | undefined;
-            if (originalMessageId && channel?.isTextBased()) {
-                try {
-                    originalMessage = await channel.messages.fetch(originalMessageId);
-                } catch {
-                    // fetch failed — original message was deleted
-                }
-            }
+        // Acknowledge the interaction immediately so Discord doesn't show "interaction failed"
+        await interaction.deferUpdate();
 
-            if (!originalMessage) {
-                // Original message is gone or unreachable — remove the button and notify ephemerally
-                await Promise.allSettled([
-                    interaction.reply({
-                        content: "Original message is missing, retry is no longer possible.",
-                        ephemeral: true,
-                    }),
-                    interaction.message.edit({
-                        components: withoutButton(interaction.message, RETRY_BUTTON_ID),
-                    }),
-                ]);
-                return;
-            }
-
-            // Acknowledge the interaction immediately so Discord doesn't show "interaction failed"
-            await interaction.deferUpdate();
-
-            // Delete the old failed bot reply from Discord before sending a fresh response.
-            // DB deletion happens later inside the span, after retriesLeft has been read.
-            await interaction.message.delete().catch((err) => {
-                this.logger.warn({ err }, "Failed to delete old failed bot reply from Discord on retry");
-            });
-
-            await Sentry.startSpan(
-                {
-                    name: "Handle Retry button",
-                    op: "discord.interaction.retry",
-                    attributes: {
-                        "discord.original_message_id": originalMessage.id,
-                        "discord.channel_id": originalMessage.channelId,
-                    },
+        await Sentry.startSpan(
+            {
+                name: "Handle Retry button",
+                op: "discord.interaction.retry",
+                attributes: {
+                    "discord.original_message_id": originalMessage.id,
+                    "discord.channel_id": originalMessage.channelId,
                 },
-                async (span) => {
-                    const intent = parseMessageIntent(originalMessage.content);
+            },
+            async (span) => {
+                const intent = parseMessageIntent(originalMessage.content);
 
-                    // Fetch the tail of the reply chain starting from the failed bot reply.
-                    // With limit=2 we get at most [humanMsg, botReply] in chronological order.
-                    // The bot reply record (last) carries retriesLeft; the human record (second-to-last)
-                    // confirms whether the human message was saved (Scenario A vs B).
-                    const guildId = originalMessage.guildId ?? DM_GUILD_TOKEN;
-                    const chain = await this.messageRepo.fetchChain({
-                        startDiscordMessageId: interaction.message.id,
-                        channelId: originalMessage.channelId,
-                        guildId,
-                        limit: 2,
+                // Fetch the tail of the reply chain starting from the failed bot reply.
+                // With limit=2 we get at most [humanMsg, botReply] in chronological order.
+                // The bot reply record (last) carries retriesLeft and usedFallback; the human
+                // record (second-to-last) confirms whether the human message was saved
+                // (Scenario A vs B) and provides the original author ID for the eligibility check.
+                const guildId = originalMessage.guildId ?? DM_GUILD_TOKEN;
+                const chain = await this.messageRepo.fetchChain({
+                    startDiscordMessageId: interaction.message.id,
+                    channelId: originalMessage.channelId,
+                    guildId,
+                    limit: 2,
+                });
+
+                // chain is ordered chronologically: [humanMsg, botReply] when both exist,
+                // or [botReply] / [] when the human message was never saved (Scenario B).
+                const botRecord = chain.at(-1);
+                const humanRecord = chain.length >= 2 ? chain.at(-2) : undefined;
+
+                // Decrement retriesLeft from the stored bot reply row — each click consumes one retry.
+                // null if not set or record missing (sendBotReply will fall back to DEFAULT_RETRIES_LEFT).
+                const storedRetriesLeft = botRecord?.retriesLeft ?? null;
+                const retriesLeft = storedRetriesLeft !== null ? storedRetriesLeft - 1 : null;
+
+                // Gate: when the response was a successful fallback (usedFallback=true, isFailure=false),
+                // only the original prompter may retry — it's their call whether the response is
+                // unsatisfactory. Failed responses are open to anyone since retrying benefits all.
+                if (botRecord?.usedFallback && humanRecord?.role === "human") {
+                    const originalAuthorId = humanRecord.discordAuthorId;
+                    if (interaction.user.id !== originalAuthorId) {
+                        await interaction.followUp({
+                            content: "*This message was generated for someone else and can only be retried by them.*",
+                            ephemeral: true,
+                        });
+                        return;
+                    }
+                }
+
+                // Acquire the per-button lock only for eligible interactions, so ineligible users
+                // (checked above) don't block the real prompter from clicking.
+                if (this.interactionLock.isLocked(interaction.message.id, interaction.customId)) {
+                    span.setAttribute("discord.retry_skipped", "locked");
+                    return;
+                }
+                this.interactionLock.setLocked(interaction.message.id, interaction.customId);
+                try {
+                    // Delete the old failed bot reply from Discord before sending a fresh response.
+                    // DB deletion happens later after retriesLeft has been read.
+                    await interaction.message.delete().catch((err) => {
+                        this.logger.warn({ err }, "Failed to delete old failed bot reply from Discord on retry");
                     });
-
-                    // chain is ordered chronologically: [humanMsg, botReply] when both exist,
-                    // or [botReply] / [] when the human message was never saved (Scenario B).
-                    const botRecord = chain.at(-1);
-                    const humanRecord = chain.length >= 2 ? chain.at(-2) : undefined;
-
-                    // Decrement retriesLeft from the stored bot reply row — each click consumes one retry.
-                    // null if not set or record missing (sendBotReply will fall back to DEFAULT_RETRIES_LEFT).
-                    const storedRetriesLeft = botRecord?.retriesLeft ?? null;
-                    const retriesLeft = storedRetriesLeft !== null ? storedRetriesLeft - 1 : null;
 
                     // Delete the old failed bot reply from DB now that retriesLeft has been read.
                     // Fire-and-forget — failure here doesn't block the retry from proceeding.
@@ -625,7 +648,6 @@ export class DiscordGateway {
 
                         // Wrap thinkingMessage in a promise so onStatusUpdate can share the
                         // same lazy-resolution pattern used in handleMessageCreate.
-
                         const onStatusUpdate: OnStatusUpdate = (update) => {
                             thinkingMessagePromise = thinkingMessagePromise.then((msg) => {
                                 this.statusUpdater.scheduleUpdate(
@@ -667,11 +689,11 @@ export class DiscordGateway {
                         span.setAttribute("discord.retry_scenario", "B");
                         await this.handleMessageCreate(originalMessage, retriesLeft);
                     }
-                },
-            );
-        } finally {
-            this.interactionLock.clearLock(interaction.message.id, interaction.customId);
-        }
+                } finally {
+                    this.interactionLock.clearLock(interaction.message.id, interaction.customId);
+                }
+            },
+        );
     }
 
     /**
@@ -768,8 +790,10 @@ export class DiscordGateway {
                         repliesToDiscordId: currentBotMessageId,
                         channelId: newBotMessage.channelId,
                         guildId: newBotMessage.guildId ?? DM_GUILD_TOKEN,
+                        discordAuthorId: this.client.user?.id ?? "",
                         newMessages: [],
                         retriesLeft: null,
+                        usedFallback: false,
                     });
 
                     await Promise.allSettled([
@@ -842,8 +866,10 @@ export class DiscordGateway {
                 repliesToDiscordId: message.id,
                 channelId: reply.channelId,
                 guildId: reply.guildId ?? DM_GUILD_TOKEN,
+                discordAuthorId: this.client.user?.id ?? "",
                 newMessages: [],
                 retriesLeft: null,
+                usedFallback: false,
             });
             return;
         }
@@ -858,8 +884,10 @@ export class DiscordGateway {
                 repliesToDiscordId: message.id,
                 channelId: rateLimitReply.channelId,
                 guildId: rateLimitReply.guildId ?? DM_GUILD_TOKEN,
+                discordAuthorId: this.client.user?.id ?? "",
                 newMessages: [],
                 retriesLeft: null,
+                usedFallback: false,
             });
             return;
         }
@@ -950,6 +978,7 @@ export class DiscordGateway {
                             referencedMessageId: message.reference?.messageId ?? null,
                             channelId: message.channelId,
                             guildId: message.guildId ?? DM_GUILD_TOKEN,
+                            discordAuthorId: message.author.id,
                             userContent: llmContent,
                             attachments,
                             intent,
@@ -988,8 +1017,10 @@ export class DiscordGateway {
                                 repliesToDiscordId: message.id,
                                 channelId: errorReply.channelId,
                                 guildId: errorReply.guildId ?? DM_GUILD_TOKEN,
+                                discordAuthorId: this.client.user?.id ?? "",
                                 newMessages: [],
                                 retriesLeft: null,
+                                usedFallback: false,
                             });
                         })
                         .catch((editErr) => {

@@ -31,7 +31,7 @@ export const messages = pgTable(
          * Discord user snowflake of the message author.
          * All messages carry this — bot messages use the bot's own Discord user ID.
          */
-        discordAuthorId: text("discord_author_id").notNull().default(""),
+        discordAuthorId: text("discord_author_id").notNull(),
         /** Serialized LangChain BaseMessage objects stored as JSON array */
         langchainMessages: json("langchain_messages").notNull().$type<DiscordMessage["langchainMessages"]>(),
         /**

@@ -50,8 +50,10 @@ export interface IMessageRepository {
         repliesToDiscordId: string;
         channelId: string;
         guildId: string;
+        discordAuthorId: string;
         newMessages: BaseMessage[];
-        retriesLeft?: number | null;
+        retriesLeft: number | null;
+        usedFallback: boolean;
     }): Promise<{ id: string }>;
 
     /**

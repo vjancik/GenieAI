@@ -172,6 +172,7 @@ describe("PgGeminiApiKeyRepository.deactivateNotIn", () => {
                 channelId: "ch-test",
                 guildId: "@me",
                 role: "human",
+                discordAuthorId: "user-test",
                 // TYPE COERCION: empty array satisfies the column type for test isolation
                 langchainMessages: [] as unknown as Record<string, unknown>[],
             })

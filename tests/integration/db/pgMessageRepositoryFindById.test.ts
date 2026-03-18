@@ -43,8 +43,10 @@ function messagePayload(
         channelId: "ch-001",
         guildId: "guild-001",
         role: "human",
+        discordAuthorId: "user-123",
         langchainMessages: [new HumanMessage("Hello!").toJSON() as unknown as Record<string, unknown>],
         retriesLeft: null,
+        usedFallback: null,
         ...overrides,
     };
 }

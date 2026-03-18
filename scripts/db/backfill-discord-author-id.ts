@@ -19,8 +19,8 @@
 import { Client, Events, GatewayIntentBits } from "discord.js";
 import { eq } from "drizzle-orm";
 import pino from "pino";
-import { createDb } from "../src/infrastructure/db/connection.ts";
-import { messages } from "../src/infrastructure/db/schema.ts";
+import { createDb } from "../../src/infrastructure/db/connection.ts";
+import { messages } from "../../src/infrastructure/db/schema.ts";
 
 const logger = pino({ level: "info", transport: { target: "pino-pretty" } });
 
@@ -116,4 +116,4 @@ client.destroy();
 
 logger.info({ filled, notFound, total: emptyRows.length }, "Backfill complete");
 
-await (db as unknown as { $client: { end?: () => Promise<void> } }).$client?.end?.();
+await db.$client.end();
