@@ -179,7 +179,7 @@ const retryDiscordMessageUseCase = new RetryDiscordMessageUseCase(
 
 // Discord gateway
 const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
-new DiscordGateway(
+const discordGateway = new DiscordGateway(
     discordClient,
     handleDiscordMessageUseCase,
     logger.child({ module: "discord" }),
@@ -193,6 +193,7 @@ new DiscordGateway(
 // Graceful shutdown
 async function shutdown() {
     logger.info("Shutting down...");
+    await discordGateway.gracefulShutdown();
     discordClient.stop();
     await Sentry.flush(2000);
     process.exit(0);

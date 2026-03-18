@@ -8,7 +8,7 @@ module.exports = {
             max_restarts: 10,
             exp_backoff_restart_delay: 100,
             min_uptime: "15s",
-            shutdown_with_message: true, // Windows only flag: process.platform === "win32"?
+            kill_timeout: 120000,
             env: {
                 LOG_LEVEL: "debug",
                 NODE_ENV: "production",

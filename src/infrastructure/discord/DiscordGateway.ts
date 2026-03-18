@@ -159,23 +159,16 @@ export function extractUserContent(message: Message, botUserId: string, botRoleI
  * any co-located Retry button intact (and vice versa).
  * Passing the result to `message.edit({ components })` replaces the row in-place.
  */
-function withoutButton(
-    message: Message,
-    removeId: string,
-): (TopLevelComponent | ActionRowBuilder<ButtonBuilder>)[] {
+function withoutButton(message: Message, removeId: string): (TopLevelComponent | ActionRowBuilder<ButtonBuilder>)[] {
     const result: (TopLevelComponent | ActionRowBuilder<ButtonBuilder>)[] = [];
     for (const row of message.components) {
         if (row.type !== ComponentType.ActionRow) {
             result.push(row);
             continue;
         }
-        const remaining = row.components.filter(
-            (c) => c.type !== ComponentType.Button || c.customId !== removeId,
-        );
+        const remaining = row.components.filter((c) => c.type !== ComponentType.Button || c.customId !== removeId);
         if (remaining.length === 0) continue;
-        result.push(
-            new ActionRowBuilder({ components: remaining })
-        );
+        result.push(new ActionRowBuilder({ components: remaining }));
     }
     return result;
 }
@@ -214,6 +207,13 @@ export class DiscordGateway {
         { windowMs: 60_000, limit: 10 },
     ]);
 
+    /** Set to true on graceful shutdown — prevents new handlers from starting. */
+    private shutdownPending = false;
+    /** Monotonically-increasing key for tracking in-flight handler promises. */
+    private handlerCounter = 0;
+    /** Tracks all currently in-flight async handlers; entries are removed on completion. */
+    private readonly inFlightHandlers = new Map<number, Promise<void>>();
+
     constructor(
         discordClient: DiscordClient,
         private readonly handleDiscordMessageUseCase: HandleDiscordMessageUseCase,
@@ -230,16 +230,37 @@ export class DiscordGateway {
 
     private registerEventHandlers(): void {
         this.client.on(Events.MessageCreate, (message) => {
-            // Fire-and-forget; errors are caught and logged internally
-            void this.handleMessageCreate(message);
+            if (this.shutdownPending) {
+                void message
+                    .reply("*A restart is pending, try again later.*")
+                    .then((reply) =>
+                        this.messageRepo.saveAssistantMessage({
+                            discordMessageId: reply.id,
+                            repliesToDiscordId: message.id,
+                            channelId: reply.channelId,
+                            guildId: reply.guildId ?? DM_GUILD_TOKEN,
+                            newMessages: [],
+                            retriesLeft: null,
+                        }),
+                    )
+                    .catch(() => {});
+                return;
+            }
+            this.trackHandler(this.handleMessageCreate(message));
         });
 
         this.client.on(Events.InteractionCreate, (interaction) => {
             if (!interaction.isButton()) return;
+            if (this.shutdownPending) {
+                void interaction
+                    .reply({ content: "*A restart is pending, try again later.*", ephemeral: true })
+                    .catch(() => {});
+                return;
+            }
             if (interaction.customId === RETRY_BUTTON_ID) {
-                void this.handleRetryButton(interaction);
+                this.trackHandler(this.handleRetryButton(interaction));
             } else if (interaction.customId === NEXT_PAGE_BUTTON_ID) {
-                void this.handleNextPageButton(interaction);
+                this.trackHandler(this.handleNextPageButton(interaction));
             }
         });
 
@@ -247,6 +268,29 @@ export class DiscordGateway {
             this.logger.error({ err }, "Discord client error");
             Sentry.captureException(err);
         });
+    }
+
+    /**
+     * Registers an in-flight handler promise so {@link gracefulShutdown} can await it.
+     * The entry is removed from the map once the promise settles.
+     */
+    private trackHandler(promise: Promise<void>): void {
+        const id = this.handlerCounter++;
+        this.inFlightHandlers.set(
+            id,
+            promise.finally(() => this.inFlightHandlers.delete(id)),
+        );
+    }
+
+    /**
+     * Prevents new handlers from starting and waits for all in-flight handlers to settle.
+     * Called during graceful shutdown before the process exits.
+     */
+    async gracefulShutdown(): Promise<void> {
+        this.shutdownPending = true;
+        this.logger.info({ inFlight: this.inFlightHandlers.size }, "Waiting for in-flight handlers to complete");
+        await Promise.allSettled(this.inFlightHandlers.values());
+        this.logger.info("All in-flight handlers completed");
     }
 
     /**
