@@ -40,7 +40,10 @@ describe("FetchAttachmentDownloader", () => {
 
         const result = await downloader.download(testAttachment);
 
-        expect(globalFetch).toHaveBeenCalledWith(testAttachment.url);
+        expect(globalFetch).toHaveBeenCalledWith(
+            testAttachment.url,
+            expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        );
         expect(result.name).toBe("image.jpg");
         expect(result.mimeType).toBe("image/jpeg");
         // base64 of [1,2,3,4]
@@ -135,6 +138,42 @@ describe("FetchAttachmentDownloader", () => {
             .mockResolvedValueOnce(makeResponse(new Uint8Array(), null, false, 500));
 
         await expect(downloader.download(testAttachment)).rejects.toThrow(AppError);
+
+        globalFetch.mockRestore();
+    });
+
+    test("aborts fetch when response timeout is exceeded", async () => {
+        // Use a 1 ms timeout so the signal is aborted before the fetch resolves
+        const timedOutDownloader = new FetchAttachmentDownloader(testLogger, 1);
+
+        const globalFetch = spyOn(globalThis, "fetch").mockImplementation(
+            // TYPE COERCION: mock only needs to satisfy the Promise<Response> return; full fetch signature not needed
+            ((_url: string, init?: RequestInit) =>
+                new Promise((_resolve, reject) => {
+                    // Propagate abort from the signal so it rejects as expected
+                    init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+                })) as typeof fetch,
+        );
+
+        await expect(timedOutDownloader.download(testAttachment)).rejects.toThrow(AppError);
+
+        globalFetch.mockRestore();
+    });
+
+    test("does not abort body download after response is received", async () => {
+        // Use a 1 ms timeout — body download must still succeed after timeout fires
+        const timedOutDownloader = new FetchAttachmentDownloader(testLogger, 1);
+        const data = new Uint8Array([7, 8, 9]);
+
+        const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(makeResponse(data, "image/png"));
+
+        // Wait long enough for the 1 ms timeout to fire before the response resolves
+        await new Promise((r) => setTimeout(r, 5));
+
+        const result = await timedOutDownloader.download(testAttachment);
+
+        expect(result.mimeType).toBe("image/png");
+        expect(result.data).toBe(Buffer.from(data).toString("base64"));
 
         globalFetch.mockRestore();
     });
