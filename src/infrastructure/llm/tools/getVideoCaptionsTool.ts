@@ -196,8 +196,9 @@ export async function createGetVideoCaptionsTool(logger: Logger, proxy?: string,
                     return result.value;
                 }
                 const err = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
-                logger.warn({ url: unique[i], error: err.message }, "Failed to fetch video captions");
-                return { url: unique[i] ?? "unknown", error: err.message };
+                const url = unique[i] ?? "unknown";
+                logger.warn({ url, error: err.message }, "Failed to fetch video captions");
+                return { url, error: `Failed to retrieve captions for ${url}` };
             });
         },
         {

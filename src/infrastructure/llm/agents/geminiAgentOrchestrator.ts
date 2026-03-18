@@ -241,7 +241,7 @@ type GraphState = typeof OrchestratorStateSchema.State;
  */
 export const OrchestratorNode = {
     TRIAGE: "triage",
-    EXECUTE_TOOL: "executeTool",
+    FETCH_CONTENT: "fetchContent",
     GENERAL: "general",
     SEARCH: "search",
 } as const;
@@ -592,9 +592,11 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     private buildGraph() {
         let graph = new StateGraph(OrchestratorStateSchema, OrchestratorContextSchema)
             .addNode(OrchestratorNode.TRIAGE, this.triageNode.bind(this), {
-                ends: [OrchestratorNode.EXECUTE_TOOL, OrchestratorNode.GENERAL, OrchestratorNode.SEARCH],
+                ends: [OrchestratorNode.FETCH_CONTENT, OrchestratorNode.GENERAL, OrchestratorNode.SEARCH],
             })
-            .addNode(OrchestratorNode.EXECUTE_TOOL, this.executeToolNode.bind(this))
+            .addNode(OrchestratorNode.FETCH_CONTENT, this.fetchContentNode.bind(this), {
+                ends: [OrchestratorNode.GENERAL, END],
+            })
             .addNode(OrchestratorNode.GENERAL, this.generalNode.bind(this))
             .addNode(OrchestratorNode.SEARCH, this.searchNode.bind(this))
             .addConditionalEdges(START, this.routeFromIntent.bind(this), [
@@ -602,7 +604,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 OrchestratorNode.GENERAL,
                 OrchestratorNode.SEARCH,
             ])
-            .addEdge(OrchestratorNode.EXECUTE_TOOL, OrchestratorNode.GENERAL)
             .addEdge(OrchestratorNode.GENERAL, END)
             .addEdge(OrchestratorNode.SEARCH, END);
 
@@ -675,9 +676,9 @@ export class AgentOrchestrator implements IAgentOrchestrator {
 
             if (contentCalls.length > 0) {
                 // Real tool calls: add triage AIMessage to state so each ToolMessage
-                // created in executeToolNode has a valid tool_call_id in history.
+                // created in fetchContentNode has a valid tool_call_id in history.
                 return new Command({
-                    goto: OrchestratorNode.EXECUTE_TOOL,
+                    goto: OrchestratorNode.FETCH_CONTENT,
                     update: { messages: [triageResponse] },
                 });
             }
@@ -711,11 +712,16 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * Execute tool node: runs all content tool calls placed in state by triageNode.
      *
      * Reads the last message (the triage AIMessage with tool_calls) and invokes each
-     * content tool in parallel, producing one ToolMessage per call. Always routes to
-     * the general node via static edge.
+     * content tool in parallel, producing one ToolMessage per call.
+     *
+     * If every result entry across all tool calls is an error, the node short-circuits
+     * to END by appending both the ToolMessages (required to satisfy LangChain's
+     * tool_call_id pairing invariant) and a programmatic AIMessage so the general
+     * node is never invoked with content-less context, preventing hallucination.
+     * Otherwise routes to the general node.
      */
-    private async executeToolNode(state: GraphState, config: NodeConfig): Promise<{ messages: BaseMessage[] }> {
-        return Sentry.startSpan({ name: "Execute tool node", op: "agent.node.execute_tool" }, async (span) => {
+    private async fetchContentNode(state: GraphState, config: NodeConfig): Promise<Command> {
+        return Sentry.startSpan({ name: "Fetch content node", op: "agent.node.fetch_content" }, async (span) => {
             config.context?.onStatusUpdate?.({
                 type: AgentStatusType.FETCHING_CONTENT,
             });
@@ -725,7 +731,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             if (toolCalls.length === 0) {
                 throw new AppError(
                     "ORCHESTRATOR_MISSING_TOOL_CALL",
-                    "executeToolNode reached without a tool call in state",
+                    "fetchContentNode reached without a tool call in state",
                 );
             }
 
@@ -733,26 +739,73 @@ export class AgentOrchestrator implements IAgentOrchestrator {
 
             // TYPE COERCION: LangChain tool_calls args are typed as Record<string, unknown>;
             // the Zod schema on each tool guarantees the urls: string[] shape at parse time.
-            const toolMessages = await Promise.all(
+            const toolResults = await Promise.all(
                 toolCalls.map(async (toolCall) => {
-                    const toolResult =
+                    const result =
                         toolCall.name === "get_website"
                             ? await this.getWebsiteTool.invoke(toolCall.args as { urls: string[] })
                             : await this.getVideoCaptionsTool.invoke(toolCall.args as { urls: string[] });
-
-                    // TODO: distinguish between partial / total tool failures and don't forward to general if the tool call is a complete failure as Gemini loves to make stuff up when it has no context. Either respond to user directly or insert a message with instructions that the model should report to the user the retrieval failed.
-
-                    return new ToolMessage({
-                        // TYPE COERCION: ToolMessage.content types don't include object arrays,
-                        // but LangChain and Gemini both accept structured JSON arrays at runtime.
-                        content: toolResult as unknown as [] | string,
-                        name: toolCall.name,
-                        tool_call_id: toolCall.id ?? "",
-                    });
+                    return { toolCall, result };
                 }),
             );
 
-            return { messages: toolMessages };
+            const toolMessages = toolResults.map(
+                ({ toolCall, result }) =>
+                    new ToolMessage({
+                        // TYPE COERCION: ToolMessage.content types don't include object arrays,
+                        // but LangChain and Gemini both accept structured JSON arrays at runtime.
+                        content: result as unknown as [] | string,
+                        name: toolCall.name,
+                        tool_call_id: toolCall.id ?? "",
+                    }),
+            );
+
+            // Check if every entry across all tool calls is an error — if so, respond
+            // programmatically rather than forwarding empty context to the general node.
+            // TYPE COERCION: result union (WebsiteResultEntry[] | VideoCaptionsResultEntry[]) causes
+            // TS to resolve the wrong every() overload; casting to a shared structural type is safe here.
+            const allFailed = toolResults
+                .flatMap(({ result }) => result as { error?: string }[])
+                .every((entry) => "error" in entry);
+
+            if (allFailed) {
+                const calledTools = new Set(toolResults.map(({ toolCall }) => toolCall.name));
+                const hasWebsite = calledTools.has("get_website");
+                const hasVideo = calledTools.has("get_video_captions");
+
+                // TYPE COERCION: tool_calls args typed as Record<string, unknown>; Zod schema guarantees urls: string[]
+                const urlCount = (toolName: string) =>
+                    toolResults
+                        .filter(({ toolCall }) => toolCall.name === toolName)
+                        .reduce((n, { toolCall }) => n + (toolCall.args as { urls: string[] }).urls.length, 0);
+
+                const videoCount = hasVideo ? urlCount("get_video_captions") : 0;
+                const websiteCount = hasWebsite ? urlCount("get_website") : 0;
+                const videoWord = videoCount > 1 ? "videos" : "video";
+                const websiteWord = websiteCount > 1 ? "websites" : "website";
+
+                let errorContent: string;
+                if (hasWebsite && hasVideo) {
+                    errorContent = `I am sorry, I failed to retrieve both the captions for the ${videoWord} and the contents of the ${websiteWord} from the links you provided.`;
+                } else if (hasVideo) {
+                    errorContent = `I am sorry, I failed to retrieve video captions for the ${videoWord} you linked.`;
+                } else {
+                    errorContent = `I am sorry, I failed to retrieve the contents of the ${websiteWord} you linked.`;
+                }
+
+                span.setAttribute("agent.fetch_content.all_failed", true);
+                this.logger.warn({ calledTools: [...calledTools] }, "All tool calls failed, short-circuiting to END");
+
+                return new Command({
+                    goto: END,
+                    update: { messages: [...toolMessages, new AIMessage(errorContent)], isRetryable: true },
+                });
+            }
+
+            return new Command({
+                goto: OrchestratorNode.GENERAL,
+                update: { messages: toolMessages },
+            });
         });
     }
 

@@ -87,7 +87,10 @@ describe("createGetWebsiteTool", () => {
         const result = await tool.invoke({ urls: ["https://bad.example.com"] });
 
         expect(result).toHaveLength(1);
-        expect(result[0]).toMatchObject({ url: "https://bad.example.com", error: expect.stringContaining("404") });
+        expect(result[0]).toMatchObject({
+            url: "https://bad.example.com",
+            error: expect.stringContaining("https://bad.example.com"),
+        });
     });
 
     test("rejects non-text content types with an error entry", async () => {
@@ -100,7 +103,10 @@ describe("createGetWebsiteTool", () => {
         const result = await tool.invoke({ urls: ["https://example.com/image.png"] });
 
         expect(result).toHaveLength(1);
-        expect(result[0]).toMatchObject({ error: expect.stringContaining("image/png") });
+        expect(result[0]).toMatchObject({
+            url: "https://example.com/image.png",
+            error: expect.stringContaining("https://example.com/image.png"),
+        });
     });
 
     test("returns plain text as-is for non-HTML text content types", async () => {

@@ -11,6 +11,7 @@ import {
     AgentOrchestrator,
     dbMessagesToLangchain,
 } from "../../../src/infrastructure/llm/agents/geminiAgentOrchestrator.ts";
+import type { WebsiteResultEntry } from "../../../src/infrastructure/llm/tools/getWebsiteTool.ts";
 
 const testLogger = pino({ level: "silent" });
 
@@ -21,8 +22,9 @@ function makeModel(response: string) {
     };
 }
 
-/** Helper to create a mock tool that returns a given result */
-function makeTool(result: string) {
+/** Helper to create a mock tool that returns a successful single-entry result */
+function makeTool(pageContents: string, url = "https://example.com"): { invoke: ReturnType<typeof mock> } {
+    const result: WebsiteResultEntry[] = [{ url, pageContents }];
     return {
         invoke: mock(async (_args: unknown) => result),
     };

@@ -344,7 +344,7 @@ export class DiscordGateway {
         // retriesLeft=0 means all retries exhausted — suppress the button.
         const effectiveRetriesLeft = retriesLeft ?? DEFAULT_RETRIES_LEFT;
         const retryRow =
-            isFailure && isRetryable && effectiveRetriesLeft > 0
+            isRetryable && effectiveRetriesLeft > 0
                 ? new ActionRowBuilder<ButtonBuilder>().addComponents(
                       new ButtonBuilder()
                           .setCustomId(RETRY_BUTTON_ID)
