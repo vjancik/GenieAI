@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { load } from "@langchain/core/load";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
+import { sleep } from "bun";
 import { sql } from "drizzle-orm";
 import pino from "pino";
 import { DatabaseError } from "../../../src/domain/errors/AppError.ts";
@@ -132,7 +133,7 @@ describe("PgMessageRepository.fetchChain", () => {
         );
 
         // Brief delay to ensure distinct createdAt timestamps
-        await Bun.sleep(10);
+        await sleep(10);
 
         await repo.save(
             messagePayload({
@@ -181,7 +182,7 @@ describe("PgMessageRepository.fetchChain", () => {
                 role: "human",
             }),
         );
-        await Bun.sleep(5);
+        await sleep(5);
         await repo.save(
             messagePayload({
                 discordMessageId: id2,
@@ -189,7 +190,7 @@ describe("PgMessageRepository.fetchChain", () => {
                 role: "assistant",
             }),
         );
-        await Bun.sleep(5);
+        await sleep(5);
         await repo.save(
             messagePayload({
                 discordMessageId: id3,
@@ -197,7 +198,7 @@ describe("PgMessageRepository.fetchChain", () => {
                 role: "human",
             }),
         );
-        await Bun.sleep(5);
+        await sleep(5);
         await repo.save(
             messagePayload({
                 discordMessageId: id4,
@@ -222,14 +223,14 @@ describe("PgMessageRepository.fetchChain", () => {
                 repliesToDiscordId: null,
             }),
         );
-        await Bun.sleep(5);
+        await sleep(5);
         await repo.save(
             messagePayload({
                 discordMessageId: "sub-B",
                 repliesToDiscordId: "sub-A",
             }),
         );
-        await Bun.sleep(5);
+        await sleep(5);
         await repo.save(
             messagePayload({
                 discordMessageId: "sub-C",

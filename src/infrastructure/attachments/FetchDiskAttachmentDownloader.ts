@@ -1,6 +1,7 @@
 import { mkdir, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import * as Sentry from "@sentry/bun";
+import { file as bunFile } from "bun";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { IDiskAttachmentDownloader } from "../../application/ports/IDiskAttachmentDownloader.ts";
 import type { Logger } from "../../application/types/Logger.ts";
@@ -93,7 +94,7 @@ export class FetchDiskAttachmentDownloader implements IDiskAttachmentDownloader 
         this.logger.debug({ mimeType, contentLength, destPath }, "Response received, writing to disk");
 
         // Write the response body to disk by reading chunks from the stream
-        const file = Bun.file(destPath);
+        const file = bunFile(destPath);
         const writer = file.writer();
         try {
             const reader = response.body.getReader();

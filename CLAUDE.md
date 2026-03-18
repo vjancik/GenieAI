@@ -24,6 +24,7 @@
 - use type guards and type narrowing over type coercions where possible
 - prefer bind(this / instanceObj), when passing methods as callbacks, to lambda wrappers
 - do not export anything out of a file that isn't needed somewhere else. Not-exported should be the default.
+- Bun runtime functions should use explicit imports from "bun"
 
 # Database Rules
 - prefer prepared statements for repeated queries

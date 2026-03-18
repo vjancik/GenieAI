@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { BaseMessage, MessageContent } from "@langchain/core/messages";
 import { HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
+import { randomUUIDv7 } from "bun";
 import type { GeminiFile } from "../../domain/message/GeminiFile.ts";
 import type { GeminiFileUpload } from "../../domain/message/GeminiFileUpload.ts";
 import type { AppConfig } from "../config/AppConfig.ts";
@@ -217,14 +218,14 @@ export class GeminiFileRefreshService {
                     return null;
                 }
 
-                const tempPath = join(TEMP_DIR, `${Bun.randomUUIDv7()}-${file.discordFilename}`);
+                const tempPath = join(TEMP_DIR, `${randomUUIDv7()}-${file.discordFilename}`);
                 try {
                     // Stream attachment to disk
                     const mimeType = await this.diskDownloader.downloadToFile(attachment, tempPath);
 
                     // Upload to Gemini using the uploader for this specific API key
                     const uploader = this.uploaderRegistry.get(apiKeyId);
-                    const newFileName = `files/${Bun.randomUUIDv7()}`;
+                    const newFileName = `files/${randomUUIDv7()}`;
                     const uploaded = await uploader.upload(tempPath, newFileName, mimeType, file.discordFilename);
 
                     // Delete the old Gemini file best-effort (may already be expired).

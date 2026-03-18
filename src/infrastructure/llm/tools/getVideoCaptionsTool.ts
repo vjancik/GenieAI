@@ -1,4 +1,5 @@
 import { tool } from "@langchain/core/tools";
+import { spawn } from "bun";
 import { z } from "zod/v4";
 import type { Logger } from "../../../application/types/Logger.ts";
 import { ToolError } from "../../../domain/errors/AppError.ts";
@@ -144,7 +145,7 @@ export function selectCaptionUrls(info: YtDlpInfoJson): string[] {
  * Throws a ToolError if the command is not found or exits non-zero.
  */
 async function verifyYtDlp(): Promise<void> {
-    const proc = Bun.spawn(["yt-dlp", "--version"], { stderr: "pipe", stdout: "pipe" });
+    const proc = spawn(["yt-dlp", "--version"], { stderr: "pipe", stdout: "pipe" });
     await proc.exited;
     if (proc.exitCode !== 0) {
         throw new ToolError("yt-dlp is not available in PATH and is required for video captions");
@@ -233,7 +234,7 @@ async function fetchYtDlpMetadata(url: string, logger: Logger, proxy?: string, p
     const proxyArgs = proxy ? ["--proxy", proxy] : [];
     const runMeta = async () => {
         // --flat-playlist: fail fast on playlists rather than fetching all entries
-        const proc = Bun.spawn(["yt-dlp", "--no-warnings", "--flat-playlist", ...proxyArgs, "-J", url], {
+        const proc = spawn(["yt-dlp", "--no-warnings", "--flat-playlist", ...proxyArgs, "-J", url], {
             stderr: "pipe",
             stdout: "pipe",
         });
@@ -261,7 +262,7 @@ async function fetchYtDlpMetadata(url: string, logger: Logger, proxy?: string, p
             }
         } else {
             // Non-bot failure: try updating yt-dlp, then retry once if updated
-            const updateProc = Bun.spawn(["yt-dlp", "--update"], { stderr: "pipe", stdout: "pipe" });
+            const updateProc = spawn(["yt-dlp", "--update"], { stderr: "pipe", stdout: "pipe" });
             const [updateOutput] = await Promise.all([new Response(updateProc.stdout).text(), updateProc.exited]);
 
             if (!updateOutput.includes("yt-dlp is up to date")) {

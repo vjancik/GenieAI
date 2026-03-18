@@ -2,6 +2,7 @@ import { unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { AIMessage, type BaseMessage, HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
+import { randomUUIDv7 } from "bun";
 import type { GeminiFile } from "../../domain/message/GeminiFile.ts";
 import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
 import type { DiscordMessage } from "../../domain/message/Message.ts";
@@ -541,11 +542,11 @@ export class HandleDiscordMessageUseCase {
                 const pendingRecords: PendingGeminiRecord[] = [];
 
                 for (const attachment of attachments) {
-                    const tempPath = join(UPLOAD_TEMP_DIR, `${Bun.randomUUIDv7()}-${attachment.name}`);
+                    const tempPath = join(UPLOAD_TEMP_DIR, `${randomUUIDv7()}-${attachment.name}`);
                     try {
                         const mimeType = await this.diskDownloader.downloadToFile(attachment, tempPath);
 
-                        const fileName = `files/${Bun.randomUUIDv7()}`;
+                        const fileName = `files/${randomUUIDv7()}`;
                         const uploaded = await this.geminiFileUploader.upload(
                             tempPath,
                             fileName,
