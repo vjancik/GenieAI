@@ -36,6 +36,12 @@ const GLOBAL_MODEL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes per invoke
  * Storing intent in state (rather than context) makes it available to the
  * conditional edge function and any node without threading it through context.
  */
+/** Boolean OR reducer: once true, never reverts to false across node updates. */
+const booleanOrReducer = {
+    inputSchema: z.boolean(),
+    reducer: (current: boolean, next: boolean) => current || next,
+};
+
 const OrchestratorStateSchema = new StateSchema({
     messages: MessagesValue,
     intent: z.custom<MessageIntent>(),
@@ -47,10 +53,17 @@ const OrchestratorStateSchema = new StateSchema({
      * Uses a boolean OR reducer so that once any node sets this to true it is never
      * overwritten back to false by a subsequent node's replace-semantics update.
      */
-    isRetryable: new ReducedValue(z.boolean().default(false), {
-        inputSchema: z.boolean(),
-        reducer: (current, next) => current || next,
-    }),
+    isRetryable: new ReducedValue(z.boolean().default(false), booleanOrReducer),
+    /**
+     * Set to true by generalNode or searchNode when a fallback model was used to generate
+     * the response. Distinct from isRetryable: isRetryable covers all degraded-response cases
+     * (e.g. all tools failed), while usedFallback specifically means the primary model was
+     * unavailable and a lower-quality fallback was substituted.
+     *
+     * Used to display an informational footer on the bot reply so the user understands
+     * why response quality may be degraded, independent of retry eligibility.
+     */
+    usedFallback: new ReducedValue(z.boolean().default(false), booleanOrReducer),
 });
 
 /**
@@ -198,7 +211,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         userMessage: HumanMessage,
         intent: MessageIntent,
         onStatusUpdate?: OnStatusUpdate,
-    ): Promise<{ content: string; newMessages: BaseMessage[]; isRetryable: boolean }> {
+    ): Promise<{ content: string; newMessages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean }> {
         return Sentry.startSpan(
             {
                 name: "Orchestrate agent pipeline",
@@ -221,7 +234,12 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 }
 
                 span.setAttribute("agent.new_messages_count", newMessages.length);
-                return { content: extractContent(lastMessage), newMessages, isRetryable: result.isRetryable };
+                return {
+                    content: extractContent(lastMessage),
+                    newMessages,
+                    isRetryable: result.isRetryable,
+                    usedFallback: result.usedFallback,
+                };
             },
         );
     }
@@ -653,7 +671,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     private async generalNode(
         state: GraphState,
         config: NodeConfig,
-    ): Promise<{ messages: BaseMessage[]; isRetryable: boolean }> {
+    ): Promise<{ messages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean }> {
         return Sentry.startSpan({ name: "General agent node", op: "agent.node.general" }, async (span) => {
             config.context?.onStatusUpdate?.({
                 type: AgentStatusType.GENERATING,
@@ -690,7 +708,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 invokeMessages,
                 this.modelTimeouts?.generalTimeoutMs,
             );
-            return { messages: [response], isRetryable: usedFallback };
+            return { messages: [response], isRetryable: usedFallback, usedFallback };
         });
     }
 
@@ -701,7 +719,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     private async searchNode(
         state: GraphState,
         config: NodeConfig,
-    ): Promise<{ messages: BaseMessage[]; isRetryable: boolean }> {
+    ): Promise<{ messages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean }> {
         return Sentry.startSpan({ name: "Search agent node", op: "agent.node.search" }, async () => {
             config.context?.onStatusUpdate?.({
                 type: AgentStatusType.SEARCHING,
@@ -713,7 +731,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 messages,
                 this.modelTimeouts?.searchTimeoutMs,
             );
-            return { messages: [response], isRetryable: usedFallback };
+            return { messages: [response], isRetryable: usedFallback, usedFallback };
         });
     }
 }

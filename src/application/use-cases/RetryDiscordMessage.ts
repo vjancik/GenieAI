@@ -46,6 +46,7 @@ export class RetryDiscordMessageUseCase {
         newMessages: BaseMessage[];
         isFailure?: boolean;
         isRetryable?: boolean;
+        usedFallback?: boolean;
     }> {
         try {
             return await Sentry.startSpan(
@@ -116,7 +117,7 @@ export class RetryDiscordMessageUseCase {
                         "Retrying orchestration with saved chain",
                     );
 
-                    const { content, newMessages, isRetryable } = await this.orchestrator.process(
+                    const { content, newMessages, isRetryable, usedFallback } = await this.orchestrator.process(
                         history,
                         humanMsg,
                         params.intent,
@@ -136,7 +137,12 @@ export class RetryDiscordMessageUseCase {
                         };
                     }
 
-                    return { response: content, newMessages, isRetryable: isRetryable || undefined };
+                    return {
+                        response: content,
+                        newMessages,
+                        isRetryable: isRetryable || undefined,
+                        usedFallback: usedFallback || undefined,
+                    };
                 },
             );
         } catch (err) {

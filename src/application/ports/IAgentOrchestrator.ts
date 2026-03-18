@@ -34,5 +34,5 @@ export interface IAgentOrchestrator {
         userMessage: HumanMessage,
         intent: MessageIntent,
         onStatusUpdate?: OnStatusUpdate,
-    ): Promise<{ content: string; newMessages: BaseMessage[]; isRetryable: boolean }>;
+    ): Promise<{ content: string; newMessages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean }>;
 }

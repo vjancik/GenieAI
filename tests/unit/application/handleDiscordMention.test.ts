@@ -58,6 +58,7 @@ function makeOrchestrator(response = "AI response"): IAgentOrchestrator {
             content: response,
             newMessages: [mockAiResponse],
             isRetryable: false,
+            usedFallback: false,
         })),
     };
 }

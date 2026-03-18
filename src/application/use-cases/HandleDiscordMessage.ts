@@ -113,6 +113,7 @@ export class HandleDiscordMessageUseCase {
         newMessages: BaseMessage[];
         isFailure?: boolean;
         isRetryable?: boolean;
+        usedFallback?: boolean;
     }> {
         try {
             return await Sentry.startSpan(
@@ -216,7 +217,7 @@ export class HandleDiscordMessageUseCase {
 
                     // Generate the AI response; the orchestrator handles Gemini file refresh internally
                     // per key attempt, threaded via attachmentFetcher in context.
-                    const { content, newMessages, isRetryable } = await this.orchestrator.process(
+                    const { content, newMessages, isRetryable, usedFallback } = await this.orchestrator.process(
                         history,
                         msg,
                         params.intent,
@@ -236,7 +237,12 @@ export class HandleDiscordMessageUseCase {
                         };
                     }
 
-                    return { response: content, newMessages, isRetryable: isRetryable || undefined };
+                    return {
+                        response: content,
+                        newMessages,
+                        isRetryable: isRetryable || undefined,
+                        usedFallback: usedFallback || undefined,
+                    };
                 },
             );
         } catch (err) {
