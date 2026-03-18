@@ -1,5 +1,4 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { load } from "@langchain/core/load";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { sleep } from "bun";
 import { sql } from "drizzle-orm";
@@ -266,10 +265,11 @@ describe("PgMessageRepository.fetchChain", () => {
         expect(chain).toHaveLength(1);
         expect(chain[0]?.langchainMessages).toHaveLength(1);
 
-        // Verify the stored JSON reconstructs to the correct LangChain class
-        const reconstructed = await load(JSON.stringify(chain[0]?.langchainMessages[0]));
-        expect(reconstructed).toBeInstanceOf(HumanMessage);
-        expect((reconstructed as HumanMessage).content).toBe("Hello, round-trip!");
+        // Verify the stored JSON preserves the message type and content
+        const stored = chain[0]?.langchainMessages[0];
+        expect(stored?.lc).toBe(1);
+        expect(stored?.id).toContain("HumanMessage");
+        expect((stored?.kwargs as Record<string, unknown>)?.content).toBe("Hello, round-trip!");
     });
 
     test("preserves multiple langchainMessages per record (e.g. triage + tool + final)", async () => {
@@ -295,12 +295,12 @@ describe("PgMessageRepository.fetchChain", () => {
 
         expect(chain[0]?.langchainMessages).toHaveLength(2);
 
-        const first = await load(JSON.stringify(chain[0]?.langchainMessages[0]));
-        const second = await load(JSON.stringify(chain[0]?.langchainMessages[1]));
-        expect(first).toBeInstanceOf(AIMessage);
-        expect((first as AIMessage).content).toBe("triage response");
-        expect(second).toBeInstanceOf(AIMessage);
-        expect((second as AIMessage).content).toBe("final answer");
+        const first = chain[0]?.langchainMessages[0];
+        const second = chain[0]?.langchainMessages[1];
+        expect(first?.id).toContain("AIMessage");
+        expect((first?.kwargs as Record<string, unknown>)?.content).toBe("triage response");
+        expect(second?.id).toContain("AIMessage");
+        expect((second?.kwargs as Record<string, unknown>)?.content).toBe("final answer");
     });
 });
 

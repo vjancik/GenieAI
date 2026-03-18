@@ -269,13 +269,10 @@ describe("HandleDiscordMention.handle", () => {
         expect(saveCall.role).toBe("human");
         // langchainMessages should contain a serialized HumanMessage
         expect(saveCall.langchainMessages).toHaveLength(1);
-        // Verify it round-trips correctly via load()
-        const reconstructed = await (async () => {
-            const { load } = await import("@langchain/core/load");
-            return load(JSON.stringify(saveCall.langchainMessages[0]));
-        })();
-        expect(reconstructed).toBeInstanceOf(HumanMessage);
-        expect((reconstructed as HumanMessage).content).toBe("What is 2+2?");
+        // Verify the stored JSON preserves the message type and content
+        const stored = saveCall.langchainMessages[0];
+        expect(stored?.id).toContain("HumanMessage");
+        expect((stored?.kwargs as Record<string, unknown>)?.content).toBe("What is 2+2?");
     });
 
     test("returns error response when attachment total size exceeds limit", async () => {

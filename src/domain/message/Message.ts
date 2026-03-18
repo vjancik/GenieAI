@@ -29,7 +29,7 @@ export interface DiscordMessage {
     role: MessageRole;
     /**
      * Serialized LangChain BaseMessage objects (output of BaseMessage.toJSON()).
-     * Deserialized via load() from @langchain/core/load.
+     * Deserialized by passing through JSON.parse (Bun SQL driver may return pre-parsed objects).
      */
     langchainMessages: Record<string, unknown>[];
     /**
