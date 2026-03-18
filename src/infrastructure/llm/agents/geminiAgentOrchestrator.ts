@@ -616,43 +616,43 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             // programmatically rather than forwarding empty context to the general node.
             // TYPE COERCION: result union (WebsiteResultEntry[] | VideoCaptionsResultEntry[]) causes
             // TS to resolve the wrong every() overload; casting to a shared structural type is safe here.
-            const allFailed = toolResults
-                .flatMap(({ result }) => result as { error?: string }[])
-                .every((entry) => "error" in entry);
+            // const allFailed = toolResults
+            //     .flatMap(({ result }) => result as { error?: string }[])
+            //     .every((entry) => "error" in entry);
 
-            if (allFailed) {
-                const calledTools = new Set(toolResults.map(({ toolCall }) => toolCall.name));
-                const hasWebsite = calledTools.has("get_website");
-                const hasVideo = calledTools.has("get_video_captions");
+            // if (allFailed) {
+            //     const calledTools = new Set(toolResults.map(({ toolCall }) => toolCall.name));
+            //     const hasWebsite = calledTools.has("get_website");
+            //     const hasVideo = calledTools.has("get_video_captions");
 
-                // TYPE COERCION: tool_calls args typed as Record<string, unknown>; Zod schema guarantees urls: string[]
-                const urlCount = (toolName: string) =>
-                    toolResults
-                        .filter(({ toolCall }) => toolCall.name === toolName)
-                        .reduce((n, { toolCall }) => n + (toolCall.args as { urls: string[] }).urls.length, 0);
+            //     // TYPE COERCION: tool_calls args typed as Record<string, unknown>; Zod schema guarantees urls: string[]
+            //     const urlCount = (toolName: string) =>
+            //         toolResults
+            //             .filter(({ toolCall }) => toolCall.name === toolName)
+            //             .reduce((n, { toolCall }) => n + (toolCall.args as { urls: string[] }).urls.length, 0);
 
-                const videoCount = hasVideo ? urlCount("get_video_captions") : 0;
-                const websiteCount = hasWebsite ? urlCount("get_website") : 0;
-                const videoWord = videoCount > 1 ? "videos" : "video";
-                const websiteWord = websiteCount > 1 ? "websites" : "website";
+            //     const videoCount = hasVideo ? urlCount("get_video_captions") : 0;
+            //     const websiteCount = hasWebsite ? urlCount("get_website") : 0;
+            //     const videoWord = videoCount > 1 ? "videos" : "video";
+            //     const websiteWord = websiteCount > 1 ? "websites" : "website";
 
-                let errorContent: string;
-                if (hasWebsite && hasVideo) {
-                    errorContent = `I am sorry, I failed to retrieve both the captions for the ${videoWord} and the contents of the ${websiteWord} from the links you provided.`;
-                } else if (hasVideo) {
-                    errorContent = `I am sorry, I failed to retrieve video captions for the ${videoWord} you linked.`;
-                } else {
-                    errorContent = `I am sorry, I failed to retrieve the contents of the ${websiteWord} you linked.`;
-                }
+            //     let errorContent: string;
+            //     if (hasWebsite && hasVideo) {
+            //         errorContent = `I am sorry, I failed to retrieve both the captions for the ${videoWord} and the contents of the ${websiteWord} from the links you provided.`;
+            //     } else if (hasVideo) {
+            //         errorContent = `I am sorry, I failed to retrieve video captions for the ${videoWord} you linked.`;
+            //     } else {
+            //         errorContent = `I am sorry, I failed to retrieve the contents of the ${websiteWord} you linked.`;
+            //     }
 
-                span.setAttribute("agent.fetch_content.all_failed", true);
-                this.logger.warn({ calledTools: [...calledTools] }, "All tool calls failed, short-circuiting to END");
+            //     span.setAttribute("agent.fetch_content.all_failed", true);
+            //     this.logger.warn({ calledTools: [...calledTools] }, "All tool calls failed, short-circuiting to END");
 
-                return new Command({
-                    goto: END,
-                    update: { messages: [...toolMessages, new AIMessage(errorContent)], isRetryable: true },
-                });
-            }
+            //     return new Command({
+            //         goto: END,
+            //         update: { messages: [...toolMessages, new AIMessage(errorContent)], isRetryable: true },
+            //     });
+            // }
 
             return new Command({
                 goto: OrchestratorNode.GENERAL,

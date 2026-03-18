@@ -27,13 +27,12 @@ export function buildGeneralSystemPrompt(
             ? "If video captions are available, you should use timestamps to refer to specific parts of the video. The timestamps should be in the format (MM:SS) without leading zeroes.\n"
             : "") +
         (hasToolResult
-            ? "If previous tool calls all failed, you should inform the user of the failure instead of trying to satisfy the user's request without the necessary information.\n"
+            ? "If previous tool calls all failed, you should inform the user of the failure and carefully decide whether you have sufficient context and information to answer user's request regardless. If not, telling the user about the tool failure is sufficient.\n"
             : "") +
         "In the absence of a specific query or request regarding a provided link, assume the user is requesting a summary of the content." +
         SYSTEM_PROMPT_FOOTER
     );
 }
-
 /** Dependencies for constructing a general model provider instance. */
 interface GeneralModelOptions {
     /** Gemini model identifier (e.g. "gemini-2.0-flash"). */
