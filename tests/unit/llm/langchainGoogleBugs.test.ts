@@ -171,16 +171,15 @@ describe("@langchain/google — HumanMessage multimodal serialization", () => {
      * by a `url` field. Uses the v1 converter path (output_version: "v1" is
      * injected automatically by @langchain/core when contentBlocks: is used).
      *
-     * The snapshot documents which block types the v1 converter handles
-     * correctly and which it silently drops (returns null → message filtered):
+     * The snapshot documents which block types the v1 converter handles.
+     * As of @langchain/google@0.1.7 all five block types serialize correctly:
      *
-     *   "image" | "video" | "audio"  → fileData part  ✓  (handled)
-     *   "text-plain" | "file"        → null            ✗  (dropped — BUG)
+     *   "image" | "video" | "audio" | "text-plain" | "file"  → fileData part  ✓
      *
-     * If a library upgrade adds support for "text-plain" / "file", those blocks
-     * will appear in the snapshot and the assertion should be updated.
+     * Prior to 0.1.7, "text-plain" and "file" were silently dropped (returned
+     * null → message filtered out entirely).
      */
-    test("v1 contentBlocks: all LangChainBlockType values — snapshot shows which are dropped (snapshot)", async () => {
+    test("v1 contentBlocks: all LangChainBlockType values — all produce fileData parts (snapshot)", async () => {
         const model = new ChatGoogle({
             model: "gemini-2.5-flash",
             apiKey: "test-api-key-fake",
@@ -244,6 +243,18 @@ describe("@langchain/google — HumanMessage multimodal serialization", () => {
         "fileData": {
           "fileUri": "https://generativelanguage.googleapis.com/v1beta/files/aud-003",
           "mimeType": "audio/mpeg",
+        },
+      },
+      {
+        "fileData": {
+          "fileUri": "https://generativelanguage.googleapis.com/v1beta/files/txt-004",
+          "mimeType": "text/plain",
+        },
+      },
+      {
+        "fileData": {
+          "fileUri": "https://generativelanguage.googleapis.com/v1beta/files/pdf-005",
+          "mimeType": "application/pdf",
         },
       },
     ],
