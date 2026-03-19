@@ -37,3 +37,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # PostgreSQL data volumes (docker compose)
 /db/
 /db_test/
+
+# Claude local settings
+.claude

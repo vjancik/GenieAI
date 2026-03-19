@@ -7,6 +7,7 @@ services:
             POSTGRES_USER: genie
             POSTGRES_PASSWORD: genie
             POSTGRES_DB: genie
+            PGDATA: /var/lib/postgresql/data
         ports:
             - "5432:5432"
         volumes:
