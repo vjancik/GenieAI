@@ -365,7 +365,9 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * On 503 or timeout errors, if `fallbackModel` is provided, a single fallback attempt
      * is made with the same paid key and the same timeout.
      */
-    private async invokePaidModelWithMiddleware<T extends BaseMessage>(
+    
+// biome-ignore lint/correctness/noUnusedPrivateClassMembers: temporarily unused
+    private  async _invokePaidModelWithMiddleware<T extends BaseMessage>(
         model: InvokableModel<T>,
         fallbackModel: InvokableModel<T> | undefined,
         messages: BaseMessage[],
@@ -725,9 +727,9 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 type: AgentStatusType.SEARCHING,
             });
             const messages: BaseMessage[] = [new SystemMessage(SEARCH_SYSTEM_PROMPT), ...state.messages];
-            const { result: response, usedFallback } = await this.invokePaidModelWithMiddleware(
-                this.searchProvider.get(this.paidApiKey),
-                this.searchProvider.getFallback(this.paidApiKey),
+            const { result: response, usedFallback } = await this.invokeWithFreeKeyRotation(
+                this.searchProvider.get.bind(this.searchProvider),
+                this.searchProvider.getFallback.bind(this.searchProvider),
                 messages,
                 this.modelTimeouts?.searchTimeoutMs,
             );

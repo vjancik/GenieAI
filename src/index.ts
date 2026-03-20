@@ -45,7 +45,7 @@ import { createLogger } from "./infrastructure/logging/logger.ts";
 // Primary model names — used for triage, general, and search
 const TRIAGE_MODEL_NAME = "gemini-3.1-flash-lite-preview";
 const GENERAL_MODEL_NAME = "gemini-3-flash-preview";
-const SEARCH_MODEL_NAME = "gemini-3-flash-preview";
+const SEARCH_MODEL_NAME = "gemini-2.5-flash";
 
 // Fallback model names — activated on 503 or timeout (NOT on 429, which uses key rotation)
 const TRIAGE_FALLBACK_MODEL = "gemini-2.5-flash";
