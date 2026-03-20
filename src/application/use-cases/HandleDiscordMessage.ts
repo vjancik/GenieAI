@@ -7,7 +7,7 @@ import type { GeminiFile } from "../../domain/message/GeminiFile.ts";
 import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
 import type { DiscordMessage } from "../../domain/message/Message.ts";
 import type { MessageIntent } from "../../domain/message/MessageIntent.ts";
-import type { AppConfig, AttachmentMode } from "../config/AppConfig.ts";
+import { type AppConfig, AttachmentMode } from "../config/AppConfig.ts";
 import { discordMessageToLlmText } from "../formatters/textTransformers.ts";
 import type { IAgentOrchestrator } from "../ports/IAgentOrchestrator.ts";
 import type { DiscordAttachmentInfo, IAttachmentDownloader } from "../ports/IAttachmentDownloader.ts";
@@ -129,7 +129,7 @@ export class HandleDiscordMessageUseCase {
                     },
                 },
                 async (span) => {
-                    if (this.attachmentMode === "inline") {
+                    if (this.attachmentMode === AttachmentMode.inline) {
                         // Guard: reject if total attachment size exceeds the configured limit
                         if (params.attachments.length > 0) {
                             const totalBytes = params.attachments.reduce((sum, a) => sum + a.size, 0);
@@ -454,7 +454,7 @@ export class HandleDiscordMessageUseCase {
 
         onStatusUpdate?.({ type: AgentStatusType.DOWNLOADING_ATTACHMENTS });
 
-        if (this.attachmentMode === "upload") {
+        if (this.attachmentMode === AttachmentMode.upload) {
             const { contentParts, pendingRecords } = await this.buildUploadModeContentParts(content, attachments);
             return { msg: wrap(contentParts), pendingRecords };
         }

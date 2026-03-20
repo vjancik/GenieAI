@@ -8,7 +8,7 @@
  * models, and passes it directly as thinkingLevel for Gemini 3.x models.
  * Both upper- and lowercase are accepted by the library.
  */
-export const ThinkingLevelType = {
+export const ThinkingLevel = {
     THINKING_LEVEL_UNSPECIFIED: "THINKING_LEVEL_UNSPECIFIED",
     MINIMAL: "MINIMAL",
     LOW: "LOW",
@@ -16,7 +16,7 @@ export const ThinkingLevelType = {
     HIGH: "HIGH",
 } as const;
 
-export type ThinkingLevel = (typeof ThinkingLevelType)[keyof typeof ThinkingLevelType];
+export type ThinkingLevel = (typeof ThinkingLevel)[keyof typeof ThinkingLevel];
 
 /** All valid ThinkingLevel values, used for parsing and validation. */
-export const THINKING_LEVELS = Object.values(ThinkingLevelType) as readonly ThinkingLevel[];
+export const THINKING_LEVELS = Object.values(ThinkingLevel) as readonly ThinkingLevel[];

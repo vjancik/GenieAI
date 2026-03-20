@@ -208,6 +208,44 @@ unknownKey: oops
         expect(() => parseFileConfig(yaml)).not.toThrow();
     });
 
+    it("normalizes thinkingLevel to uppercase", () => {
+        const yaml = `
+agent:
+  nodes:
+    triage:
+      model: "gemini-flash-lite"
+      timeoutMs: 60000
+      thinkingLevel: "low"
+    general:
+      model: "gemini-flash"
+      timeoutMs: 120000
+    search:
+      model: "gemini-pro"
+      timeoutMs: 120000
+`;
+        const config = parseFileConfig(yaml);
+        expect(config.agent.nodes.triage.thinkingLevel).toBe("LOW");
+    });
+
+    it("normalizes uploadAttachmentMode to lowercase", () => {
+        const yaml = `
+agent:
+  uploadAttachmentMode: "UPLOAD"
+  nodes:
+    triage:
+      model: "gemini-flash-lite"
+      timeoutMs: 60000
+    general:
+      model: "gemini-flash"
+      timeoutMs: 120000
+    search:
+      model: "gemini-pro"
+      timeoutMs: 120000
+`;
+        const config = parseFileConfig(yaml);
+        expect(config.agent.uploadAttachmentMode).toBe("upload");
+    });
+
     it("does not warn for valid keys", () => {
         const { logger, warnMock } = makeLogger();
         parseFileConfig(VALID_YAML, "test.yaml", logger);

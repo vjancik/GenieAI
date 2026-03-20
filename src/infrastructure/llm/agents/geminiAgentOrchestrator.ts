@@ -3,7 +3,7 @@ import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/
 import { Command, END, MessagesValue, ReducedValue, START, StateGraph, StateSchema } from "@langchain/langgraph";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
-import type { AppConfig, AttachmentMode } from "../../../application/config/AppConfig.ts";
+import { type AppConfig, AttachmentMode } from "../../../application/config/AppConfig.ts";
 import type { IAgentOrchestrator } from "../../../application/ports/IAgentOrchestrator.ts";
 import type { IModelProvider } from "../../../application/ports/IModelProvider.ts";
 import type { IRoundRobinKeyProvider } from "../../../application/ports/IRoundRobinKeyProvider.ts";
@@ -163,7 +163,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     ) {
         // Upload mode uses the Gemini Files API, which is only supported by Gemini models.
         // Guard here using modelName to catch wiring mistakes early.
-        if (config.file.agent.uploadAttachmentMode === "upload") {
+        if (config.file.agent.uploadAttachmentMode === AttachmentMode.upload) {
             for (const [name, modelName] of [
                 ["triageProvider", triageProvider.modelName],
                 ["generalProvider", generalProvider.modelName],
@@ -293,7 +293,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                             : messages;
 
                         filtered =
-                            this.attachmentMode === "inline"
+                            this.attachmentMode === AttachmentMode.inline
                                 ? filterHistoryForInlineSize(refreshed, this.maxInlineBytes)
                                 : refreshed;
 

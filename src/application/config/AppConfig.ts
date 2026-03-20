@@ -5,7 +5,14 @@ import type { Logger } from "../types/Logger.ts";
 import { THINKING_LEVELS } from "../types/ThinkingLevel.ts";
 
 /** Controls how file attachments are included in LLM requests. */
-export type AttachmentMode = "inline" | "upload";
+export const AttachmentMode = {
+    inline: "inline",
+    upload: "upload",
+} as const;
+
+export type AttachmentMode = (typeof AttachmentMode)[keyof typeof AttachmentMode];
+
+const ATTACHMENT_MODES = Object.values(AttachmentMode) as readonly AttachmentMode[];
 
 // ---------------------------------------------------------------------------
 // Defaults
@@ -46,7 +53,7 @@ const fileConfigDefaults = {
          * - "inline": base64-encoded directly in the message (cross-provider, high memory overhead)
          * - "upload": uploaded via Gemini Files API (Gemini only, streaming to disk)
          */
-        uploadAttachmentMode: "upload",
+        uploadAttachmentMode: AttachmentMode.upload,
         /**
          * Maximum total size in MB for inline attachments per message and for the cumulative
          * inline attachment data across the entire conversation history.
@@ -72,7 +79,12 @@ const agentModelSchema = z.object({
 
 const triageModelSchema = agentModelSchema.extend({
     /** Gemini reasoning effort level for the triage model. */
-    thinkingLevel: z.enum(THINKING_LEVELS).optional().prefault("LOW"),
+    thinkingLevel: z
+        .string()
+        .transform((v) => v.toUpperCase())
+        .pipe(z.enum(THINKING_LEVELS))
+        .optional()
+        .prefault("LOW"),
 });
 
 const fileConfigSchema = z.object({
@@ -128,7 +140,9 @@ const fileConfigSchema = z.object({
         .prefault(fileConfigDefaults.geminiModels),
     agent: z.object({
         uploadAttachmentMode: z
-            .enum(["inline", "upload"])
+            .string()
+            .transform((v) => v.toLowerCase())
+            .pipe(z.enum(ATTACHMENT_MODES))
             .optional()
             .prefault(fileConfigDefaults.agent.uploadAttachmentMode),
         maxInlineAttachmentSizeMB: z
