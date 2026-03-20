@@ -26,7 +26,7 @@ const logger = pino({ level: "info", transport: { target: "pino-pretty" } });
 
 // ─── Setup ────────────────────────────────────────────────────────────────────
 
-const db = createDb();
+const db = createDb(process.env.DATABASE_URL ?? "");
 
 const token = process.env.DISCORD_TOKEN;
 if (!token) throw new Error("DISCORD_TOKEN env var is required");

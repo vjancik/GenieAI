@@ -15,7 +15,7 @@ import { messages } from "../../src/infrastructure/db/schema.ts";
 
 const logger = pino({ level: "info", transport: { target: "pino-pretty" } });
 
-const db = createDb();
+const db = createDb(process.env.DATABASE_URL ?? "");
 
 const [row] = await db
     .select({ nullCount: count() })
