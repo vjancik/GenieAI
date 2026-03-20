@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/bun";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
 import { BASE_USER_FACING_PROMPT, SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
+import { blockHighSafetySettings } from "./sharedGeminiSettings.ts";
 
 /**
  * System prompt for the search agent.
@@ -50,6 +51,7 @@ function createSearchModel(
             thinkingLevel: "HIGH" satisfies ThinkingLevel,
             includeThoughts: options.includeThoughts,
         },
+        safetySettings: blockHighSafetySettings,
         callbacks: sentryCallback,
     });
 

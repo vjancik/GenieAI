@@ -6,6 +6,7 @@ import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts"
 import { ModelProvider } from "../ModelProvider.ts";
 import type { GetVideoCaptionsTool } from "../tools/getVideoCaptionsTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
+import { blockNoneSafetySettings } from "./sharedGeminiSettings.ts";
 
 /**
  * Sentinel tool that signals routing to the search agent.
@@ -86,6 +87,7 @@ function createTriageModel(
             thinkingLevel: options.thinkingLevel,
             includeThoughts: options.includeThoughts,
         },
+        safetySettings: blockNoneSafetySettings,
         callbacks: sentryCallback,
     });
 

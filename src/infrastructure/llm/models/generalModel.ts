@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/bun";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
 import { BASE_USER_FACING_PROMPT, SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
+import { blockHighSafetySettings } from "./sharedGeminiSettings.ts";
 
 // TODO: rebuild only once a day, return cached otherwise
 /**
@@ -63,6 +64,7 @@ function createGeneralModel(
             thinkingLevel: "HIGH" satisfies ThinkingLevel,
             includeThoughts: options.includeThoughts,
         },
+        safetySettings: blockHighSafetySettings,
         callbacks: sentryCallback,
     });
 
