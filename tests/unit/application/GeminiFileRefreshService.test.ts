@@ -23,7 +23,25 @@ const TEST_API_KEY_ID = "test-key-uuid";
  * 1-hour stale threshold: staleThresholdMs = 48h - 60min = 47h.
  * A file is stale when `now - uploadedAt >= 47h`.
  */
-const testConfig = { geminiFileStaleThresholdMinutes: 60 };
+const testConfig = {
+    file: {
+        attachmentsTempDir: "/var/tmp/genie-attachments",
+        globalModelTimeoutMs: 600_000,
+        geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 60 },
+        discord: { defaultChainLimit: 100, defaultRetriesLeft: 3 },
+        geminiModels: { includeThoughts: false },
+        agent: {
+            uploadAttachmentMode: "upload" as const,
+            maxInlineAttachmentSizeMB: 100,
+            nodes: {
+                triage: { model: "gemini-test", timeoutMs: 60_000, thinkingLevel: "LOW" as const },
+                general: { model: "gemini-test", timeoutMs: 120_000 },
+                search: { model: "gemini-test", timeoutMs: 120_000 },
+            },
+        },
+        ytDlp: { retries: 1 },
+    },
+};
 
 /** Creates a GeminiFile permanent anchor for tests. */
 function makeFile(overrides: Partial<GeminiFile> = {}): GeminiFile {

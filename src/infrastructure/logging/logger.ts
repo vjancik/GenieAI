@@ -1,7 +1,12 @@
 import path from "node:path";
-import pino from "pino";
+import pino, { type LevelWithSilent } from "pino";
+import { z } from "zod/v4";
 import type { Logger } from "../../application/types/Logger.ts";
 import { withSentryLogging } from "./withSentryLogging.ts";
+
+const PINO_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const satisfies LevelWithSilent[];
+
+const logLevelSchema = z.enum(PINO_LEVELS);
 
 /**
  * Formats a Date as a filesystem-safe ISO-like timestamp string.
@@ -28,12 +33,13 @@ function formatTimestamp(date: Date): string {
  * @param fileLog  - Whether to additionally write logs to a file (default: false)
  */
 export function createLogger(logLevel: string, fileLog = false): Logger {
+    const level = logLevelSchema.parse(logLevel);
     const isProduction = process.env.NODE_ENV === "production";
 
     if (!fileLog) {
         // No file transport — original behavior.
         const logger = pino({
-            level: logLevel,
+            level,
             transport: isProduction
                 ? undefined
                 : {
@@ -54,31 +60,31 @@ export function createLogger(logLevel: string, fileLog = false): Logger {
     // pino's generic TransportTargetOptions<T>. Casting via unknown to the
     // multi-target overload is safe — pino.transport serializes options as-is.
     const logger = pino(
-        { level: logLevel },
+        { level },
         pino.transport({
             targets: isProduction
                 ? [
                       {
                           target: "pino/file",
                           options: { destination: 1 },
-                          level: logLevel,
+                          level,
                       },
                       {
                           target: "pino/file",
                           options: { destination: logFile, mkdir: true },
-                          level: logLevel,
+                          level,
                       },
                   ]
                 : [
                       {
                           target: "pino-pretty",
                           options: { colorize: true },
-                          level: logLevel,
+                          level,
                       },
                       {
                           target: "pino/file",
                           options: { destination: logFile, mkdir: true },
-                          level: logLevel,
+                          level,
                       },
                   ],
         } as unknown as pino.TransportMultiOptions),

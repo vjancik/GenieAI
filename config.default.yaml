@@ -1,0 +1,63 @@
+# Default configuration for GenieAI.
+# Copy to config.local.yaml and edit to override locally (gitignored).
+# In Docker, mount your config file and set CONFIG_PATH=/path/to/config.yaml.
+
+# Temp directory for streaming attachments to disk before Gemini upload.
+# When unset the app chooses a platform-dependant default path
+attachmentsTempDir: "/var/tmp/genie-attachments" # <optional>
+
+# Global fallback timeout for all model invocations (ms).
+# Superseded by per-model agent.nodes.*.timeoutMs when set.
+globalModelTimeoutMs: 600000 # <optional>
+
+geminiModels:
+  # Whether to include thought tokens in model responses. Useful for debugging.
+  includeThoughts: false # <optional>
+
+geminiFileApi:
+  # How long to wait between file state polls when a file is in PROCESSING state (ms).
+  pollIntervalMs: 5000    # <optional>
+  # Maximum total time to wait for a file to reach ACTIVE state before throwing (ms).
+  maxPollWaitMs: 120000   # <optional>
+  # Refresh Gemini files when less than this many minutes of their 48h TTL remains.
+  fileStaleBeforeExpiryMinutes: 15  # <optional>
+
+discord:
+  # Maximum number of messages to walk when fetching a Discord reply chain.
+  defaultChainLimit: 100  # <optional>
+  # Number of retry attempts granted to a retryable bot response.
+  defaultRetriesLeft: 3   # <optional>
+  # Discord user ID of a previous bot version treated as own-bot messages.
+# previousBotId: ""        # <optional>
+
+ytDlp:
+  # HTTP/HTTPS proxy URL passed to yt-dlp and used for caption fetches.
+# httpProxy: "http://proxy:8080"    # <optional>
+  # Number of proxy rotation retries on bot-detection or 429 responses.
+  retries: 1         # <optional>
+
+agent:
+  # How file attachments are passed to the LLM ("inline" or "upload").
+  uploadAttachmentMode: "upload"  # <optional>
+  # Maximum total size in MB for inline attachments per message and across conversation history.
+  maxInlineAttachmentSizeMB: 100  # <optional>
+
+  nodes:
+    triage:
+      model: "gemini-3.1-flash-lite-preview"  # <required>
+      fallbackModel: "gemini-2.5-flash"       # <optional>
+      # Maximum milliseconds to wait for a triage model response before aborting.
+      timeoutMs: 60000                        # <required>
+      thinkingLevel: "LOW"                    # <optional>
+
+    general:
+      model: "gemini-3-flash-preview"   # <required>
+      fallbackModel: "gemini-2.5-flash" # <optional>
+      # Maximum milliseconds to wait for a general model response before aborting.
+      timeoutMs: 120000                 # <required>
+
+    search:
+      model: "gemini-2.5-flash"         # <required>
+      fallbackModel: "gemini-2.5-flash" # <optional>
+      # Maximum milliseconds to wait for a search model response before aborting.
+      timeoutMs: 120000                 # <required>

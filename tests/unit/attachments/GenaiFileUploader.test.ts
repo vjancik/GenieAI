@@ -64,7 +64,9 @@ beforeEach(() => {
 
 describe("GenaiFileUploader.upload", () => {
     test("returns geminiFileName and geminiUrl when file is immediately ACTIVE", async () => {
-        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger);
+        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger, {
+            geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 15 },
+        });
 
         const result = await uploader.upload("/tmp/test.png", "files/test123", "image/png", "test.png");
 
@@ -75,7 +77,9 @@ describe("GenaiFileUploader.upload", () => {
     });
 
     test("calls ai.files.upload with correct parameters", async () => {
-        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger);
+        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger, {
+            geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 15 },
+        });
 
         await uploader.upload("/tmp/photo.jpg", "files/my-uuid", "image/jpeg", "photo.jpg");
 
@@ -96,7 +100,9 @@ describe("GenaiFileUploader.upload", () => {
             uri: null as unknown as string,
         }));
 
-        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger);
+        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger, {
+            geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 15 },
+        });
 
         await expect(uploader.upload("/tmp/test.png", "files/test123", "image/png", "test.png")).rejects.toBeInstanceOf(
             AppError,
@@ -110,7 +116,9 @@ describe("GenaiFileUploader.upload", () => {
             uri: null as unknown as string,
         }));
 
-        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger);
+        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger, {
+            geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 15 },
+        });
 
         await expect(uploader.upload("/tmp/test.png", "files/test123", "image/png", "test.png")).rejects.toBeInstanceOf(
             AppError,
@@ -120,7 +128,9 @@ describe("GenaiFileUploader.upload", () => {
 
 describe("GenaiFileUploader.deleteFile", () => {
     test("calls ai.files.delete with the provided file name", async () => {
-        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger);
+        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger, {
+            geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 15 },
+        });
 
         await uploader.deleteFile("files/test123");
 
@@ -132,7 +142,9 @@ describe("GenaiFileUploader.deleteFile", () => {
             throw new Error("File not found");
         });
 
-        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger);
+        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger, {
+            geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 15 },
+        });
 
         // Errors are swallowed — file may have already expired
         await expect(uploader.deleteFile("files/gone")).resolves.toBeUndefined();

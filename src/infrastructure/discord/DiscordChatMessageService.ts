@@ -1,11 +1,9 @@
 import type { Client, Message, TextBasedChannel } from "discord.js";
+import type { FileConfig } from "../../application/config/AppConfig.ts";
 import type { DiscordMessageSnapshot, IChatMessageService } from "../../application/ports/IChatMessageService.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import type { DiscordClient } from "./DiscordClient.ts";
 import { buildSnapshot } from "./messageExtractors.ts";
-
-/** Default maximum number of messages to walk when fetching a reply chain. */
-const DEFAULT_CHAIN_LIMIT = 100;
 
 /**
  * Discord-backed implementation of {@link IChatMessageService}.
@@ -21,14 +19,17 @@ const DEFAULT_CHAIN_LIMIT = 100;
 export class DiscordChatMessageService implements IChatMessageService {
     /** Saved reference to the discord.js Client, available after DiscordClient.start(). */
     private readonly client: Client;
+    private readonly defaultChainLimit: number;
 
     constructor(
         discordClient: DiscordClient,
         /** Optional Discord user ID of a previous bot version treated as own-bot messages. */
         private readonly previousBotId: string | undefined,
         private readonly logger: Logger,
+        config: Pick<FileConfig, "discord">,
     ) {
         this.client = discordClient.client;
+        this.defaultChainLimit = config.discord.defaultChainLimit;
     }
 
     async fetchChain(lookup: {
@@ -37,7 +38,7 @@ export class DiscordChatMessageService implements IChatMessageService {
         guildId: string;
         limit?: number;
     }): Promise<DiscordMessageSnapshot[]> {
-        const limit = lookup.limit ?? DEFAULT_CHAIN_LIMIT;
+        const limit = lookup.limit ?? this.defaultChainLimit;
         const chain: DiscordMessageSnapshot[] = [];
 
         const channel = await this.fetchTextChannel(lookup.channelId);

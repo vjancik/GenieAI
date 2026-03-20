@@ -55,9 +55,9 @@ interface TriageModelOptions {
     /** Fallback model name used on 503 or timeout errors. */
     fallbackModelName?: string;
     /** Gemini reasoning effort level (e.g. "MINIMAL", "MEDIUM", "HIGH"). */
-    triageThinkingLevel: ThinkingLevel;
+    thinkingLevel: ThinkingLevel;
     /** Whether to include thought tokens in the model response. */
-    includeLLMThoughts: boolean;
+    includeThoughts: boolean;
     getWebsiteTool: GetWebsiteTool;
     getVideoCaptionsTool: GetVideoCaptionsTool;
 }
@@ -83,8 +83,8 @@ function createTriageModel(
         model: modelName,
         apiKey,
         thinkingConfig: {
-            thinkingLevel: options.triageThinkingLevel,
-            includeThoughts: options.includeLLMThoughts,
+            thinkingLevel: options.thinkingLevel,
+            includeThoughts: options.includeThoughts,
         },
         callbacks: sentryCallback,
     });

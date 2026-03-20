@@ -24,7 +24,7 @@ interface SearchModelOptions {
     /** Fallback model name used on 503 or timeout errors. */
     fallbackModelName?: string;
     /** Whether to include thought tokens in the model response. */
-    includeLLMThoughts: boolean;
+    includeThoughts: boolean;
 }
 
 /**
@@ -48,7 +48,7 @@ function createSearchModel(
         apiKey,
         thinkingConfig: {
             thinkingLevel: "HIGH" satisfies ThinkingLevel,
-            includeThoughts: options.includeLLMThoughts,
+            includeThoughts: options.includeThoughts,
         },
         callbacks: sentryCallback,
     });

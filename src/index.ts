@@ -13,6 +13,7 @@
  * 6. Start Discord gateway
  */
 import * as Sentry from "@sentry/bun";
+import { ConfigProvider } from "./application/config/AppConfig.ts";
 import { GeminiApiKeySyncService } from "./application/services/GeminiApiKeySyncService.ts";
 import { GeminiFileRefreshService } from "./application/services/GeminiFileRefreshService.ts";
 import { GetNextPageUseCase } from "./application/use-cases/GetNextPage.ts";
@@ -21,7 +22,6 @@ import { RetryDiscordMessageUseCase } from "./application/use-cases/RetryDiscord
 import { FetchAttachmentDownloader } from "./infrastructure/attachments/FetchAttachmentDownloader.ts";
 import { FetchDiskAttachmentDownloader } from "./infrastructure/attachments/FetchDiskAttachmentDownloader.ts";
 import { GenaiFileUploaderRegistry } from "./infrastructure/attachments/GenaiFileUploaderRegistry.ts";
-import { config } from "./infrastructure/config/config.ts";
 import { createDb } from "./infrastructure/db/connection.ts";
 import { PgGetNextPageQuery } from "./infrastructure/db/queries/PgGetNextPageQuery.ts";
 import { PgGeminiApiKeyRepository } from "./infrastructure/db/repositories/PgGeminiApiKeyRepository.ts";
@@ -33,7 +33,7 @@ import { DiscordClient } from "./infrastructure/discord/DiscordClient.ts";
 import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
 import { DiscordMediaService } from "./infrastructure/discord/DiscordMediaService.ts";
 import { StatusMessageUpdater } from "./infrastructure/discord/StatusMessageUpdater.ts";
-import { AgentOrchestrator, type ModelTimeouts } from "./infrastructure/llm/agents/geminiAgentOrchestrator.ts";
+import { AgentOrchestrator } from "./infrastructure/llm/agents/geminiAgentOrchestrator.ts";
 import { GeneralModelProvider } from "./infrastructure/llm/models/generalModel.ts";
 import { SearchModelProvider } from "./infrastructure/llm/models/searchModel.ts";
 import { TriageModelProvider } from "./infrastructure/llm/models/triageModel.ts";
@@ -43,26 +43,14 @@ import { createGetVideoCaptionsTool } from "./infrastructure/llm/tools/getVideoC
 import { createGetWebsiteTool } from "./infrastructure/llm/tools/getWebsiteTool.ts";
 import { createLogger } from "./infrastructure/logging/logger.ts";
 
-// Primary model names — used for triage, general, and search
-const TRIAGE_MODEL_NAME = "gemini-3.1-flash-lite-preview";
-const GENERAL_MODEL_NAME = "gemini-3-flash-preview";
-const SEARCH_MODEL_NAME = "gemini-2.5-flash";
-
-// Fallback model names — activated on 503 or timeout (NOT on 429, which uses key rotation)
-const TRIAGE_FALLBACK_MODEL = "gemini-2.5-flash";
-const GENERAL_FALLBACK_MODEL = "gemini-2.5-flash";
-const SEARCH_FALLBACK_MODEL = "gemini-2.5-flash";
-
-// Per-model timeouts in ms — passed as RunnableConfig.timeout, which LangChain converts to
-// an AbortSignal that propagates all the way to the HTTP layer, cancelling the request.
-const MODEL_TIMEOUTS: ModelTimeouts = {
-    triageTimeoutMs: 60_000,
-    generalTimeoutMs: 120_000,
-    searchTimeoutMs: 120_000,
-};
-
-const logger = createLogger(config.logLevel, config.fileLog);
+const logger = createLogger(
+    process.env.LOG_LEVEL?.toLowerCase() ?? "info",
+    process.env.FILE_LOG?.toLowerCase() === "true",
+);
 logger.info("Starting GenieAI bot...");
+
+const configProvider = new ConfigProvider(logger);
+const config = await configProvider.get();
 
 // Database
 const db = createDb(config.databaseUrl);
@@ -82,36 +70,37 @@ const diskDownloader = new FetchDiskAttachmentDownloader(logger.child({ module: 
 const uploaderRegistry = new GenaiFileUploaderRegistry(
     [...freeKeys, paidKey],
     logger.child({ module: "attachments:uploaderRegistry" }),
+    config.file,
 );
 
 // LLM tools
 const getWebsiteTool = createGetWebsiteTool(logger.child({ module: "tool:website" }));
 const getVideoCaptionsTool = await createGetVideoCaptionsTool(
     logger.child({ module: "tool:video" }),
-    config.ytDlpHttpProxy,
-    config.proxyRetries,
+    config.file.ytDlp?.httpProxy,
+    config.file.ytDlp?.retries,
 );
 
 // Lazy model providers — one ChatGoogle client per (provider, apiKey) pair
 const freeKeyProvider = new RoundRobinFreeKeyProvider(freeKeys);
 const paidKeyProvider = new SinglePaidKeyProvider(paidKey);
 const triageProvider = new TriageModelProvider({
-    modelName: TRIAGE_MODEL_NAME,
-    fallbackModelName: TRIAGE_FALLBACK_MODEL,
-    triageThinkingLevel: config.triageThinkingLevel,
-    includeLLMThoughts: config.includeLLMThoughts,
+    modelName: config.file.agent.nodes.triage.model,
+    fallbackModelName: config.file.agent.nodes.triage.fallbackModel,
+    thinkingLevel: config.file.agent.nodes.triage.thinkingLevel,
+    includeThoughts: config.file.geminiModels.includeThoughts,
     getWebsiteTool,
     getVideoCaptionsTool,
 });
 const generalProvider = new GeneralModelProvider({
-    modelName: GENERAL_MODEL_NAME,
-    fallbackModelName: GENERAL_FALLBACK_MODEL,
-    includeLLMThoughts: config.includeLLMThoughts,
+    modelName: config.file.agent.nodes.general.model,
+    fallbackModelName: config.file.agent.nodes.general.fallbackModel,
+    includeThoughts: config.file.geminiModels.includeThoughts,
 });
 const searchProvider = new SearchModelProvider({
-    modelName: SEARCH_MODEL_NAME,
-    fallbackModelName: SEARCH_FALLBACK_MODEL,
-    includeLLMThoughts: config.includeLLMThoughts,
+    modelName: config.file.agent.nodes.search.model,
+    fallbackModelName: config.file.agent.nodes.search.fallbackModel,
+    includeThoughts: config.file.geminiModels.includeThoughts,
 });
 
 // Discord client lifecycle wrapper — created before use cases and gateway so both can share it
@@ -140,7 +129,6 @@ const agentOrchestrator = new AgentOrchestrator(
     logger.child({ module: "agent-orchestrator" }),
     config,
     geminiFileRefreshService,
-    MODEL_TIMEOUTS,
 );
 
 // The primary uploader for new uploads in HandleDiscordMessage uses the current free key.
@@ -150,8 +138,9 @@ const primaryUploader = uploaderRegistry.get(freeKeyProvider.currentKey.id);
 // Live Discord chain fetch service — used as fallback when DB reply chain is empty
 const discordChatMessageService = new DiscordChatMessageService(
     discordClient,
-    config.previousBotId,
+    config.file.discord.previousBotId,
     logger.child({ module: "discord-chat" }),
+    config.file,
 );
 
 // Application use case
@@ -190,6 +179,7 @@ const discordGateway = new DiscordGateway(
     getNextPage,
     retryDiscordMessageUseCase,
     messageRepository,
+    config.file,
 );
 
 // Graceful shutdown

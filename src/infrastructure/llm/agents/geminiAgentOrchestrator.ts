@@ -3,6 +3,7 @@ import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/
 import { Command, END, MessagesValue, ReducedValue, START, StateGraph, StateSchema } from "@langchain/langgraph";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
+import type { AppConfig, AttachmentMode } from "../../../application/config/AppConfig.ts";
 import type { IAgentOrchestrator } from "../../../application/ports/IAgentOrchestrator.ts";
 import type { IModelProvider } from "../../../application/ports/IModelProvider.ts";
 import type { IRoundRobinKeyProvider } from "../../../application/ports/IRoundRobinKeyProvider.ts";
@@ -14,7 +15,6 @@ import { AllFreeKeysExhaustedError, AppError, PaidKeyExhaustedError } from "../.
 import type { GeminiApiKey } from "../../../domain/message/GeminiApiKey.ts";
 import type { DiscordMessage } from "../../../domain/message/Message.ts";
 import { MessageIntent } from "../../../domain/message/MessageIntent.ts";
-import type { AppConfig } from "../../config/config.ts";
 import { is429Error } from "../errors/is429Error.ts";
 import { isModelFallbackError } from "../errors/isModelFallbackError.ts";
 import { buildGeneralSystemPrompt, type GeneralModel } from "../models/generalModel.ts";
@@ -25,8 +25,6 @@ import type { GetVideoCaptionsTool } from "../tools/getVideoCaptionsTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
 import { filterHistoryForInlineSize } from "../utils/inlineAttachmentFilter.ts";
 import { dbMessagesToLangchain, extractContent } from "../utils/messageTransformers.ts";
-
-const GLOBAL_MODEL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes per invoke
 
 /**
  * Graph state schema: extends the prebuilt messages reducer with an `intent` field.
@@ -108,11 +106,11 @@ export type OrchestratorNode = (typeof OrchestratorNode)[keyof typeof Orchestrat
  */
 export interface ModelTimeouts {
     /** Maximum ms to wait for a triage model response before aborting. */
-    triageTimeoutMs: number;
+    triage: number;
     /** Maximum ms to wait for a general model response before aborting. */
-    generalTimeoutMs: number;
+    general: number;
     /** Maximum ms to wait for a search model response before aborting. */
-    searchTimeoutMs: number;
+    search: number;
 }
 
 /** Minimal invokable model interface used by the rotation and fallback helpers. */
@@ -147,7 +145,9 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     private readonly graph: ReturnType<() => any>;
     /** Pre-computed byte limit for inline attachment filtering (0 = no filtering). */
     private readonly maxInlineBytes: number;
-    private readonly attachmentMode: AppConfig["attachmentMode"];
+    private readonly attachmentMode: AttachmentMode;
+    private readonly nodeTimeoutsMs: ModelTimeouts;
+    private readonly globalModelTimeoutMs: number;
 
     constructor(
         private readonly triageProvider: IModelProvider<TriageModel>,
@@ -158,13 +158,12 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         private readonly getWebsiteTool: GetWebsiteTool,
         private readonly getVideoCaptionsTool: GetVideoCaptionsTool,
         private readonly logger: Logger,
-        config: Pick<AppConfig, "attachmentMode" | "maxInlineAttachmentSizeMb">,
+        config: Pick<AppConfig, "file">,
         private readonly geminiFileRefreshService?: GeminiFileRefreshService,
-        private readonly modelTimeouts?: ModelTimeouts,
     ) {
         // Upload mode uses the Gemini Files API, which is only supported by Gemini models.
         // Guard here using modelName to catch wiring mistakes early.
-        if (config.attachmentMode === "upload") {
+        if (config.file.agent.uploadAttachmentMode === "upload") {
             for (const [name, modelName] of [
                 ["triageProvider", triageProvider.modelName],
                 ["generalProvider", generalProvider.modelName],
@@ -178,8 +177,14 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             }
         }
 
-        this.attachmentMode = config.attachmentMode;
-        this.maxInlineBytes = config.maxInlineAttachmentSizeMb * 1024 * 1024;
+        this.attachmentMode = config.file.agent.uploadAttachmentMode;
+        this.maxInlineBytes = config.file.agent.maxInlineAttachmentSizeMB * 1024 * 1024;
+        this.globalModelTimeoutMs = config.file.globalModelTimeoutMs;
+        this.nodeTimeoutsMs = {
+            triage: config.file.agent.nodes.triage.timeoutMs,
+            general: config.file.agent.nodes.general.timeoutMs,
+            search: config.file.agent.nodes.search.timeoutMs,
+        };
         this.graph = this.buildGraph();
     }
 
@@ -293,7 +298,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                                 : refreshed;
 
                         const result = await getModel(key).invoke(filtered, {
-                            timeout: timeoutMs ?? GLOBAL_MODEL_TIMEOUT_MS,
+                            timeout: timeoutMs ?? this.globalModelTimeoutMs,
                         });
                         span.setAttributes({
                             "llm.attempt_count": attempt + 1,
@@ -330,7 +335,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                             );
                             // Reuse filtered — same key, same messages, no re-refresh needed
                             const fallbackResult = await fallbackModel.invoke(filtered, {
-                                timeout: timeoutMs ?? GLOBAL_MODEL_TIMEOUT_MS,
+                                timeout: timeoutMs ?? this.globalModelTimeoutMs,
                             });
                             span.setAttributes({
                                 "llm.attempt_count": attempt + 1,
@@ -474,7 +479,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 this.triageProvider.get.bind(this.triageProvider),
                 this.triageProvider.getFallback.bind(this.triageProvider),
                 messages,
-                this.modelTimeouts?.triageTimeoutMs,
+                this.nodeTimeoutsMs?.triage,
             );
 
             const toolCalls = triageResponse.tool_calls ?? [];
@@ -679,7 +684,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 this.generalProvider.get.bind(this.generalProvider),
                 this.generalProvider.getFallback.bind(this.generalProvider),
                 invokeMessages,
-                this.modelTimeouts?.generalTimeoutMs,
+                this.nodeTimeoutsMs?.general,
             );
             return { messages: [response], isRetryable: usedFallback, usedFallback };
         });
@@ -702,7 +707,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 this.searchProvider.get.bind(this.searchProvider),
                 this.searchProvider.getFallback.bind(this.searchProvider),
                 messages,
-                this.modelTimeouts?.searchTimeoutMs,
+                this.nodeTimeoutsMs?.search,
             );
             return { messages: [response], isRetryable: usedFallback, usedFallback };
         });

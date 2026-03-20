@@ -7,6 +7,10 @@ import type { DiscordClient } from "../../../src/infrastructure/discord/DiscordC
 
 const testLogger = pino({ level: "silent" });
 
+const testFileConfig = {
+    discord: { defaultChainLimit: 100, defaultRetriesLeft: 3 },
+};
+
 const BOT_USER_ID = "bot-user-id";
 const PREVIOUS_BOT_ID = "old-bot-id";
 const CHANNEL_ID = "channel-123";
@@ -132,7 +136,12 @@ function makeFailingDiscordClient(): DiscordClient {
 
 describe("DiscordChatMessageService.fetchChain", () => {
     test("returns empty array when channel fetch fails", async () => {
-        const service = new DiscordChatMessageService(makeFailingDiscordClient(), undefined, testLogger);
+        const service = new DiscordChatMessageService(
+            makeFailingDiscordClient(),
+            undefined,
+            testLogger,
+            testFileConfig,
+        );
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
             channelId: CHANNEL_ID,
@@ -151,7 +160,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
             },
         } as unknown as DiscordClient;
 
-        const service = new DiscordChatMessageService(discordClient, undefined, testLogger);
+        const service = new DiscordChatMessageService(discordClient, undefined, testLogger, testFileConfig);
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
             channelId: CHANNEL_ID,
@@ -163,7 +172,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
     test("returns single snapshot for a root message (no reference)", async () => {
         const msg = makeMessage({ id: "msg-1", content: "Root message" });
         const client = makeDiscordClient(new Map([["msg-1", msg]]));
-        const service = new DiscordChatMessageService(client, undefined, testLogger);
+        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -186,7 +195,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
                 ["msg-2", child],
             ]),
         );
-        const service = new DiscordChatMessageService(client, undefined, testLogger);
+        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-2",
@@ -210,7 +219,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
                 ["msg-3", msg3],
             ]),
         );
-        const service = new DiscordChatMessageService(client, undefined, testLogger);
+        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-3",
@@ -228,7 +237,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
     test("isOwnBot is true when authorId matches discordClient.userId", async () => {
         const msg = makeMessage({ id: "msg-1", authorId: BOT_USER_ID, isBot: true });
         const client = makeDiscordClient(new Map([["msg-1", msg]]), BOT_USER_ID);
-        const service = new DiscordChatMessageService(client, undefined, testLogger);
+        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -243,7 +252,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
     test("isOwnBot is true when authorId matches previousBotId", async () => {
         const msg = makeMessage({ id: "msg-1", authorId: PREVIOUS_BOT_ID, isBot: true });
         const client = makeDiscordClient(new Map([["msg-1", msg]]), BOT_USER_ID);
-        const service = new DiscordChatMessageService(client, PREVIOUS_BOT_ID, testLogger);
+        const service = new DiscordChatMessageService(client, PREVIOUS_BOT_ID, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -257,7 +266,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
     test("isOwnBot is false for regular user messages", async () => {
         const msg = makeMessage({ id: "msg-1", authorId: "some-user", isBot: false });
         const client = makeDiscordClient(new Map([["msg-1", msg]]), BOT_USER_ID);
-        const service = new DiscordChatMessageService(client, PREVIOUS_BOT_ID, testLogger);
+        const service = new DiscordChatMessageService(client, PREVIOUS_BOT_ID, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -271,7 +280,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
     test("maps null guildId to '@me' for DMs", async () => {
         const msg = makeMessage({ id: "msg-1", guildId: null });
         const client = makeDiscordClient(new Map([["msg-1", msg]]));
-        const service = new DiscordChatMessageService(client, undefined, testLogger);
+        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -286,7 +295,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
         const msg2 = makeMessage({ id: "msg-2", content: "Child", referenceMessageId: "msg-1" });
         // Only msg-2 is in the map; fetching msg-1 will throw
         const client = makeDiscordClient(new Map([["msg-2", msg2]]));
-        const service = new DiscordChatMessageService(client, undefined, testLogger);
+        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-2",
@@ -314,7 +323,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
             ],
         });
         const client = makeDiscordClient(new Map([["msg-1", msg]]));
-        const service = new DiscordChatMessageService(client, undefined, testLogger);
+        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -347,7 +356,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
             ],
         });
         const client = makeDiscordClient(new Map([["msg-1", msg]]));
-        const service = new DiscordChatMessageService(client, undefined, testLogger);
+        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -366,7 +375,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
     test("omits embeds field when message has no embeds", async () => {
         const msg = makeMessage({ id: "msg-1" });
         const client = makeDiscordClient(new Map([["msg-1", msg]]));
-        const service = new DiscordChatMessageService(client, undefined, testLogger);
+        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -393,7 +402,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
             messageSnapshots: new Map([["original-msg-id", fwdSnapshot]]),
         });
         const client = makeDiscordClient(new Map([["msg-1", msg]]));
-        const service = new DiscordChatMessageService(client, undefined, testLogger);
+        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -429,7 +438,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
                 ["msg-2", fwd],
             ]),
         );
-        const service = new DiscordChatMessageService(client, undefined, testLogger);
+        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-2",
@@ -453,7 +462,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
             messageSnapshots: new Map(),
         });
         const client = makeDiscordClient(new Map([["msg-1", msg]]));
-        const service = new DiscordChatMessageService(client, undefined, testLogger);
+        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",

@@ -7,7 +7,7 @@ import type { GeminiFile } from "../../domain/message/GeminiFile.ts";
 import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
 import type { DiscordMessage } from "../../domain/message/Message.ts";
 import type { MessageIntent } from "../../domain/message/MessageIntent.ts";
-import type { AppConfig } from "../config/AppConfig.ts";
+import type { AppConfig, AttachmentMode } from "../config/AppConfig.ts";
 import { discordMessageToLlmText } from "../formatters/textTransformers.ts";
 import type { IAgentOrchestrator } from "../ports/IAgentOrchestrator.ts";
 import type { DiscordAttachmentInfo, IAttachmentDownloader } from "../ports/IAttachmentDownloader.ts";
@@ -18,9 +18,6 @@ import type { IGeminiFileUploader } from "../ports/IGeminiFileUploader.ts";
 import type { OnStatusUpdate } from "../types/AgentStatus.ts";
 import { AgentStatusType } from "../types/AgentStatus.ts";
 import type { Logger } from "../types/Logger.ts";
-
-/** Temp directory for streaming attachments before Gemini upload. */
-const UPLOAD_TEMP_DIR = "/var/tmp/genie-attachments";
 
 /**
  * Pending data for a single Gemini file upload that must be persisted after
@@ -68,22 +65,24 @@ type PendingGeminiRecord = {
  */
 export class HandleDiscordMessageUseCase {
     private readonly maxInlineBytes: number;
-    private readonly attachmentMode: AppConfig["attachmentMode"];
+    private readonly attachmentMode: AttachmentMode;
+    private readonly attachmentsTempDir: string;
 
     constructor(
         private readonly messageRepo: IMessageRepository,
         private readonly orchestrator: IAgentOrchestrator,
         private readonly attachmentDownloader: IAttachmentDownloader,
         private readonly logger: Logger,
-        config: Pick<AppConfig, "maxInlineAttachmentSizeMb" | "attachmentMode">,
+        config: Pick<AppConfig, "file">,
         /** Required in upload mode; unused in inline mode. */
         private readonly diskDownloader?: IDiskAttachmentDownloader,
         private readonly geminiFileUploader?: IGeminiFileUploader,
         private readonly geminiFileRepo?: IGeminiFileRepository,
         private readonly chatMessageService?: IChatMessageService,
     ) {
-        this.maxInlineBytes = config.maxInlineAttachmentSizeMb * 1024 * 1024;
-        this.attachmentMode = config.attachmentMode;
+        this.maxInlineBytes = config.file.agent.maxInlineAttachmentSizeMB * 1024 * 1024;
+        this.attachmentMode = config.file.agent.uploadAttachmentMode;
+        this.attachmentsTempDir = config.file.attachmentsTempDir;
     }
 
     /**
@@ -546,7 +545,7 @@ export class HandleDiscordMessageUseCase {
                 const pendingRecords: PendingGeminiRecord[] = [];
 
                 for (const attachment of attachments) {
-                    const tempPath = join(UPLOAD_TEMP_DIR, `${randomUUIDv7()}-${attachment.name}`);
+                    const tempPath = join(this.attachmentsTempDir, `${randomUUIDv7()}-${attachment.name}`);
                     try {
                         const mimeType = await this.diskDownloader.downloadToFile(attachment, tempPath);
 

@@ -16,11 +16,6 @@ import type { Logger } from "../types/Logger.ts";
 /** URL prefix that identifies a Gemini Files API URI in a content block. */
 const GEMINI_URL_PREFIX = "https://generativelanguage.googleapis.com";
 
-/** Temp directory base path for streamed attachment files. */
-// NOTE: must be absolute or use path resolve
-// TODO: extend for use on Windows
-const TEMP_DIR = "/var/tmp/genie-attachments";
-
 /**
  * A content block with a `fileUri` field (upload-mode attachment reference).
  * Uses legacy LangChain media format: { type: "media", mimeType, fileUri }.
@@ -84,6 +79,7 @@ function extractGeminiUrls(message: BaseMessage): string[] {
 export class GeminiFileRefreshService {
     /** Gemini file TTL is 48 hours. Files older than (TTL - staleThresholdMs) are refreshed. */
     private readonly staleThresholdMs: number;
+    private readonly attachmentsTempDir: string;
 
     constructor(
         private readonly geminiFileRepo: IGeminiFileRepository,
@@ -91,11 +87,12 @@ export class GeminiFileRefreshService {
         private readonly diskDownloader: IDiskAttachmentDownloader,
         private readonly mediaService: IDiscordMediaService,
         private readonly logger: Logger,
-        config: Pick<AppConfig, "geminiFileStaleThresholdMinutes">,
+        config: Pick<AppConfig, "file">,
     ) {
         // Gemini TTL is 48 hours; a file is stale when less than staleThreshold remains
         const geminiTtlMs = 48 * 60 * 60 * 1000;
-        this.staleThresholdMs = geminiTtlMs - config.geminiFileStaleThresholdMinutes * 60 * 1000;
+        this.staleThresholdMs = geminiTtlMs - config.file.geminiFileApi.fileStaleBeforeExpiryMinutes * 60 * 1000;
+        this.attachmentsTempDir = config.file.attachmentsTempDir;
     }
 
     /**
@@ -217,7 +214,7 @@ export class GeminiFileRefreshService {
                     return null;
                 }
 
-                const tempPath = join(TEMP_DIR, `${randomUUIDv7()}-${file.discordFilename}`);
+                const tempPath = join(this.attachmentsTempDir, `${randomUUIDv7()}-${file.discordFilename}`);
                 try {
                     // Stream attachment to disk
                     const mimeType = await this.diskDownloader.downloadToFile(attachment, tempPath);

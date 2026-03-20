@@ -1,14 +1,9 @@
 import { FileState, GoogleGenAI } from "@google/genai";
 import * as Sentry from "@sentry/bun";
+import type { FileConfig } from "../../application/config/AppConfig.ts";
 import type { IGeminiFileUploader, UploadedGeminiFile } from "../../application/ports/IGeminiFileUploader.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import { AppError } from "../../domain/errors/AppError.ts";
-
-/** How long to wait between status polls when a file is in PROCESSING state (ms). */
-const POLL_INTERVAL_MS = 5_000;
-
-/** Maximum total time to wait for a file to reach ACTIVE state (ms). */
-const MAX_POLL_WAIT_MS = 120_000;
 
 /**
  * Uploads files to the Gemini Files API using `@google/genai`.
@@ -17,19 +12,24 @@ const MAX_POLL_WAIT_MS = 120_000;
  * which makes names predictable and avoids UNIQUE constraint collisions on refresh.
  *
  * After upload, the file may be in PROCESSING state. This class polls
- * `ai.files.get()` every {@link POLL_INTERVAL_MS} ms until the file reaches
- * ACTIVE state or until {@link MAX_POLL_WAIT_MS} elapses, at which point an
+ * `ai.files.get()` every `geminiFileApi.pollIntervalMs` ms until the file reaches
+ * ACTIVE state or until `geminiFileApi.maxPollWaitMs` elapses, at which point an
  * error is thrown.
  */
 export class GenaiFileUploader implements IGeminiFileUploader {
     private readonly ai: GoogleGenAI;
+    private readonly pollIntervalMs: number;
+    private readonly maxPollWaitMs: number;
 
     constructor(
         apiKey: string,
         readonly apiKeyId: string,
         private readonly logger: Logger,
+        config: Pick<FileConfig, "geminiFileApi">,
     ) {
         this.ai = new GoogleGenAI({ apiKey });
+        this.pollIntervalMs = config.geminiFileApi.pollIntervalMs;
+        this.maxPollWaitMs = config.geminiFileApi.maxPollWaitMs;
     }
 
     async upload(
@@ -59,16 +59,16 @@ export class GenaiFileUploader implements IGeminiFileUploader {
                 this.logger.debug({ geminiFileName: file.name, state: file.state }, "File uploaded, checking state");
 
                 // Poll until ACTIVE or FAILED (or timeout)
-                const deadline = Date.now() + MAX_POLL_WAIT_MS;
+                const deadline = Date.now() + this.maxPollWaitMs;
                 let pollCount = 0;
                 while (file.state === FileState.PROCESSING) {
                     if (Date.now() >= deadline) {
                         throw new AppError(
                             "GEMINI_UPLOAD_FAILED",
-                            `Timed out waiting for Gemini file "${fileName}" to become ACTIVE after ${MAX_POLL_WAIT_MS / 1000}s`,
+                            `Timed out waiting for Gemini file "${fileName}" to become ACTIVE after ${this.maxPollWaitMs / 1000}s`,
                         );
                     }
-                    await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+                    await new Promise<void>((resolve) => setTimeout(resolve, this.pollIntervalMs));
                     if (!file.name) {
                         throw new AppError(
                             "GEMINI_UPLOAD_FAILED",

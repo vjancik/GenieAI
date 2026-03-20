@@ -76,8 +76,25 @@ function makeDownloader(): IAttachmentDownloader {
 }
 
 const testConfig = {
-    maxInlineAttachmentSizeMb: 100,
+    maxInlineAttachmentSizeMB: 100,
     attachmentMode: "inline" as const,
+    file: {
+        attachmentsTempDir: "/var/tmp/genie-attachments",
+        globalModelTimeoutMs: 600_000,
+        geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 15 },
+        discord: { defaultChainLimit: 100, defaultRetriesLeft: 3 },
+        geminiModels: { includeThoughts: false },
+        agent: {
+            uploadAttachmentMode: "upload" as const,
+            maxInlineAttachmentSizeMB: 100,
+            nodes: {
+                triage: { model: "gemini-test", timeoutMs: 60_000, thinkingLevel: "LOW" as const },
+                general: { model: "gemini-test", timeoutMs: 120_000 },
+                search: { model: "gemini-test", timeoutMs: 120_000 },
+            },
+        },
+        ytDlp: { retries: 1 },
+    },
 };
 
 describe("HandleDiscordMention.handle", () => {
@@ -293,7 +310,16 @@ describe("HandleDiscordMention.handle", () => {
             orchestrator as never,
             makeDownloader(),
             testLogger,
-            { maxInlineAttachmentSizeMb: 1, attachmentMode: "inline" as const }, // 1 MB limit
+            {
+                file: {
+                    ...testConfig.file,
+                    agent: {
+                        ...testConfig.file.agent,
+                        uploadAttachmentMode: "inline" as const,
+                        maxInlineAttachmentSizeMB: 1,
+                    },
+                },
+            }, // 1 MB limit
         );
 
         const result = await handler.handle({
@@ -326,13 +352,9 @@ describe("HandleDiscordMention.handle", () => {
         const repo = makeRepo();
         const orchestrator = makeOrchestrator();
         const downloader = makeDownloader();
-        const handler = new HandleDiscordMessageUseCase(
-            repo,
-            orchestrator as never,
-            downloader,
-            testLogger,
-            testConfig,
-        );
+        const handler = new HandleDiscordMessageUseCase(repo, orchestrator as never, downloader, testLogger, {
+            file: { ...testConfig.file, agent: { ...testConfig.file.agent, uploadAttachmentMode: "inline" as const } },
+        });
 
         await handler.handle({
             discordMessageId: "user-msg-1",

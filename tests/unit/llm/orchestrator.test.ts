@@ -13,6 +13,28 @@ import { dbMessagesToLangchain } from "../../../src/infrastructure/llm/utils/mes
 
 const testLogger = pino({ level: "silent" });
 
+const testConfig = {
+    attachmentMode: "inline" as const,
+    maxInlineAttachmentSizeMB: 100,
+    file: {
+        attachmentsTempDir: "/var/tmp/genie-attachments",
+        globalModelTimeoutMs: 600_000,
+        geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 15 },
+        discord: { defaultChainLimit: 100, defaultRetriesLeft: 3 },
+        geminiModels: { includeThoughts: false },
+        agent: {
+            uploadAttachmentMode: "upload" as const,
+            maxInlineAttachmentSizeMB: 100,
+            nodes: {
+                triage: { model: "gemini-test", timeoutMs: 60_000, thinkingLevel: "LOW" as const },
+                general: { model: "gemini-test", timeoutMs: 120_000 },
+                search: { model: "gemini-test", timeoutMs: 120_000 },
+            },
+        },
+        ytDlp: { retries: 1 },
+    },
+};
+
 /** Helper to create a mock model that returns a given response */
 function makeModel(response: string) {
     return {
@@ -364,10 +386,7 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
-            {
-                attachmentMode: "inline" as const,
-                maxInlineAttachmentSizeMb: 100,
-            },
+            testConfig,
         );
 
         const result = await orchestrator.process([], new HumanMessage("What happened today?"), MessageIntent.UNKNOWN);
@@ -395,10 +414,7 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
-            {
-                attachmentMode: "inline" as const,
-                maxInlineAttachmentSizeMb: 100,
-            },
+            testConfig,
         );
 
         const result = await orchestrator.process([], new HumanMessage("Tell me a joke"), MessageIntent.UNKNOWN);
@@ -428,10 +444,7 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
-            {
-                attachmentMode: "inline" as const,
-                maxInlineAttachmentSizeMb: 100,
-            },
+            testConfig,
         );
 
         const result = await orchestrator.process(
@@ -468,10 +481,7 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
-            {
-                attachmentMode: "inline" as const,
-                maxInlineAttachmentSizeMb: 100,
-            },
+            testConfig,
         );
 
         const result = await orchestrator.process([], new HumanMessage("Summarize this video"), MessageIntent.UNKNOWN);
@@ -501,10 +511,7 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
-            {
-                attachmentMode: "inline" as const,
-                maxInlineAttachmentSizeMb: 100,
-            },
+            testConfig,
         );
 
         const result = await orchestrator.process([], new HumanMessage("Hello"), MessageIntent.UNKNOWN);
@@ -530,10 +537,7 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
-            {
-                attachmentMode: "inline" as const,
-                maxInlineAttachmentSizeMb: 100,
-            },
+            testConfig,
         );
 
         const history: BaseMessage[] = [new HumanMessage("First message"), new AIMessage("First response")];
@@ -573,10 +577,7 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
-            {
-                attachmentMode: "inline" as const,
-                maxInlineAttachmentSizeMb: 100,
-            },
+            testConfig,
         );
 
         const result = await orchestrator.process([], new HumanMessage("Think about this"), MessageIntent.UNKNOWN);
@@ -604,10 +605,7 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
-            {
-                attachmentMode: "inline" as const,
-                maxInlineAttachmentSizeMb: 100,
-            },
+            testConfig,
         );
 
         const updates: AgentStatusUpdate[] = [];
@@ -632,10 +630,7 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
-            {
-                attachmentMode: "inline" as const,
-                maxInlineAttachmentSizeMb: 100,
-            },
+            testConfig,
         );
 
         const updates: AgentStatusUpdate[] = [];
@@ -664,10 +659,7 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
-            {
-                attachmentMode: "inline" as const,
-                maxInlineAttachmentSizeMb: 100,
-            },
+            testConfig,
         );
 
         const updates: AgentStatusUpdate[] = [];
@@ -698,10 +690,7 @@ describe("Orchestrator.process", () => {
             websiteTool as never,
             videoTool as never,
             testLogger,
-            {
-                attachmentMode: "inline" as const,
-                maxInlineAttachmentSizeMb: 100,
-            },
+            testConfig,
         );
 
         // Two-arg call must still work; no callback provided
@@ -763,10 +752,7 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
             makeTool("w") as never,
             makeTool("v") as never,
             testLogger,
-            {
-                attachmentMode: "inline" as const,
-                maxInlineAttachmentSizeMb: 100,
-            },
+            testConfig,
         );
     }
 

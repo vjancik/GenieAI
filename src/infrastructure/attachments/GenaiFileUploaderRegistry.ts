@@ -1,3 +1,4 @@
+import type { FileConfig } from "../../application/config/AppConfig.ts";
 import type { IGeminiFileUploaderRegistry } from "../../application/ports/IGeminiFileUploaderRegistry.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import { AppError } from "../../domain/errors/AppError.ts";
@@ -24,6 +25,7 @@ export class GenaiFileUploaderRegistry implements IGeminiFileUploaderRegistry {
     constructor(
         allKeys: GeminiApiKey[],
         private readonly logger: Logger,
+        private readonly fileConfig: Pick<FileConfig, "geminiFileApi">,
     ) {
         this.keyMap = new Map(allKeys.map((k) => [k.id, k.apiKey]));
     }
@@ -43,7 +45,7 @@ export class GenaiFileUploaderRegistry implements IGeminiFileUploaderRegistry {
             throw new AppError("UPLOADER_NOT_FOUND", `No uploader registered for apiKeyId: ${apiKeyId}`);
         }
 
-        const uploader = new GenaiFileUploader(apiKey, apiKeyId, this.logger.child({ apiKeyId }));
+        const uploader = new GenaiFileUploader(apiKey, apiKeyId, this.logger.child({ apiKeyId }), this.fileConfig);
         this.cache.set(apiKeyId, uploader);
         this.logger.debug({ apiKeyId }, "Constructed new GenaiFileUploader for API key");
         return uploader;

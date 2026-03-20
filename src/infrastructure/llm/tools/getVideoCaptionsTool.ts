@@ -178,7 +178,7 @@ export async function createGetVideoCaptionsTool(logger: Logger, proxy?: string,
     if (proxy !== undefined) {
         const scheme = new URL(proxy).protocol;
         if (scheme !== "http:" && scheme !== "https:") {
-            throw new ToolError(`YT_DLP_HTTP_PROXY must use http:// or https://, got: ${scheme}`);
+            throw new ToolError(`ytDlp.httpProxy must use http:// or https://, got: ${scheme}`);
         }
     }
     await verifyYtDlp();

@@ -12,6 +12,7 @@ import {
     type Message,
     type TopLevelComponent,
 } from "discord.js";
+import type { FileConfig } from "../../application/config/AppConfig.ts";
 import { extractWebGroundingChunks, formatGroundingSources } from "../../application/formatters/groundingSources.ts";
 import { splitMarkdown } from "../../application/formatters/markdownSplitter.ts";
 import { discordMessageToLlmText, llmTextToDiscordText } from "../../application/formatters/textTransformers.ts";
@@ -37,9 +38,6 @@ const DM_GUILD_TOKEN = "@me";
 
 /** Custom ID for the Retry button attached to failed bot responses. */
 const RETRY_BUTTON_ID = "retry_mention";
-
-/** Number of retry attempts granted to a retryable bot response. */
-const DEFAULT_RETRIES_LEFT = 3;
 
 /** Custom ID for the Next Page button attached to paginated bot responses. */
 const NEXT_PAGE_BUTTON_ID = "next_page";
@@ -200,6 +198,7 @@ async function resolveGroundingSources(newMessages: BaseMessage[]): Promise<stri
 export class DiscordGateway {
     /** Saved reference to the underlying discord.js Client. */
     private readonly client: Client;
+    private readonly defaultRetriesLeft: number;
     private readonly interactionLock = new InteractionLock();
     // used only in CreateMessage handler for now
     private readonly rateLimiter = new RateLimiter([
@@ -223,8 +222,10 @@ export class DiscordGateway {
         private readonly getNextPageUseCase: GetNextPageUseCase,
         private readonly retryDiscordMessageUseCase: RetryDiscordMessageUseCase,
         private readonly messageRepo: IMessageRepository,
+        config: Pick<FileConfig, "discord">,
     ) {
         this.client = discordClient.client;
+        this.defaultRetriesLeft = config.discord.defaultRetriesLeft;
         this.registerEventHandlers();
     }
 
@@ -323,7 +324,7 @@ export class DiscordGateway {
         usedFallback?: boolean;
         /**
          * Retries remaining for this response. Only meaningful when isRetryable is true.
-         * When undefined/null and isRetryable is true, defaults to DEFAULT_RETRIES_LEFT.
+         * When undefined/null and isRetryable is true, defaults to defaultRetriesLeft.
          * When 0 the Retry button is suppressed entirely.
          */
         retriesLeft?: number | null;
@@ -369,9 +370,9 @@ export class DiscordGateway {
         const sourcesLine = await resolveGroundingSources(newMessages);
 
         // Attach a Retry button when the use case signals a retryable failure and retries remain.
-        // retriesLeft=undefined means this is a fresh response — use DEFAULT_RETRIES_LEFT.
+        // retriesLeft=undefined means this is a fresh response — use defaultRetriesLeft.
         // retriesLeft=0 means all retries exhausted — suppress the button.
-        const effectiveRetriesLeft = retriesLeft ?? DEFAULT_RETRIES_LEFT;
+        const effectiveRetriesLeft = retriesLeft ?? this.defaultRetriesLeft;
         const retryRow =
             isRetryable && effectiveRetriesLeft > 0
                 ? new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -591,7 +592,7 @@ export class DiscordGateway {
                 const humanRecord = chain.length >= 2 ? chain.at(-2) : undefined;
 
                 // Decrement retriesLeft from the stored bot reply row — each click consumes one retry.
-                // null if not set or record missing (sendBotReply will fall back to DEFAULT_RETRIES_LEFT).
+                // null if not set or record missing (sendBotReply will fall back to defaultRetriesLeft).
                 const storedRetriesLeft = botRecord?.retriesLeft ?? null;
                 const retriesLeft = storedRetriesLeft !== null ? storedRetriesLeft - 1 : null;
 

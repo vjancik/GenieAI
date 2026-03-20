@@ -29,6 +29,7 @@ services:
         volumes:
             - ./logs:/usr/src/app/logs
             - ~/bin:/home/bun/bin
+            - ./config.local.yaml:/usr/src/app/config.local.yaml:ro
         depends_on:
             - db
         restart: unless-stopped
