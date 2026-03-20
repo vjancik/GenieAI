@@ -10,6 +10,7 @@ import {
     ComponentType,
     Events,
     type Message,
+    type TextBasedChannel,
     type TopLevelComponent,
 } from "discord.js";
 import type { FileConfig } from "../../application/config/AppConfig.ts";
@@ -490,6 +491,60 @@ export class DiscordGateway {
         });
     }
 
+    // NOTE: A naive implementation for a rare usecase, could be made more robust by extending the database
+    /**
+     * After deleting a bot message on Retry, opportunistically deletes any dangling
+     * sources follow-up that replied to it. Web Search responses send a separate
+     * "*Sources: …*" message that would otherwise be left orphaned.
+     *
+     * Fetches up to 10 messages sent after the deleted message in the same channel,
+     * finds the first one that is the bot's own message, replies to the deleted
+     * message, and starts with "*Sources: " — then deletes it from Discord and the DB.
+     *
+     * Intentionally fire-and-forget: errors are logged but never propagate.
+     *
+     * @param channel - The text channel the deleted message was in
+     * @param deletedMessageId - Snowflake ID of the message that was just deleted
+     * @param channelId - Channel ID for DB deletion
+     * @param guildId - Guild ID for DB deletion
+     */
+    private deleteDanglingSourcesMessageOptimistically(
+        channel: TextBasedChannel,
+        deletedMessageId: string,
+        channelId: string,
+        guildId: string,
+    ): void {
+        const botId = this.client.user?.id;
+
+        channel.messages
+            .fetch({ after: deletedMessageId, limit: 10 })
+            .then((fetched) => {
+                const sourcesMsg = fetched.find(
+                    (msg) =>
+                        msg.author.id === botId &&
+                        msg.reference?.messageId === deletedMessageId &&
+                        // NOTE this might drift from sources message formatting
+                        msg.content.startsWith("*Sources: "),
+                );
+                if (!sourcesMsg) return;
+
+                // Delete from Discord — fire-and-forget
+                sourcesMsg.delete().catch((err) => {
+                    this.logger.warn({ err }, "Failed to delete dangling sources message from Discord on retry");
+                });
+
+                // Delete from DB — fire-and-forget
+                this.messageRepo
+                    .deleteByDiscordMessageId({ discordMessageId: sourcesMsg.id, channelId, guildId })
+                    .catch((err) => {
+                        this.logger.warn({ err }, "Failed to delete dangling sources message from DB on retry");
+                    });
+            })
+            .catch((err) => {
+                this.logger.warn({ err }, "Failed to fetch messages when cleaning up dangling sources on retry");
+            });
+    }
+
     /**
      * Sends a sources-only follow-up reply and persists it to the DB so it
      * participates in the reply chain.
@@ -623,6 +678,16 @@ export class DiscordGateway {
                     await interaction.message.delete().catch((err) => {
                         this.logger.warn({ err }, "Failed to delete old failed bot reply from Discord on retry");
                     });
+
+                    // If the deleted message had a sources follow-up, clean it up too.
+                    if (interaction.channel) {
+                        this.deleteDanglingSourcesMessageOptimistically(
+                            interaction.channel,
+                            interaction.message.id,
+                            originalMessage.channelId,
+                            guildId,
+                        );
+                    }
 
                     // Delete the old failed bot reply from DB now that retriesLeft has been read.
                     // Fire-and-forget — failure here doesn't block the retry from proceeding.
