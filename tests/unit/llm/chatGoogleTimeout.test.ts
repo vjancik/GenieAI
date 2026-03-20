@@ -101,34 +101,40 @@ describe("ChatGoogle — RunnableConfig.timeout (upstream @langchain/google bug)
      *
      * @see docs/upstream_bugs/langchain-google-non-streaming-invoke-ignores-timeout.md
      */
-    test("BUG: invoke() hangs instead of rejecting when timeout fires on a stalled API call", async () => {
-        const restore = installHangingFetchProxy();
+    test(
+        "BUG: invoke() hangs instead of rejecting when timeout fires on a stalled API call",
+        async () => {
+            const restore = installHangingFetchProxy();
 
-        const model = new ChatGoogle({
-            model: "gemini-2.5-flash",
-            apiKey: FAKE_API_KEY,
-        });
+            const model = new ChatGoogle({
+                model: "gemini-2.5-flash",
+                apiKey: FAKE_API_KEY,
+            });
 
-        const started = Date.now();
-        let caughtError: unknown;
-        // Race the invoke against a sentinel that resolves after TIMEOUT_MS + GRACE_MS.
-        // This ensures the test always completes within the deadline regardless of
-        // whether the bug is present (invoke hangs) or fixed (invoke rejects).
-        const sentinel = Symbol("timed-out");
-        const result = await Promise.race([
-            model.invoke([new HumanMessage("Hello")], { timeout: TIMEOUT_MS }).then(
-                () => undefined,
-                (err: unknown) => { caughtError = err; },
-            ),
-            new Promise<typeof sentinel>(res => setTimeout(() => res(sentinel), TIMEOUT_MS + GRACE_MS - 50)),
-        ]).finally(restore);
+            const started = Date.now();
+            let caughtError: unknown;
+            // Race the invoke against a sentinel that resolves after TIMEOUT_MS + GRACE_MS.
+            // This ensures the test always completes within the deadline regardless of
+            // whether the bug is present (invoke hangs) or fixed (invoke rejects).
+            const sentinel = Symbol("timed-out");
+            const result = await Promise.race([
+                model.invoke([new HumanMessage("Hello")], { timeout: TIMEOUT_MS }).then(
+                    () => undefined,
+                    (err: unknown) => {
+                        caughtError = err;
+                    },
+                ),
+                new Promise<typeof sentinel>((res) => setTimeout(() => res(sentinel), TIMEOUT_MS + GRACE_MS - 50)),
+            ]).finally(restore);
 
-        const elapsed = Date.now() - started;
-        const hungForever = result === sentinel;
+            const elapsed = Date.now() - started;
+            const hungForever = result === sentinel;
 
-        // BUG: should have thrown — flip these when the upstream fix lands
-        expect(hungForever).toBe(true);
-        expect(caughtError).toBeUndefined();
-        expect(elapsed).toBeGreaterThanOrEqual(TIMEOUT_MS);
-    }, TIMEOUT_MS + GRACE_MS);
+            // BUG: should have thrown — flip these when the upstream fix lands
+            expect(hungForever).toBe(true);
+            expect(caughtError).toBeUndefined();
+            expect(elapsed).toBeGreaterThanOrEqual(TIMEOUT_MS);
+        },
+        TIMEOUT_MS + GRACE_MS,
+    );
 });

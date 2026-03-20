@@ -11,7 +11,7 @@ import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
  * cursor, subsequent requests start from the new current key, distributing load
  * across keys over time.
  */
-export interface IFreeKeyProvider {
+export interface IRoundRobinKeyProvider {
     /** The currently active free API key. */
     readonly currentKey: GeminiApiKey;
 

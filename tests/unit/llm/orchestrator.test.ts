@@ -73,7 +73,7 @@ function asProvider<T>(model: T) {
     };
 }
 
-/** Minimal IFreeKeyProvider stub — single key, no rotation side-effects. */
+/** Minimal IRoundRobinKeyProvider stub — single key, no rotation side-effects. */
 function makeFreeKeyProvider() {
     const key = { id: "free-key-id", apiKey: "free-key", isPaid: false };
     return {
@@ -89,8 +89,8 @@ function makeFreeKeyProvider() {
     };
 }
 
-/** Dummy paid GeminiApiKey for tests that don't exercise the paid path. */
-const testPaidKey = { id: "paid-key-id", apiKey: "paid-key", isPaid: true };
+/** Dummy paid key provider for tests that don't exercise the paid path. */
+const testPaidKeyProvider = makeFreeKeyProvider();
 
 describe("dbMessagesToLangchain", () => {
     const baseMsg: Omit<DiscordMessage, "role" | "langchainMessages"> = {
@@ -360,7 +360,7 @@ describe("Orchestrator.process", () => {
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeFreeKeyProvider() as never,
-            testPaidKey,
+            testPaidKeyProvider,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -391,7 +391,7 @@ describe("Orchestrator.process", () => {
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeFreeKeyProvider() as never,
-            testPaidKey,
+            testPaidKeyProvider,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -424,7 +424,7 @@ describe("Orchestrator.process", () => {
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeFreeKeyProvider() as never,
-            testPaidKey,
+            testPaidKeyProvider,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -464,7 +464,7 @@ describe("Orchestrator.process", () => {
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeFreeKeyProvider() as never,
-            testPaidKey,
+            testPaidKeyProvider,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -497,7 +497,7 @@ describe("Orchestrator.process", () => {
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeFreeKeyProvider() as never,
-            testPaidKey,
+            testPaidKeyProvider,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -526,7 +526,7 @@ describe("Orchestrator.process", () => {
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeFreeKeyProvider() as never,
-            testPaidKey,
+            testPaidKeyProvider,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -569,7 +569,7 @@ describe("Orchestrator.process", () => {
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeFreeKeyProvider() as never,
-            testPaidKey,
+            testPaidKeyProvider,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -600,7 +600,7 @@ describe("Orchestrator.process", () => {
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeFreeKeyProvider() as never,
-            testPaidKey,
+            testPaidKeyProvider,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -628,7 +628,7 @@ describe("Orchestrator.process", () => {
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeFreeKeyProvider() as never,
-            testPaidKey,
+            testPaidKeyProvider,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -660,7 +660,7 @@ describe("Orchestrator.process", () => {
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeFreeKeyProvider() as never,
-            testPaidKey,
+            testPaidKeyProvider,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -694,7 +694,7 @@ describe("Orchestrator.process", () => {
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeFreeKeyProvider() as never,
-            testPaidKey,
+            testPaidKeyProvider,
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -714,7 +714,7 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
     const make429Error = () => new Error("HTTP 429 Too Many Requests");
 
     /**
-     * Creates an IFreeKeyProvider with `n` distinct keys backed by a shared
+     * Creates an IRoundRobinKeyProvider with `n` distinct keys backed by a shared
      * index. `nextKey` is a bun mock so call counts are observable.
      * `forceAdvance()` mutates the index directly, simulating a concurrent
      * request advancing the cursor between an invoke and the catch handler.
@@ -759,7 +759,7 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
             asProvider(generalModel) as never,
             asProvider(makeModel("search")) as never,
             provider as never,
-            testPaidKey,
+            testPaidKeyProvider,
             makeTool("w") as never,
             makeTool("v") as never,
             testLogger,

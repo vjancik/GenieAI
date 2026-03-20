@@ -1,7 +1,6 @@
 import { ChatGoogle } from "@langchain/google/node";
 import * as Sentry from "@sentry/bun";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
-import type { GeminiApiKey } from "../../../domain/message/GeminiApiKey.ts";
 import { ModelProvider } from "../ModelProvider.ts";
 import { BASE_USER_FACING_PROMPT, SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
 
@@ -64,36 +63,17 @@ function createSearchModel(
 export type SearchModel = ReturnType<typeof createSearchModel>;
 
 /**
- * Provider for the search model, always bound to a single paid API key.
+ * Lazy-caching provider for the search model.
  *
- * Google Search grounding is a paid-only feature, so the key is fixed at
- * construction time rather than being supplied per call. The `key` argument
- * to {@link get} and {@link getFallback} is accepted but ignored — the paid
- * key baked in at construction is always used.
+ * Builds one {@link SearchModel} per unique `[apiKey, modelName]` pair.
+ * The fallback model (if configured) is cached in the same map under its own key.
  */
 export class SearchModelProvider extends ModelProvider<SearchModel> {
-    private readonly paidApiKey: string;
-    private readonly includeLLMThoughts: boolean;
-
-    constructor(apiKey: string, options: SearchModelOptions) {
+    constructor(private readonly options: SearchModelOptions) {
         super(options.modelName, options.fallbackModelName);
-        this.paidApiKey = apiKey;
-        this.includeLLMThoughts = options.includeLLMThoughts;
     }
 
-    protected create(_apiKey: string, modelName: string): SearchModel {
-        // _apiKey is ignored — the search model always uses the paid key from the constructor.
-        return createSearchModel(this.paidApiKey, modelName, { includeLLMThoughts: this.includeLLMThoughts });
-    }
-
-    /** Returns the primary search model (key argument ignored — paid key always used). */
-    override get(_key: GeminiApiKey): SearchModel {
-        return this.getOrCreate(this.paidApiKey, this.modelName);
-    }
-
-    /** Returns the fallback search model (key argument ignored — paid key always used). */
-    override getFallback(_key: GeminiApiKey): SearchModel | undefined {
-        if (!this.fallbackModelName) return undefined;
-        return this.getOrCreate(this.paidApiKey, this.fallbackModelName);
+    protected create(apiKey: string, modelName: string): SearchModel {
+        return createSearchModel(apiKey, modelName, this.options);
     }
 }

@@ -38,6 +38,7 @@ import { GeneralModelProvider } from "./infrastructure/llm/models/generalModel.t
 import { SearchModelProvider } from "./infrastructure/llm/models/searchModel.ts";
 import { TriageModelProvider } from "./infrastructure/llm/models/triageModel.ts";
 import { RoundRobinFreeKeyProvider } from "./infrastructure/llm/RoundRobinFreeKeyProvider.ts";
+import { SinglePaidKeyProvider } from "./infrastructure/llm/SinglePaidKeyProvider.ts";
 import { createGetVideoCaptionsTool } from "./infrastructure/llm/tools/getVideoCaptionsTool.ts";
 import { createGetWebsiteTool } from "./infrastructure/llm/tools/getWebsiteTool.ts";
 import { createLogger } from "./infrastructure/logging/logger.ts";
@@ -93,6 +94,7 @@ const getVideoCaptionsTool = await createGetVideoCaptionsTool(
 
 // Lazy model providers — one ChatGoogle client per (provider, apiKey) pair
 const freeKeyProvider = new RoundRobinFreeKeyProvider(freeKeys);
+const paidKeyProvider = new SinglePaidKeyProvider(paidKey);
 const triageProvider = new TriageModelProvider({
     modelName: TRIAGE_MODEL_NAME,
     fallbackModelName: TRIAGE_FALLBACK_MODEL,
@@ -106,7 +108,7 @@ const generalProvider = new GeneralModelProvider({
     fallbackModelName: GENERAL_FALLBACK_MODEL,
     includeLLMThoughts: config.includeLLMThoughts,
 });
-const searchProvider = new SearchModelProvider(paidKey.apiKey, {
+const searchProvider = new SearchModelProvider({
     modelName: SEARCH_MODEL_NAME,
     fallbackModelName: SEARCH_FALLBACK_MODEL,
     includeLLMThoughts: config.includeLLMThoughts,
@@ -132,7 +134,7 @@ const agentOrchestrator = new AgentOrchestrator(
     generalProvider,
     searchProvider,
     freeKeyProvider,
-    paidKey,
+    paidKeyProvider,
     getWebsiteTool,
     getVideoCaptionsTool,
     logger.child({ module: "agent-orchestrator" }),

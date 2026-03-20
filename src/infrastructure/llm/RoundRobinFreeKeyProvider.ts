@@ -1,9 +1,9 @@
-import type { IFreeKeyProvider } from "../../application/ports/IFreeKeyProvider.ts";
+import type { IRoundRobinKeyProvider } from "../../application/ports/IRoundRobinKeyProvider.ts";
 import { ConfigError } from "../../domain/errors/AppError.ts";
 import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
 
 /**
- * Round-robin implementation of {@link IFreeKeyProvider}.
+ * Round-robin implementation of {@link IRoundRobinKeyProvider}.
  *
  * Maintains a cursor over the free API keys array. The cursor is shared across
  * concurrent requests — advancing it on a 429 in one request will cause subsequent
@@ -13,7 +13,7 @@ import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
  * {@link nextKey} on each subsequent attempt until all keys have been tried.
  * {@link keyCount} bounds the retry loop.
  */
-export class RoundRobinFreeKeyProvider implements IFreeKeyProvider {
+export class RoundRobinFreeKeyProvider implements IRoundRobinKeyProvider {
     private currentIndex = 0;
 
     constructor(private readonly keys: GeminiApiKey[]) {
