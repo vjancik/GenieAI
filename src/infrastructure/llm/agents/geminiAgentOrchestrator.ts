@@ -10,7 +10,7 @@ import type { GeminiFileRefreshService } from "../../../application/services/Gem
 import type { OnStatusUpdate } from "../../../application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../../application/types/AgentStatus.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
-import { AllFreeKeysExhaustedError, AppError } from "../../../domain/errors/AppError.ts";
+import { AllFreeKeysExhaustedError, AppError, PaidKeyExhaustedError } from "../../../domain/errors/AppError.ts";
 import type { GeminiApiKey } from "../../../domain/message/GeminiApiKey.ts";
 import type { DiscordMessage } from "../../../domain/message/Message.ts";
 import { MessageIntent } from "../../../domain/message/MessageIntent.ts";
@@ -21,7 +21,6 @@ import { buildGeneralSystemPrompt, type GeneralModel } from "../models/generalMo
 import { SEARCH_SYSTEM_PROMPT, type SearchModel } from "../models/searchModel.ts";
 import type { TriageModel } from "../models/triageModel.ts";
 import { TRIAGE_SYSTEM_PROMPT } from "../models/triageModel.ts";
-import { SinglePaidKeyProvider } from "../SinglePaidKeyProvider.ts";
 import type { GetVideoCaptionsTool } from "../tools/getVideoCaptionsTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
 import { filterHistoryForInlineSize } from "../utils/inlineAttachmentFilter.ts";
@@ -246,39 +245,28 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     }
 
     /**
-     * Invokes a model with free-key rotation on HTTP 429 (RESOURCE_EXHAUSTED).
+     * Shared invocation core: runs the model against `keyProvider` with file refresh,
+     * inline filtering, 503/timeout fallback, and 429 rotation.
      *
-     * Iterates over free keys via {@link IRoundRobinKeyProvider}:
      * - Attempt 0 uses the current key (shared cursor, no mutation).
-     * - Attempt 1+ calls nextKey(), advancing the shared cursor (state is shared across
-     *   concurrent requests — intentional for approximate load distribution).
+     * - Attempt 1+ calls nextKey(), advancing the shared cursor.
      *
-     * Before each attempt, Gemini file uploads in `messages` are refreshed for the
-     * current key via {@link GeminiFileRefreshService}. This ensures that files
-     * uploaded with key A are re-uploaded for key B when rotating on 429.
-     *
-     * Inline attachment size filtering is applied after the refresh, on the refreshed copy.
-     *
-     * On 503 or timeout errors, if `getFallbackModel` is provided, a single fallback attempt
-     * is made with the same key and the same timeout before propagating the error. 429 errors
-     * bypass the fallback and are handled exclusively by key rotation.
-     *
-     * @throws {@link AllFreeKeysExhaustedError} if all keys return 429
+     * @throws {@link AllFreeKeysExhaustedError} if `isPaid` is false and all keys return 429
+     * @throws {@link PaidKeyExhaustedError} if `isPaid` is true and the key returns 429
      * @throws The original error immediately for non-429 / non-fallback failures
      */
     private async invokeWithKeyRotation<T extends BaseMessage>(
         getModel: (key: GeminiApiKey) => InvokableModel<T>,
         getFallbackModel: ((key: GeminiApiKey) => InvokableModel<T> | undefined) | undefined,
         messages: BaseMessage[],
-        timeoutMs?: number,
-        // When provided, overrides this.freeKeyProvider — used by _invokePaidModelWithMiddleware
-        // to supply a SinglePaidKeyProvider without changing the call sites for free-key nodes.
-        keyProvider: IRoundRobinKeyProvider = this.freeKeyProvider,
+        timeoutMs: number | undefined,
+        keyProvider: IRoundRobinKeyProvider,
+        isPaid: boolean,
     ): Promise<{ result: T; usedFallback: boolean }> {
         return Sentry.startSpan(
             {
-                name: "Invoke model with free key rotation",
-                op: "llm.invoke.free_key",
+                name: "Invoke model with key rotation",
+                op: "llm.invoke",
             },
             async (span) => {
                 let lastErr: unknown;
@@ -316,7 +304,9 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                         if (is429Error(err)) {
                             this.logger.warn(
                                 { attempt, apiKeyId: key.id },
-                                "Free API key rate-limited (429); trying next key",
+                                isPaid
+                                    ? "Paid API key rate-limited (429)"
+                                    : "Free API key rate-limited (429); trying next key",
                             );
                             lastErr = err;
                             // Only advance the cursor if no concurrent request has already
@@ -355,31 +345,41 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     }
                 }
 
-                throw new AllFreeKeysExhaustedError(lastErr);
+                throw isPaid ? new PaidKeyExhaustedError(lastErr) : new AllFreeKeysExhaustedError(lastErr);
             },
         );
     }
 
     /**
-     * Invokes a model using a single paid API key with the same middleware as
-     * {@link invokeWithKeyRotation} (file refresh, inline filtering, fallback on 503/timeout).
+     * Invokes a model using the shared free-key pool with round-robin 429 rotation.
      *
-     * Wraps the paid key in a {@link SinglePaidKeyProvider} so it can be passed directly
-     * to {@link invokeWithKeyRotation}. There is no rotation — if the paid key returns
-     * 429, the error propagates as {@link AllFreeKeysExhaustedError}.
-     *
-     * To switch searchNode back to the paid key path, replace the
-     * {@link invokeWithKeyRotation} call with this method and pass
-     * `this.searchProvider.get` / `this.searchProvider.getFallback`.
+     * @throws {@link AllFreeKeysExhaustedError} if all free keys are rate-limited
      */
-    // biome-ignore lint/correctness/noUnusedPrivateClassMembers: temporarily unused
-    private async _invokePaidModelWithMiddleware<T extends BaseMessage>(
+    private invokeWithFreeKeyRotation<T extends BaseMessage>(
         getModel: (key: GeminiApiKey) => InvokableModel<T>,
         getFallbackModel: ((key: GeminiApiKey) => InvokableModel<T> | undefined) | undefined,
         messages: BaseMessage[],
         timeoutMs?: number,
     ): Promise<{ result: T; usedFallback: boolean }> {
-        return this.invokeWithKeyRotation(getModel, getFallbackModel, messages, timeoutMs, this.paidKeyProvider);
+        return this.invokeWithKeyRotation(getModel, getFallbackModel, messages, timeoutMs, this.freeKeyProvider, false);
+    }
+
+    /**
+     * Invokes a model using the single paid API key.
+     *
+     * To switch a node to this path, replace its {@link invokeWithFreeKeyRotation} call
+     * with this method and pass the relevant provider's `get` / `getFallback` bindings.
+     *
+     * @throws {@link PaidKeyExhaustedError} if the paid key is rate-limited
+     */
+    // biome-ignore lint/correctness/noUnusedPrivateClassMembers: temporarily unused
+    private _invokeWithPaidKey<T extends BaseMessage>(
+        getModel: (key: GeminiApiKey) => InvokableModel<T>,
+        getFallbackModel: ((key: GeminiApiKey) => InvokableModel<T> | undefined) | undefined,
+        messages: BaseMessage[],
+        timeoutMs?: number,
+    ): Promise<{ result: T; usedFallback: boolean }> {
+        return this.invokeWithKeyRotation(getModel, getFallbackModel, messages, timeoutMs, this.paidKeyProvider, true);
     }
 
     /**
@@ -470,7 +470,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 secondToLastHumanIdx === -1 ? state.messages : state.messages.slice(secondToLastHumanIdx);
             const messages: BaseMessage[] = [new SystemMessage(TRIAGE_SYSTEM_PROMPT), ...triageWindow];
 
-            const { result: triageResponse } = await this.invokeWithKeyRotation(
+            const { result: triageResponse } = await this.invokeWithFreeKeyRotation(
                 this.triageProvider.get.bind(this.triageProvider),
                 this.triageProvider.getFallback.bind(this.triageProvider),
                 messages,
@@ -675,7 +675,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 ...state.messages,
             ];
 
-            const { result: response, usedFallback } = await this.invokeWithKeyRotation(
+            const { result: response, usedFallback } = await this.invokeWithFreeKeyRotation(
                 this.generalProvider.get.bind(this.generalProvider),
                 this.generalProvider.getFallback.bind(this.generalProvider),
                 invokeMessages,
@@ -698,7 +698,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 type: AgentStatusType.SEARCHING,
             });
             const messages: BaseMessage[] = [new SystemMessage(SEARCH_SYSTEM_PROMPT), ...state.messages];
-            const { result: response, usedFallback } = await this.invokeWithKeyRotation(
+            const { result: response, usedFallback } = await this.invokeWithFreeKeyRotation(
                 this.searchProvider.get.bind(this.searchProvider),
                 this.searchProvider.getFallback.bind(this.searchProvider),
                 messages,

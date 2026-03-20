@@ -47,3 +47,10 @@ export class AllFreeKeysExhaustedError extends AppError {
         super("ALL_FREE_KEYS_EXHAUSTED", "All free Gemini API keys are rate-limited", cause);
     }
 }
+
+/** Thrown when the paid Gemini API key responds with HTTP 429. */
+export class PaidKeyExhaustedError extends AppError {
+    constructor(cause?: unknown) {
+        super("PAID_KEY_EXHAUSTED", "The paid Gemini API key is rate-limited", cause);
+    }
+}
