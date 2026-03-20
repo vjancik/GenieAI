@@ -1039,7 +1039,7 @@ export class DiscordGateway {
 
                     // handle() never throws — errors are caught internally and returned as a response
                     const { response, newMessages, isFailure, isRetryable, usedFallback } =
-                        await this.handleDiscordMessageUseCase.handle({
+                        await this.handleDiscordMessageUseCase.execute({
                             discordMessageId: message.id,
                             referencedMessageId: message.reference?.messageId ?? null,
                             channelId: message.channelId,

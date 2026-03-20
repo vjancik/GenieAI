@@ -1,16 +1,39 @@
 /**
  * Base class for all application-specific errors.
  * Extends the native Error with a structured `code` field for programmatic error handling.
+ *
+ * @param displayMessage - Optional user-facing message to surface in the UI instead of the
+ *   generic fallback. Only AppError subclasses are trusted for display (see extractDisplayMessage).
  */
 export class AppError extends Error {
     constructor(
         public readonly code: string,
         message: string,
         public override readonly cause?: unknown,
+        public readonly displayMessage?: string,
     ) {
         super(message);
         this.name = this.constructor.name;
     }
+}
+
+/**
+ * Walks the `cause` chain of an error looking for the first {@link AppError} that carries a
+ * `displayMessage`. Only AppError instances are trusted — this guards against accidentally
+ * surfacing display strings from third-party errors that happen to have a `displayMessage`
+ * property.
+ *
+ * Returns `null` if no such error is found.
+ */
+export function extractDisplayMessage(err: unknown): string | null {
+    let current: unknown = err;
+    while (current instanceof Error) {
+        if (current instanceof AppError && current.displayMessage !== undefined) {
+            return current.displayMessage;
+        }
+        current = current.cause;
+    }
+    return null;
 }
 
 /** Thrown when a required environment variable is missing or misconfigured. */
@@ -44,13 +67,23 @@ export class DiscordError extends AppError {
 /** Thrown when all free-tier Gemini API keys have responded with HTTP 429. */
 export class AllFreeKeysExhaustedError extends AppError {
     constructor(cause?: unknown) {
-        super("ALL_FREE_KEYS_EXHAUSTED", "All free Gemini API keys are rate-limited", cause);
+        super(
+            "ALL_FREE_KEYS_EXHAUSTED",
+            "All free Gemini API keys are rate-limited",
+            cause,
+            "All free API keys are currently exhausted, please try again later.",
+        );
     }
 }
 
 /** Thrown when the paid Gemini API key responds with HTTP 429. */
 export class PaidKeyExhaustedError extends AppError {
     constructor(cause?: unknown) {
-        super("PAID_KEY_EXHAUSTED", "The paid Gemini API key is rate-limited", cause);
+        super(
+            "PAID_KEY_EXHAUSTED",
+            "The paid Gemini API key is rate-limited",
+            cause,
+            "The paid API key has reached spending quota and is being rate limited.",
+        );
     }
 }

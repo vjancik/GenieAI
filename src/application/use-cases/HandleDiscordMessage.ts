@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { AIMessage, type BaseMessage, HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import { randomUUIDv7 } from "bun";
+import { extractDisplayMessage } from "../../domain/errors/AppError.ts";
 import type { GeminiFile } from "../../domain/message/GeminiFile.ts";
 import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
 import type { DiscordMessage } from "../../domain/message/Message.ts";
@@ -98,7 +99,7 @@ export class HandleDiscordMessageUseCase {
      * @returns The AI-generated response string and the new LangChain messages generated,
      *          or an error string if attachments exceed the size limit (inline mode only)
      */
-    async handle(params: {
+    async execute(params: {
         discordMessageId: string;
         referencedMessageId: string | null;
         channelId: string;
@@ -251,8 +252,9 @@ export class HandleDiscordMessageUseCase {
         } catch (err) {
             this.logger.error({ err, discordMessageId: params.discordMessageId }, "Failed to process message");
             Sentry.captureException(err);
+            const displayMessage = extractDisplayMessage(err);
             return {
-                response: "Sorry, I encountered an error processing your request.",
+                response: displayMessage ?? "Sorry, I encountered an error processing your request.",
                 newMessages: [],
                 isFailure: true,
                 isRetryable: true,

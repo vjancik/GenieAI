@@ -1,5 +1,6 @@
 import type { BaseMessage, HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
+import { extractDisplayMessage } from "../../domain/errors/AppError.ts";
 import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
 import type { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { IAgentOrchestrator } from "../ports/IAgentOrchestrator.ts";
@@ -151,8 +152,9 @@ export class RetryDiscordMessageUseCase {
                 "Retry orchestration failed",
             );
             Sentry.captureException(err);
+            const displayMessage = extractDisplayMessage(err);
             return {
-                response: "Sorry, I encountered an error processing your request.",
+                response: displayMessage ?? "Sorry, I encountered an error processing your request.",
                 newMessages: [],
                 isFailure: true,
                 isRetryable: true,

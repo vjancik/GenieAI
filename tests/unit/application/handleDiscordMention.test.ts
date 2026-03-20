@@ -109,7 +109,7 @@ describe("HandleDiscordMention.handle", () => {
             testConfig,
         );
 
-        const result = await handler.handle({
+        const result = await handler.execute({
             discordMessageId: "user-msg-1",
             referencedMessageId: null,
             channelId: "ch-1",
@@ -135,7 +135,7 @@ describe("HandleDiscordMention.handle", () => {
             testConfig,
         );
 
-        await handler.handle({
+        await handler.execute({
             discordMessageId: "user-msg-1",
             referencedMessageId: null,
             channelId: "ch-1",
@@ -160,7 +160,7 @@ describe("HandleDiscordMention.handle", () => {
             testConfig,
         );
 
-        await handler.handle({
+        await handler.execute({
             discordMessageId: "user-msg-2",
             referencedMessageId: "discord-123",
             channelId: "ch-1",
@@ -189,7 +189,7 @@ describe("HandleDiscordMention.handle", () => {
             testConfig,
         );
 
-        await handler.handle({
+        await handler.execute({
             discordMessageId: "user-msg-2",
             referencedMessageId: "discord-123",
             channelId: "ch-1",
@@ -222,7 +222,7 @@ describe("HandleDiscordMention.handle", () => {
 
         const onStatusUpdate: OnStatusUpdate = mock(() => {});
 
-        await handler.handle({
+        await handler.execute({
             discordMessageId: "user-msg-1",
             referencedMessageId: null,
             channelId: "ch-1",
@@ -251,7 +251,7 @@ describe("HandleDiscordMention.handle", () => {
             testConfig,
         );
 
-        await handler.handle({
+        await handler.execute({
             discordMessageId: "user-msg-1",
             referencedMessageId: null,
             channelId: "ch-1",
@@ -279,7 +279,7 @@ describe("HandleDiscordMention.handle", () => {
             testConfig,
         );
 
-        await handler.handle({
+        await handler.execute({
             discordMessageId: "user-msg-1",
             referencedMessageId: "prev-123",
             channelId: "ch-1",
@@ -322,7 +322,7 @@ describe("HandleDiscordMention.handle", () => {
             }, // 1 MB limit
         );
 
-        const result = await handler.handle({
+        const result = await handler.execute({
             discordMessageId: "user-msg-1",
             referencedMessageId: null,
             channelId: "ch-1",
@@ -356,7 +356,7 @@ describe("HandleDiscordMention.handle", () => {
             file: { ...testConfig.file, agent: { ...testConfig.file.agent, uploadAttachmentMode: "inline" as const } },
         });
 
-        await handler.handle({
+        await handler.execute({
             discordMessageId: "user-msg-1",
             referencedMessageId: null,
             channelId: "ch-1",
@@ -401,7 +401,7 @@ describe("HandleDiscordMention.handle", () => {
             chatMessageService,
         );
 
-        await handler.handle({
+        await handler.execute({
             discordMessageId: "user-msg-1",
             referencedMessageId: "ref-123",
             channelId: "ch-1",
@@ -434,7 +434,7 @@ describe("HandleDiscordMention.handle", () => {
             chatMessageService,
         );
 
-        await handler.handle({
+        await handler.execute({
             discordMessageId: "user-msg-1",
             referencedMessageId: "discord-123",
             channelId: "ch-1",
@@ -463,7 +463,7 @@ describe("HandleDiscordMention.handle", () => {
             chatMessageService,
         );
 
-        await handler.handle({
+        await handler.execute({
             discordMessageId: "user-msg-1",
             referencedMessageId: null,
             channelId: "ch-1",
@@ -530,7 +530,7 @@ describe("HandleDiscordMention.handle", () => {
             chatMessageService,
         );
 
-        await handler.handle({
+        await handler.execute({
             discordMessageId: "user-msg-1",
             referencedMessageId: "snap-new",
             channelId: "ch-1",
@@ -567,7 +567,7 @@ describe("HandleDiscordMention.handle", () => {
             chatMessageService,
         );
 
-        const result = await handler.handle({
+        const result = await handler.execute({
             discordMessageId: "user-msg-1",
             referencedMessageId: "ref-123",
             channelId: "ch-1",
