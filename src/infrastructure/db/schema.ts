@@ -1,6 +1,23 @@
 import { sql } from "drizzle-orm";
-import { boolean, index, integer, json, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import {
+    boolean,
+    index,
+    integer,
+    json,
+    pgEnum,
+    pgTable,
+    text,
+    timestamp,
+    uniqueIndex,
+    uuid,
+} from "drizzle-orm/pg-core";
 import type { DiscordMessage } from "../../domain/message/Message.ts";
+
+/**
+ * Postgres enum for the interaction pathway that produced a bot response.
+ * Matches {@link MessageInteractionType} in the domain layer.
+ */
+export const messageInteractionTypeEnum = pgEnum("message_interaction_type", ["message_create", "summary_command"]);
 
 /**
  * Drizzle ORM schema for the messages table.
@@ -48,6 +65,17 @@ export const messages = pgTable(
          * Used to gate who may click the Retry button on a successful fallback response.
          */
         usedFallback: boolean("used_fallback"),
+        /**
+         * The interaction pathway that produced this bot response.
+         * NULL on human messages and legacy rows predating this column.
+         */
+        interactionType: messageInteractionTypeEnum("interaction_type"),
+        /**
+         * Discord snowflake of the interaction invoker, when different from the message author.
+         * Only set for context menu commands invoked on someone else's message.
+         * NULL on human messages, message_create rows, and legacy rows.
+         */
+        interactionAuthorDiscordId: text("interaction_author_discord_id"),
         createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => [

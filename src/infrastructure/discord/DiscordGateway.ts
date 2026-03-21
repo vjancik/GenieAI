@@ -10,6 +10,8 @@ import {
     ComponentType,
     Events,
     type Message,
+    type MessageContextMenuCommandInteraction,
+    MessageFlags,
     type TextBasedChannel,
     type TopLevelComponent,
 } from "discord.js";
@@ -23,12 +25,13 @@ import { AgentStatusType, assertNever } from "../../application/types/AgentStatu
 import type { Logger } from "../../application/types/Logger.ts";
 import type { GetNextPageUseCase } from "../../application/use-cases/GetNextPage.ts";
 import type { HandleDiscordMessageUseCase } from "../../application/use-cases/HandleDiscordMessage.ts";
-import type { RetryDiscordMessageUseCase } from "../../application/use-cases/RetryDiscordMessage.ts";
 import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
+import type { MessageInteractionType } from "../../domain/message/Message.ts";
 import { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { IMessagePageRepository } from "../../domain/message/MessagePage.ts";
 import { shortenRedirectUrl } from "../http/redirectUrl.ts";
 import type { DiscordClient } from "./DiscordClient.ts";
+import { SUMMARIZE_COMMAND_NAME } from "./DiscordCommandRegistry.ts";
 import { InteractionLock } from "./InteractionLock.ts";
 import { buildSnapshot, extractAttachments } from "./messageExtractors.ts";
 import { RateLimiter } from "./RateLimiter.ts";
@@ -221,7 +224,6 @@ export class DiscordGateway {
         private readonly statusUpdater: StatusMessageUpdater,
         private readonly messagePageRepo: IMessagePageRepository,
         private readonly getNextPageUseCase: GetNextPageUseCase,
-        private readonly retryDiscordMessageUseCase: RetryDiscordMessageUseCase,
         private readonly messageRepo: IMessageRepository,
         config: Pick<FileConfig, "discord">,
     ) {
@@ -236,13 +238,21 @@ export class DiscordGateway {
         });
 
         this.client.on(Events.InteractionCreate, (interaction) => {
-            if (!interaction.isButton()) return;
-            if (this.shutdownPending) {
+            if (this.shutdownPending && !interaction.isAutocomplete()) {
                 void interaction
-                    .reply({ content: "*A restart is pending, try again later.*", ephemeral: true })
+                    .reply({ content: "*A restart is pending, try again later.*", flags: MessageFlags.Ephemeral })
                     .catch(() => {});
                 return;
             }
+
+            if (interaction.isMessageContextMenuCommand()) {
+                if (interaction.commandName === SUMMARIZE_COMMAND_NAME) {
+                    this.trackHandler(this.handleSummarizeContextMenu(interaction));
+                }
+                return;
+            }
+
+            if (!interaction.isButton()) return;
             if (interaction.customId === RETRY_BUTTON_ID) {
                 this.trackHandler(this.handleRetryButton(interaction));
             } else if (interaction.customId === NEXT_PAGE_BUTTON_ID) {
@@ -331,6 +341,12 @@ export class DiscordGateway {
         retriesLeft?: number | null;
         thinkingMessagePromise: ReturnType<Message["reply"]>;
         span: Span;
+        /** Whether to ping the author of replyTarget. Defaults to true. */
+        pingUser?: boolean;
+        /** Text to prepend to the response content (e.g. a user mention). */
+        replyPrefix?: string;
+        interactionType?: MessageInteractionType;
+        interactionAuthorDiscordId?: string;
     }): Promise<void> {
         const {
             replyTarget,
@@ -342,6 +358,10 @@ export class DiscordGateway {
             retriesLeft,
             thinkingMessagePromise,
             span,
+            pingUser = true,
+            replyPrefix,
+            interactionType,
+            interactionAuthorDiscordId,
         } = params;
 
         // Cancel any pending status edit and delete the thinking placeholder before sending
@@ -416,8 +436,17 @@ export class DiscordGateway {
             const components: ActionRowBuilder<ButtonBuilder>[] = [firstPageRow];
 
             const botReply = await replyTarget.reply({
-                content: page1Content + fallbackFooter,
+                content: (replyPrefix ? `${replyPrefix} ` : "") + page1Content + fallbackFooter,
                 components,
+                // repliedUser: false suppresses the reply ping but also causes Discord to
+                // ignore all content mentions unless explicitly listed in users[].
+                // Include the invoker so the <@id> prefix still triggers a notification.
+                ...(!pingUser && {
+                    allowedMentions: {
+                        repliedUser: false,
+                        ...(interactionAuthorDiscordId && { users: [interactionAuthorDiscordId] }),
+                    },
+                }),
             });
 
             span.setAttributes({
@@ -435,6 +464,8 @@ export class DiscordGateway {
                 newMessages,
                 retriesLeft: isRetryable ? effectiveRetriesLeft : null,
                 usedFallback: usedFallback ?? false,
+                interactionType: interactionType ?? null,
+                interactionAuthorDiscordId: interactionAuthorDiscordId ?? null,
             });
             // messageId = UUID of the saved messages row for this page; firstPageMessageId = same for page 1
             await this.messagePageRepo.save({
@@ -462,8 +493,14 @@ export class DiscordGateway {
                     : null;
 
             const botReply = await replyTarget.reply({
-                content: combined ?? responseWithFooter,
+                content: (replyPrefix ? `${replyPrefix} ` : "") + (combined ?? responseWithFooter),
                 ...(retryRow && { components: [retryRow] }),
+                ...(!pingUser && {
+                    allowedMentions: {
+                        repliedUser: false,
+                        ...(interactionAuthorDiscordId && { users: [interactionAuthorDiscordId] }),
+                    },
+                }),
             });
 
             span.setAttributes({ "discord.paginated": false });
@@ -477,6 +514,8 @@ export class DiscordGateway {
                 newMessages,
                 retriesLeft: isRetryable ? effectiveRetriesLeft : null,
                 usedFallback: usedFallback ?? false,
+                interactionType: interactionType ?? null,
+                interactionAuthorDiscordId: interactionAuthorDiscordId ?? null,
             });
 
             // Sources didn't fit in the main message — send as a separate follow-up reply
@@ -567,6 +606,8 @@ export class DiscordGateway {
                 newMessages: [],
                 retriesLeft: null,
                 usedFallback: false,
+                interactionType: null,
+                interactionAuthorDiscordId: null,
             });
         } catch (err) {
             this.logger.warn({ err }, "Failed to send grounding sources reply");
@@ -604,7 +645,7 @@ export class DiscordGateway {
             await Promise.allSettled([
                 interaction.reply({
                     content: "Original message is missing, retry is no longer possible.",
-                    ephemeral: true,
+                    flags: MessageFlags.Ephemeral,
                 }),
                 interaction.message.edit({
                     components: withoutButton(interaction.message, RETRY_BUTTON_ID),
@@ -626,12 +667,10 @@ export class DiscordGateway {
                 },
             },
             async (span) => {
-                const intent = parseMessageIntent(originalMessage.content);
-
                 // Fetch the tail of the reply chain starting from the failed bot reply.
                 // With limit=2 we get at most [humanMsg, botReply] in chronological order.
-                // The bot reply record (last) carries retriesLeft and usedFallback; the human
-                // record (second-to-last) confirms whether the human message was saved
+                // The bot reply record (last) carries retriesLeft, usedFallback, and interactionType;
+                // the human record (second-to-last) confirms whether the human message was saved
                 // (Scenario A vs B) and provides the original author ID for the eligibility check.
                 const guildId = originalMessage.guildId ?? DM_GUILD_TOKEN;
                 const chain = await this.messageRepo.fetchChain({
@@ -651,6 +690,23 @@ export class DiscordGateway {
                 const storedRetriesLeft = botRecord?.retriesLeft ?? null;
                 const retriesLeft = storedRetriesLeft !== null ? storedRetriesLeft - 1 : null;
 
+                // Reconstruct intent and reply options from the stored interaction type.
+                // For summary_command the original message has no command prefix, so parseMessageIntent
+                // would return UNKNOWN — we must use the DB value instead.
+                const isSummaryCommand = botRecord?.interactionType === "summary_command";
+                const intent = isSummaryCommand ? MessageIntent.SUMMARY : parseMessageIntent(originalMessage.content);
+
+                // Mirror the self-reply logic from handleSummarizeContextMenu: if the invoker
+                // is the same user as the message author, Discord's reply mechanism already pings
+                // them and allowedMentions.repliedUser suppression would strip an explicit prefix.
+                const isSelfReply =
+                    isSummaryCommand && botRecord?.interactionAuthorDiscordId === humanRecord?.discordAuthorId;
+                const pingUser = !isSummaryCommand || isSelfReply;
+                const replyPrefix =
+                    isSummaryCommand && !isSelfReply && botRecord?.interactionAuthorDiscordId
+                        ? `<@${botRecord.interactionAuthorDiscordId}>`
+                        : undefined;
+
                 // Gate: when the response was a successful fallback (usedFallback=true, isFailure=false),
                 // only the original prompter may retry — it's their call whether the response is
                 // unsatisfactory. Failed responses are open to anyone since retrying benefits all.
@@ -659,7 +715,7 @@ export class DiscordGateway {
                     if (interaction.user.id !== originalAuthorId) {
                         await interaction.followUp({
                             content: "*This message was generated for someone else and can only be retried by them.*",
-                            ephemeral: true,
+                            flags: MessageFlags.Ephemeral,
                         });
                         return;
                     }
@@ -703,52 +759,24 @@ export class DiscordGateway {
 
                     if (humanRecord?.role === "human") {
                         // --- Scenario A: human message exists, re-run orchestration only ---
+                        // reuseHumanMessage skips re-building/re-persisting the human message row
+                        // and reconstructs the full conversation chain from DB instead.
                         span.setAttribute("discord.retry_scenario", "A");
-
-                        // Send thinking placeholder — awaited so we have the message before
-                        // the first status update can arrive.
-                        let thinkingMessagePromise = originalMessage.reply({
-                            content: `*Retrying since <t:${Math.round(Date.now() / 1000)}:R>*`,
-                            allowedMentions: { repliedUser: false },
-                        });
-
-                        // Wrap thinkingMessage in a promise so onStatusUpdate can share the
-                        // same lazy-resolution pattern used in handleMessageCreate.
-                        const onStatusUpdate: OnStatusUpdate = (update) => {
-                            thinkingMessagePromise = thinkingMessagePromise.then((msg) => {
-                                this.statusUpdater.scheduleUpdate(
-                                    originalMessage.channelId,
-                                    msg.id,
-                                    async (content) =>
-                                        void (await msg.edit({
-                                            content: `*${content} <t:${Math.round(Date.now() / 1000)}:R>*`,
-                                            allowedMentions: { repliedUser: false },
-                                        })),
-                                    statusUpdateContent(update),
-                                );
-                                return msg;
-                            });
-                        };
-
-                        const { response, newMessages, isFailure, isRetryable, usedFallback } =
-                            await this.retryDiscordMessageUseCase.execute({
-                                humanDiscordMessageId: originalMessage.id,
-                                channelId: originalMessage.channelId,
-                                guildId,
-                                intent,
-                                onStatusUpdate,
-                            });
-
-                        await this.sendBotReply({
-                            replyTarget: originalMessage,
-                            response,
-                            newMessages,
-                            isFailure,
-                            isRetryable,
-                            usedFallback,
+                        const botUserId = this.client.user?.id;
+                        if (!botUserId) throw new Error("Missing bot ID. This shouldn't happen.");
+                        await this.invokeAgentWithMessage({
+                            message: originalMessage,
+                            botUserId,
+                            userContent: null,
+                            attachments: null,
+                            intent,
                             retriesLeft,
-                            thinkingMessagePromise,
-                            span,
+                            pingUser,
+                            replyPrefix,
+                            interactionType: botRecord?.interactionType ?? "message_create",
+                            interactionAuthorDiscordId: botRecord?.interactionAuthorDiscordId ?? undefined,
+                            thinkingText: "Retrying",
+                            reuseHumanMessage: true,
                         });
                     } else {
                         // --- Scenario B: human message not in DB, run full pipeline ---
@@ -860,6 +888,8 @@ export class DiscordGateway {
                         newMessages: [],
                         retriesLeft: null,
                         usedFallback: false,
+                        interactionType: null,
+                        interactionAuthorDiscordId: null,
                     });
 
                     await Promise.allSettled([
@@ -910,12 +940,65 @@ export class DiscordGateway {
         }
     }
 
+    /**
+     * Handles the Summarize message context menu command.
+     *
+     * Fetches the target message, acknowledges the interaction ephemerally, then
+     * invokes the agent with SUMMARY intent. The bot reply is sent as a reply to the
+     * target message and prefixed with a mention of the invoker.
+     */
+    private async handleSummarizeContextMenu(interaction: MessageContextMenuCommandInteraction): Promise<void> {
+        const botUserId = this.client.user?.id;
+        if (!botUserId) throw new Error("Missing bot ID. This shouldn't happen.");
+
+        const targetMessage = interaction.targetMessage;
+        const attachments = extractAttachments(targetMessage);
+        const botRoleId = targetMessage.guild?.members.me?.roles.botRole?.id ?? null;
+        const userContent = extractUserContent(targetMessage, botUserId, botRoleId);
+
+        // ACK the interaction with a visible ephemeral reply so Discord doesn't show
+        // "interaction failed". Deleted after 5 seconds — the thinking placeholder on
+        // the target message is the real visual feedback.
+        await interaction.reply({ content: "*Generating summary...*", flags: MessageFlags.Ephemeral });
+        setTimeout(() => void interaction.deleteReply().catch(() => {}), 5_000);
+
+        // When the invoker is also the message author, replying to their own message already
+        // pings them via Discord's reply mechanism — no explicit mention prefix needed, and
+        // allowedMentions.repliedUser suppression would strip it anyway.
+        const isSelfReply = interaction.user.id === targetMessage.author.id;
+        const pingUser = isSelfReply;
+        const replyPrefix = isSelfReply ? undefined : `<@${interaction.user.id}>`;
+
+        // If this message was already saved (e.g. summarized before), skip re-inserting
+        // the human message row — reuse the existing DB record instead.
+        const reuseHumanMessage = await this.messageRepo.existsByDiscordMessageId({
+            discordMessageId: targetMessage.id,
+            channelId: targetMessage.channelId,
+            guildId: targetMessage.guildId ?? DM_GUILD_TOKEN,
+        });
+
+        await this.invokeAgentWithMessage({
+            message: targetMessage,
+            botUserId,
+            userContent,
+            attachments,
+            intent: MessageIntent.SUMMARY,
+            pingUser,
+            replyPrefix,
+            interactionType: "summary_command",
+            interactionAuthorDiscordId: interaction.user.id,
+            reuseHumanMessage,
+            fetchHistory: false,
+            ephemeralInstructionMessage: "Summarize this:",
+        });
+    }
+
     private async handleMessageCreate(message: Message, retriesLeft?: number | null): Promise<void> {
         // Ignore all bot messages (including our own) to prevent feedback loops
         if (message.author.bot) return;
 
         const botUserId = this.client.user?.id;
-        if (!botUserId) return;
+        if (!botUserId) throw new Error("Missing bot ID. This shouldn't happen.");
 
         // botRole is the managed role Discord auto-creates for the bot in each guild; null in DMs
         const botRoleId = message.guild?.members.me?.roles.botRole?.id ?? null;
@@ -936,6 +1019,8 @@ export class DiscordGateway {
                 newMessages: [],
                 retriesLeft: null,
                 usedFallback: false,
+                interactionType: null,
+                interactionAuthorDiscordId: null,
             });
             return;
         }
@@ -954,6 +1039,8 @@ export class DiscordGateway {
                 newMessages: [],
                 retriesLeft: null,
                 usedFallback: false,
+                interactionType: null,
+                interactionAuthorDiscordId: null,
             });
             return;
         }
@@ -978,9 +1065,58 @@ export class DiscordGateway {
             "Processing bot message",
         );
 
-        // Declared outside the span so the catch handler can access it even if the
-        // span callback threw before the thinking message was sent.
-        let thinkingMessagePromise: ReturnType<Message["reply"]>;
+        await this.invokeAgentWithMessage({
+            message,
+            botUserId,
+            userContent: effectiveUserContent,
+            attachments,
+            intent,
+            retriesLeft,
+            interactionType: "message_create",
+        });
+    }
+
+    /**
+     * Core agent invocation shared by {@link handleMessageCreate} and
+     * {@link handleSummarizeContextMenu}. Sends a thinking placeholder, runs the
+     * use case, and calls {@link sendBotReply} with the result.
+     */
+    private async invokeAgentWithMessage(params: {
+        /** The Discord message to reply to (thinking placeholder and bot reply are sent as replies to this). */
+        message: Message;
+        botUserId: string;
+        userContent: string | null;
+        attachments: DiscordAttachmentInfo[] | null;
+        intent: MessageIntent;
+        retriesLeft?: number | null;
+        /** Whether to ping the author of message in the bot reply. Defaults to true. */
+        pingUser?: boolean;
+        /** Text to prepend to the bot reply content (e.g. a user mention). */
+        replyPrefix?: string;
+        interactionType?: MessageInteractionType;
+        interactionAuthorDiscordId?: string;
+        /** Label shown in the thinking placeholder (e.g. "Thinking" or "Retrying"). Defaults to "Thinking". */
+        thinkingText?: string;
+        reuseHumanMessage?: boolean;
+        fetchHistory?: boolean;
+        ephemeralInstructionMessage?: string;
+    }): Promise<void> {
+        const {
+            message,
+            botUserId,
+            userContent,
+            attachments,
+            intent,
+            retriesLeft,
+            pingUser,
+            replyPrefix,
+            interactionType,
+            interactionAuthorDiscordId,
+            thinkingText = "Thinking",
+            reuseHumanMessage,
+            fetchHistory,
+            ephemeralInstructionMessage,
+        } = params;
 
         await Sentry.startSpan(
             {
@@ -990,11 +1126,12 @@ export class DiscordGateway {
                     "discord.message_id": message.id,
                     "discord.channel_id": message.channelId,
                     "discord.guild_id": message.guildId ?? DM_GUILD_TOKEN,
-                    "discord.attachment_count": attachments.length,
+                    "discord.attachment_count": attachments?.length ?? 0,
                     "discord.has_reply": message.reference?.messageId !== undefined,
                 },
             },
             async (span) => {
+                let thinkingMessagePromise: ReturnType<Message["reply"]> | undefined;
                 try {
                     // Send the "Thinking" placeholder immediately — fire-and-forget (not awaited)
                     // so it does not delay AI processing. Sent as a reply with allowedMentions
@@ -1002,7 +1139,7 @@ export class DiscordGateway {
                     // lazily on the first status update, or awaited when we need to delete it
                     // after the real response is sent.
                     thinkingMessagePromise = message.reply({
-                        content: `*Thinking since <t:${Math.round(Date.now() / 1000)}:R>*`,
+                        content: `*${thinkingText} since <t:${Math.round(Date.now() / 1000)}:R>*`,
                         allowedMentions: { repliedUser: false },
                     });
 
@@ -1034,8 +1171,10 @@ export class DiscordGateway {
                     // in the live chain fallback path, not for the current user message.
                     const rawSnapshot = buildSnapshot(message, botUserId, undefined);
 
-                    // Enrich the stripped content with sender attribution and embed context for LLM
-                    const llmContent = discordMessageToLlmText({ ...rawSnapshot, content: effectiveUserContent });
+                    // Enrich the stripped content with sender attribution and embed context for LLM.
+                    // userContent is null only when reuseHumanMessage is true — the use case ignores it.
+                    const llmContent =
+                        userContent !== null ? discordMessageToLlmText({ ...rawSnapshot, content: userContent }) : "";
 
                     // handle() never throws — errors are caught internally and returned as a response
                     const { response, newMessages, isFailure, isRetryable, usedFallback } =
@@ -1046,9 +1185,12 @@ export class DiscordGateway {
                             guildId: message.guildId ?? DM_GUILD_TOKEN,
                             discordAuthorId: message.author.id,
                             userContent: llmContent,
-                            attachments,
+                            attachments: attachments ?? [],
                             intent,
                             onStatusUpdate,
+                            reuseHumanMessage,
+                            fetchHistory,
+                            ephemeralInstructionMessage,
                         });
 
                     await this.sendBotReply({
@@ -1061,6 +1203,10 @@ export class DiscordGateway {
                         retriesLeft,
                         thinkingMessagePromise,
                         span,
+                        pingUser,
+                        replyPrefix,
+                        interactionType,
+                        interactionAuthorDiscordId,
                     });
                 } catch (err) {
                     this.logger.error({ err, discordMessageId: message.id }, "Failed to send or persist bot reply");
@@ -1087,6 +1233,8 @@ export class DiscordGateway {
                                 newMessages: [],
                                 retriesLeft: null,
                                 usedFallback: false,
+                                interactionType: null,
+                                interactionAuthorDiscordId: null,
                             });
                         })
                         .catch((editErr) => {

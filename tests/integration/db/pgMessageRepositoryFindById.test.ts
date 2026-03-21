@@ -47,6 +47,8 @@ function messagePayload(
         langchainMessages: [new HumanMessage("Hello!").toJSON() as unknown as Record<string, unknown>],
         retriesLeft: null,
         usedFallback: null,
+        interactionType: null,
+        interactionAuthorDiscordId: null,
         ...overrides,
     };
 }

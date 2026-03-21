@@ -7,6 +7,16 @@
 export type MessageRole = "human" | "assistant";
 
 /**
+ * Identifies which Discord interaction pathway created a bot response row.
+ * Used by the retry handler to reconstruct the correct intent and reply options
+ * without re-parsing the original message content.
+ *
+ * - `"message_create"` — triggered by a regular chat message (@mention or command prefix)
+ * - `"summary_command"` — triggered by the Summarize context menu command
+ */
+export type MessageInteractionType = "message_create" | "summary_command";
+
+/**
  * A persisted Discord message within a reply chain.
  *
  * Only the message's own content is stored (not the full conversation),
@@ -50,5 +60,17 @@ export interface DiscordMessage {
      * only the original prompter may retry when the response used a fallback.
      */
     usedFallback: boolean | null;
+    /**
+     * The interaction pathway that produced this bot response.
+     * NULL on human messages and legacy rows predating this column.
+     * Read by the retry handler to reconstruct intent and reply options (e.g. pingUser, replyPrefix).
+     */
+    interactionType: MessageInteractionType | null;
+    /**
+     * Discord snowflake of the user who invoked the interaction, when different from the
+     * message author (e.g. a context menu command invoked on someone else's message).
+     * NULL on human messages, message_create rows, and legacy rows.
+     */
+    interactionAuthorDiscordId: string | null;
     createdAt: Date;
 }

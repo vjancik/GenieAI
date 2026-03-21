@@ -36,6 +36,20 @@
             "when": 1773873794390,
             "tag": "0004_lowly_white_queen",
             "breakpoints": true
+        },
+        {
+            "idx": 5,
+            "version": "7",
+            "when": 1774053090556,
+            "tag": "0005_swift_toad_men",
+            "breakpoints": true
+        },
+        {
+            "idx": 6,
+            "version": "7",
+            "when": 1774053114724,
+            "tag": "0006_petite_serpent_society",
+            "breakpoints": true
         }
     ]
 }

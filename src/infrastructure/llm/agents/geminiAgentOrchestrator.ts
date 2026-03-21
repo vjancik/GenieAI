@@ -212,27 +212,32 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * @param attachmentFetcher - Optional Discord attachment fetcher for refreshing Gemini file uploads
      */
     async process(
-        history: BaseMessage[],
-        userMessage: HumanMessage,
+        messages: BaseMessage[],
         intent: MessageIntent,
         onStatusUpdate?: OnStatusUpdate,
     ): Promise<{ content: string; newMessages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean }> {
+        const lastMessage = messages.at(-1);
+        if (!(lastMessage instanceof HumanMessage)) {
+            throw new Error(
+                `Programmatic error: last message passed to orchestrator.process must be a HumanMessage, got ${lastMessage?.constructor.name ?? "undefined"}`,
+            );
+        }
+
         return Sentry.startSpan(
             {
                 name: "Orchestrate agent pipeline",
                 op: "agent.process",
-                attributes: { "agent.history_length": history.length, "agent.intent": intent },
+                attributes: { "agent.history_length": messages.length, "agent.intent": intent },
             },
             async (span) => {
-                const initialMessages = [...history, userMessage];
                 const result = await this.graph.invoke(
-                    { messages: initialMessages, intent },
+                    { messages, intent },
                     // TODO: factor out into it's own service that uses a fire-and-forget messaging pattern
                     { context: { onStatusUpdate } },
                 );
 
                 // Everything after the initial seed is "new" — generated during this turn
-                const newMessages = result.messages.slice(initialMessages.length);
+                const newMessages = result.messages.slice(messages.length);
                 const lastMessage = result.messages.at(-1);
                 if (!lastMessage) {
                     throw new AppError("ORCHESTRATOR_NO_RESPONSE", "Graph produced no messages");

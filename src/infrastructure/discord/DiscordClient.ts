@@ -15,7 +15,7 @@ export class DiscordClient {
     readonly client: Client;
 
     constructor(
-        private readonly token: string,
+        readonly token: string,
         private readonly logger: Logger,
     ) {
         this.client = new Client({

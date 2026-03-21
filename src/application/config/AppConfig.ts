@@ -175,6 +175,7 @@ export type FileConfig = z.infer<typeof fileConfigSchema>;
 
 const envConfigSchema = z
     .object({
+        DISCORD_CLIENT_ID: z.string().min(1, "DISCORD_CLIENT_ID is required"),
         DISCORD_TOKEN: z.string().min(1, "DISCORD_TOKEN is required"),
         DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
         /**
@@ -204,6 +205,7 @@ const envConfigSchema = z
             .transform((v) => v.trim()),
     })
     .transform((env) => ({
+        discordClientId: env.DISCORD_CLIENT_ID,
         discordToken: env.DISCORD_TOKEN,
         databaseUrl: env.DATABASE_URL,
         googleFreeApiKeys: env.GOOGLE_FREE_API_KEYS,

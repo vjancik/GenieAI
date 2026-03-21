@@ -96,6 +96,17 @@ export class HandleDiscordMessageUseCase {
      * @param params.userContent - Message content with bot mention stripped
      * @param params.attachments - File attachments on the Discord message
      * @param params.onStatusUpdate - Optional callback forwarded to the orchestrator for live status updates
+     * @param params.reuseHumanMessage - When true, skip building and persisting the human message row.
+     *   Instead, fetch the chain starting from `discordMessageId` itself and deserialize the human
+     *   message from the tail. Use this when the human message row already exists in the DB
+     *   (e.g. a retry or a context menu command invoked on a previously-summarized message).
+     * @param params.fetchHistory - When true (default), fetch the full reply chain as conversation history.
+     *   When false, fetch only the last message (limit: 1). Use this for context menu commands where
+     *   only the targeted message is relevant, not a full thread.
+     * @param params.ephemeralInstructionMessage - When set, appended as the final user turn passed to
+     *   the orchestrator instead of the built message content. The target message's deserialized content
+     *   goes into history as context. Never persisted to the DB — use to inject one-off instructions
+     *   (e.g. "Summarize this:") without polluting the stored message content.
      * @returns The AI-generated response string and the new LangChain messages generated,
      *          or an error string if attachments exceed the size limit (inline mode only)
      */
@@ -110,6 +121,9 @@ export class HandleDiscordMessageUseCase {
         attachments: DiscordAttachmentInfo[];
         intent: MessageIntent;
         onStatusUpdate?: OnStatusUpdate;
+        reuseHumanMessage?: boolean;
+        fetchHistory?: boolean;
+        ephemeralInstructionMessage?: string;
     }): Promise<{
         response: string;
         newMessages: BaseMessage[];
@@ -153,30 +167,128 @@ export class HandleDiscordMessageUseCase {
                         }
                     }
 
-                    // Fetch existing reply chain if this message is a reply
-                    let dbHistory: DiscordMessage[] =
-                        params.referencedMessageId !== null
-                            ? await this.messageRepo.fetchChain({
-                                  startDiscordMessageId: params.referencedMessageId,
-                                  channelId: params.channelId,
-                                  guildId: params.guildId,
-                              })
-                            : [];
+                    let dbHistory: DiscordMessage[];
+                    let thisTurnMessage: HumanMessage | undefined;
 
-                    // If DB chain is empty but a reply chain exists, fall back to live Discord fetch.
-                    // fetchAndPersistLiveChain throws on failure — the outer try/catch will
-                    // return a retryable error response to the user.
-                    if (dbHistory.length === 0 && params.referencedMessageId !== null && this.chatMessageService) {
-                        dbHistory = await this.fetchAndPersistLiveChain(
-                            this.chatMessageService,
-                            params.referencedMessageId,
-                            params.channelId,
-                            params.guildId,
-                            params.onStatusUpdate,
-                        );
+                    if (params.reuseHumanMessage) {
+                        // The human message row already exists in the DB — fetch the full chain
+                        // starting from discordMessageId itself (includes history + human message).
+                        // This path is used by context menu commands invoked on already-saved messages.
+                        // fetchHistory: false → limit: 1 (only the target message, no prior history)
+                        const existingChain = await this.messageRepo.fetchChain({
+                            startDiscordMessageId: params.discordMessageId,
+                            channelId: params.channelId,
+                            guildId: params.guildId,
+                            limit: params.fetchHistory === false ? 1 : undefined,
+                        });
+
+                        const lastMessageRecord = existingChain[existingChain.length - 1];
+                        if (!lastMessageRecord) {
+                            this.logger.warn(
+                                { discordMessageId: params.discordMessageId },
+                                "reuseHumanMessage: message not found in DB",
+                            );
+                            return {
+                                response: "Sorry, I could not find the original message.",
+                                newMessages: [],
+                                isFailure: true,
+                                isRetryable: false,
+                            };
+                        }
+
+                        dbHistory = existingChain;
+                    } else {
+                        // Fetch existing reply chain if this message is a reply
+                        dbHistory =
+                            params.referencedMessageId !== null
+                                ? await this.messageRepo.fetchChain({
+                                      startDiscordMessageId: params.referencedMessageId,
+                                      channelId: params.channelId,
+                                      guildId: params.guildId,
+                                      limit: params.fetchHistory === false ? 1 : undefined,
+                                  })
+                                : [];
+
+                        // If DB chain is empty but a reply chain exists, fall back to live Discord fetch.
+                        // fetchAndPersistLiveChain throws on failure — the outer try/catch will
+                        // return a retryable error response to the user.
+                        if (dbHistory.length === 0 && params.referencedMessageId !== null && this.chatMessageService) {
+                            dbHistory = await this.fetchAndPersistLiveChain(
+                                this.chatMessageService,
+                                params.referencedMessageId,
+                                params.channelId,
+                                params.guildId,
+                                params.onStatusUpdate,
+                                params.fetchHistory === false ? 1 : undefined,
+                            );
+                        }
+                        // Build the current turn's message — multimodal if attachments are present.
+                        // In upload mode this also returns pending gemini file records that must
+                        // be saved AFTER the user's message row exists (FK constraint).
+                        const { msg: builtMsg, pendingRecords } = await this.buildMessage({
+                            role: "human",
+                            content: params.userContent,
+                            attachments: params.attachments,
+                            onStatusUpdate: params.onStatusUpdate,
+                        });
+
+                        // Persist the user's message first so gemini_files FK is satisfied.
+                        const savedUserMsg = await this.messageRepo.save({
+                            discordMessageId: params.discordMessageId,
+                            repliesToDiscordId: params.referencedMessageId,
+                            channelId: params.channelId,
+                            guildId: params.guildId,
+                            role: "human",
+                            discordAuthorId: params.discordAuthorId,
+                            // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
+                            // which is incompatible with our DB schema's Record<string, unknown>. Double cast
+                            // through unknown bridges the gap — the serialized shape IS a plain JSON object.
+                            langchainMessages: [builtMsg.toJSON() as unknown as Record<string, unknown>],
+                            retriesLeft: null,
+                            usedFallback: null,
+                            interactionType: null,
+                            interactionAuthorDiscordId: null,
+                        });
+
+                        await this.persistPendingGeminiRecords(pendingRecords, savedUserMsg.id);
+
+                        thisTurnMessage = builtMsg;
                     }
 
                     const history = this.orchestrator.buildHistory(dbHistory);
+                    if (thisTurnMessage) history.push(thisTurnMessage);
+
+                    // If the oldest message in history is not a HumanMessage, Gemini will reject it
+                    // (conversations must start with a human turn). Insert a placeholder rather than
+                    // converting the existing message — converting an AIMessage with tool calls would
+                    // corrupt the tool call chain and cause ToolCallNotFoundError. Empty string content
+                    // is dropped by Gemini/LangChain, so a non-empty sentinel is used instead.
+                    if (history.length > 0 && !(history[0] instanceof HumanMessage)) {
+                        history.unshift(new HumanMessage("<History omitted>"));
+                    }
+
+                    // When an ephemeral instruction is provided,
+                    // append it as the final user turn (target message content stays in history as context).
+                    if (params.ephemeralInstructionMessage)
+                        history.push(new HumanMessage(params.ephemeralInstructionMessage));
+
+                    // Guard: the last message must be a HumanMessage for the orchestrator.
+                    // This should not occur in normal operation — callers are expected to ensure
+                    // either thisTurnMessage or ephemeralInstructionMessage provides a human turn.
+                    // Spreads all base message fields to preserve content and metadata.
+                    const lastMessage = history[history.length - 1];
+                    if (lastMessage && !(lastMessage instanceof HumanMessage)) {
+                        this.logger.error(
+                            {
+                                discordMessageId: params.discordMessageId,
+                                lastMessageType: lastMessage.constructor.name,
+                                reuseHumanMessage: params.reuseHumanMessage,
+                                hasEphemeralInstruction: !!params.ephemeralInstructionMessage,
+                            },
+                            "Last history message is not a HumanMessage — forcefully converting (programmatic error)",
+                        );
+                        history[history.length - 1] = new HumanMessage({ ...lastMessage });
+                    }
 
                     span.setAttribute("app.history_length", history.length);
 
@@ -191,39 +303,10 @@ export class HandleDiscordMessageUseCase {
                         "Processing message with history",
                     );
 
-                    // Build the current turn's message — multimodal if attachments are present.
-                    // In upload mode this also returns pending gemini file records that must
-                    // be saved AFTER the user's message row exists (FK constraint).
-                    const { msg, pendingRecords } = await this.buildMessage({
-                        role: "human",
-                        content: params.userContent,
-                        attachments: params.attachments,
-                        onStatusUpdate: params.onStatusUpdate,
-                    });
-
-                    // Persist the user's message first so gemini_files FK is satisfied.
-                    const savedUserMsg = await this.messageRepo.save({
-                        discordMessageId: params.discordMessageId,
-                        repliesToDiscordId: params.referencedMessageId,
-                        channelId: params.channelId,
-                        guildId: params.guildId,
-                        role: "human",
-                        discordAuthorId: params.discordAuthorId,
-                        // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
-                        // which is incompatible with our DB schema's Record<string, unknown>. Double cast
-                        // through unknown bridges the gap — the serialized shape IS a plain JSON object.
-                        langchainMessages: [msg.toJSON() as unknown as Record<string, unknown>],
-                        retriesLeft: null,
-                        usedFallback: null,
-                    });
-
-                    await this.persistPendingGeminiRecords(pendingRecords, savedUserMsg.id);
-
                     // Generate the AI response; the orchestrator handles Gemini file refresh internally
                     // per key attempt, threaded via attachmentFetcher in context.
                     const { content, newMessages, isRetryable, usedFallback } = await this.orchestrator.process(
                         history,
-                        msg,
                         params.intent,
                         params.onStatusUpdate,
                     );
@@ -276,6 +359,7 @@ export class HandleDiscordMessageUseCase {
         channelId: string,
         guildId: string,
         onStatusUpdate?: OnStatusUpdate,
+        limit?: number,
     ): Promise<DiscordMessage[]> {
         return Sentry.startSpan(
             {
@@ -351,6 +435,8 @@ export class HandleDiscordMessageUseCase {
                             langchainMessages: [msg.toJSON() as unknown as Record<string, unknown>],
                             retriesLeft: null,
                             usedFallback: null,
+                            interactionType: null,
+                            interactionAuthorDiscordId: null,
                         })),
                     );
 
@@ -371,6 +457,7 @@ export class HandleDiscordMessageUseCase {
                     startDiscordMessageId: referencedMessageId,
                     channelId,
                     guildId,
+                    limit,
                 });
             },
         );

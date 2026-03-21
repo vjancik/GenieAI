@@ -1,0 +1,1 @@
+ALTER TABLE "messages" ALTER COLUMN "interaction_type" DROP DEFAULT;

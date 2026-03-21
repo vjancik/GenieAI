@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { AIMessage, HumanMessage } from "@langchain/core/messages";
+import { AIMessage, type BaseMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
 import type { IAgentOrchestrator } from "../../../src/application/ports/IAgentOrchestrator.ts";
 import type { IAttachmentDownloader } from "../../../src/application/ports/IAttachmentDownloader.ts";
@@ -28,6 +28,8 @@ const baseMessage: DiscordMessage = {
     langchainMessages: [prevAiMessage.toJSON() as unknown as Record<string, unknown>],
     retriesLeft: null,
     usedFallback: null,
+    interactionType: null,
+    interactionAuthorDiscordId: null,
     createdAt: new Date("2024-01-01T00:00:00Z"),
 };
 
@@ -43,6 +45,7 @@ function makeRepo(chainMessages: DiscordMessage[] = []): IMessageRepository {
         findExistingDiscordIds: mock(async () => []),
         saveBatch: mock(async (msgs) => msgs.map((_m: DiscordMessage, i: number) => ({ id: `batch-uuid-${i}` }))),
         deleteByDiscordMessageId: mock(async () => {}),
+        existsByDiscordMessageId: mock(async () => false),
     };
 }
 
@@ -202,9 +205,12 @@ describe("HandleDiscordMention.handle", () => {
 
         const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock.calls[0];
         expect(firstCall).toBeDefined();
-        const [history, userMessage] = firstCall as [unknown[], HumanMessage];
-        // baseMessage has one serialized AIMessage → deserialized to 1 BaseMessage
-        expect(history).toHaveLength(1);
+        const [messages] = firstCall as [BaseMessage[]];
+        // baseMessage has one serialized AIMessage → deserialized to 1 BaseMessage, then a
+        // HumanMessage placeholder is prepended because history must start with a human turn,
+        // plus the current user turn — total 3.
+        expect(messages).toHaveLength(3);
+        const userMessage = messages[messages.length - 1];
         expect(userMessage).toBeInstanceOf(HumanMessage);
         expect((userMessage as HumanMessage).content).toBe("Follow-up");
     });
@@ -236,8 +242,8 @@ describe("HandleDiscordMention.handle", () => {
 
         const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock.calls[0];
         expect(firstCall).toBeDefined();
-        // Fourth argument (index 3) must be the exact callback passed in; index 2 is intent
-        expect(firstCall?.[3]).toBe(onStatusUpdate);
+        // Third argument (index 2) must be the exact callback passed in; index 1 is intent
+        expect(firstCall?.[2]).toBe(onStatusUpdate);
     });
 
     test("passes empty history to orchestrator when no reply chain", async () => {
@@ -264,8 +270,9 @@ describe("HandleDiscordMention.handle", () => {
 
         const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock.calls[0];
         expect(firstCall).toBeDefined();
-        const [history] = firstCall as [unknown[], HumanMessage];
-        expect(history).toHaveLength(0);
+        const [messages] = firstCall as [BaseMessage[]];
+        // No history + one user turn
+        expect(messages).toHaveLength(1);
     });
 
     test("saves the user's message as a serialized HumanMessage", async () => {
@@ -379,7 +386,8 @@ describe("HandleDiscordMention.handle", () => {
         expect(downloader.download).toHaveBeenCalledTimes(1);
 
         const firstCall = (orchestrator.process as ReturnType<typeof mock>).mock.calls[0];
-        const userMessage = firstCall?.[1] as HumanMessage;
+        const [messages] = firstCall as [BaseMessage[]];
+        const userMessage = messages[messages.length - 1] as HumanMessage;
         expect(userMessage).toBeInstanceOf(HumanMessage);
         // Should have structured content (array), not a plain string
         expect(Array.isArray(userMessage.content)).toBe(true);

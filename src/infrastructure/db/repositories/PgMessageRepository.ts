@@ -4,7 +4,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { Logger } from "../../../application/types/Logger.ts";
 import { DatabaseError } from "../../../domain/errors/AppError.ts";
 import type { IMessageRepository } from "../../../domain/message/IMessageRepository.ts";
-import type { DiscordMessage } from "../../../domain/message/Message.ts";
+import type { DiscordMessage, MessageInteractionType } from "../../../domain/message/Message.ts";
 import type { Db } from "../connection.ts";
 import { pgTextArray } from "../pgTextArray.ts";
 import { messages } from "../schema.ts";
@@ -37,6 +37,26 @@ function buildFindByDiscordMessageIdGuildStmt(db: Db) {
         )
         .limit(1)
         .prepare("message_find_by_discord_id_guild");
+}
+
+/**
+ * Prepared statement: check whether a single message row exists for the
+ * (guildId, channelId, discordMessageId) triple. Selects only `id` — cheaper
+ * than selecting all columns when the full row is not needed.
+ */
+function buildExistsByDiscordMessageIdStmt(db: Db) {
+    return db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(
+            and(
+                eq(messages.guildId, sql.placeholder("guildId")),
+                eq(messages.channelId, sql.placeholder("channelId")),
+                eq(messages.discordMessageId, sql.placeholder("discordMessageId")),
+            ),
+        )
+        .limit(1)
+        .prepare("message_exists_by_discord_id");
 }
 
 /**
@@ -87,6 +107,8 @@ function buildInsertMessageStmt(db: Db) {
             langchainMessages: sql.placeholder("langchainMessages"),
             retriesLeft: sql.placeholder("retriesLeft"),
             usedFallback: sql.placeholder("usedFallback"),
+            interactionType: sql.placeholder("interactionType"),
+            interactionAuthorDiscordId: sql.placeholder("interactionAuthorDiscordId"),
         })
         .returning({ id: messages.id })
         .prepare("message_insert");
@@ -108,6 +130,7 @@ export class PgMessageRepository implements IMessageRepository {
     private readonly stmtFindById: ReturnType<typeof buildFindByIdStmt>;
     private readonly stmtFindByDiscordMessageIdGuild: ReturnType<typeof buildFindByDiscordMessageIdGuildStmt>;
     private readonly stmtFindExistingDiscordIds: ReturnType<typeof buildFindExistingDiscordIdsStmt>;
+    private readonly stmtExistsByDiscordMessageId: ReturnType<typeof buildExistsByDiscordMessageIdStmt>;
 
     constructor(
         private readonly db: Db,
@@ -118,6 +141,7 @@ export class PgMessageRepository implements IMessageRepository {
         this.stmtFindById = buildFindByIdStmt(db);
         this.stmtFindByDiscordMessageIdGuild = buildFindByDiscordMessageIdGuildStmt(db);
         this.stmtFindExistingDiscordIds = buildFindExistingDiscordIdsStmt(db);
+        this.stmtExistsByDiscordMessageId = buildExistsByDiscordMessageIdStmt(db);
     }
 
     async save(msg: Omit<DiscordMessage, "id" | "createdAt">): Promise<{ id: string }> {
@@ -143,6 +167,8 @@ export class PgMessageRepository implements IMessageRepository {
                         langchainMessages: msg.langchainMessages,
                         retriesLeft: msg.retriesLeft,
                         usedFallback: msg.usedFallback,
+                        interactionType: msg.interactionType,
+                        interactionAuthorDiscordId: msg.interactionAuthorDiscordId,
                     });
 
                     if (!result) {
@@ -175,6 +201,8 @@ export class PgMessageRepository implements IMessageRepository {
         newMessages: BaseMessage[];
         retriesLeft: number | null;
         usedFallback: boolean;
+        interactionType: MessageInteractionType | null;
+        interactionAuthorDiscordId: string | null;
     }): Promise<{ id: string }> {
         const saved = await this.save({
             discordMessageId: params.discordMessageId,
@@ -189,6 +217,8 @@ export class PgMessageRepository implements IMessageRepository {
             langchainMessages: params.newMessages.map((m) => m.toJSON() as unknown as Record<string, unknown>),
             retriesLeft: params.retriesLeft,
             usedFallback: params.usedFallback,
+            interactionType: params.interactionType,
+            interactionAuthorDiscordId: params.interactionAuthorDiscordId,
         });
 
         this.logger.debug(
@@ -253,6 +283,8 @@ export class PgMessageRepository implements IMessageRepository {
                             : result.langchainMessages) as DiscordMessage["langchainMessages"],
                         retriesLeft: result.retriesLeft ?? null,
                         usedFallback: result.usedFallback ?? null,
+                        interactionType: result.interactionType ?? null,
+                        interactionAuthorDiscordId: result.interactionAuthorDiscordId ?? null,
                         createdAt: result.createdAt,
                     };
                 } catch (err) {
@@ -307,6 +339,8 @@ export class PgMessageRepository implements IMessageRepository {
                             : result.langchainMessages) as DiscordMessage["langchainMessages"],
                         retriesLeft: result.retriesLeft ?? null,
                         usedFallback: result.usedFallback ?? null,
+                        interactionType: result.interactionType ?? null,
+                        interactionAuthorDiscordId: result.interactionAuthorDiscordId ?? null,
                         createdAt: result.createdAt,
                     };
                 } catch (err) {
@@ -314,6 +348,23 @@ export class PgMessageRepository implements IMessageRepository {
                 }
             },
         );
+    }
+
+    async existsByDiscordMessageId(lookup: {
+        discordMessageId: string;
+        channelId: string;
+        guildId: string;
+    }): Promise<boolean> {
+        try {
+            const [result] = await this.stmtExistsByDiscordMessageId.execute({
+                guildId: lookup.guildId,
+                channelId: lookup.channelId,
+                discordMessageId: lookup.discordMessageId,
+            });
+            return result !== undefined;
+        } catch (err) {
+            throw new DatabaseError("Failed to check message existence by Discord ID", err);
+        }
     }
 
     async findExistingDiscordIds(lookup: {
@@ -357,6 +408,8 @@ export class PgMessageRepository implements IMessageRepository {
                                 langchainMessages: m.langchainMessages,
                                 retriesLeft: m.retriesLeft,
                                 usedFallback: m.usedFallback,
+                                interactionType: m.interactionType,
+                                interactionAuthorDiscordId: m.interactionAuthorDiscordId,
                             })),
                         )
                         .onConflictDoUpdate({
@@ -461,6 +514,8 @@ export class PgMessageRepository implements IMessageRepository {
                             : row.langchain_messages) as DiscordMessage["langchainMessages"],
                         retriesLeft: (row.retries_left as number | null) ?? null,
                         usedFallback: (row.used_fallback as boolean | null) ?? null,
+                        interactionType: (row.interaction_type as MessageInteractionType | null) ?? null,
+                        interactionAuthorDiscordId: (row.interaction_author_discord_id as string | null) ?? null,
                         createdAt: row.created_at as Date,
                     }));
                 } catch (err) {

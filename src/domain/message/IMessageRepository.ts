@@ -1,5 +1,5 @@
 import type { BaseMessage } from "@langchain/core/messages";
-import type { DiscordMessage } from "./Message.ts";
+import type { DiscordMessage, MessageInteractionType } from "./Message.ts";
 
 /**
  * Port (interface) for Discord message persistence.
@@ -54,6 +54,8 @@ export interface IMessageRepository {
         newMessages: BaseMessage[];
         retriesLeft: number | null;
         usedFallback: boolean;
+        interactionType: MessageInteractionType | null;
+        interactionAuthorDiscordId: string | null;
     }): Promise<{ id: string }>;
 
     /**
@@ -96,6 +98,21 @@ export interface IMessageRepository {
         channelId: string;
         discordMessageIds: string[];
     }): Promise<string[]>;
+
+    /**
+     * Returns true if a message row exists for the given (guildId, channelId, discordMessageId) triple.
+     *
+     * Cheaper than {@link findByDiscordMessageId} — fetches only the id column.
+     *
+     * @param lookup.discordMessageId - The Discord snowflake ID of the message
+     * @param lookup.channelId - The Discord channel snowflake
+     * @param lookup.guildId - The Discord guild snowflake, or `"@me"` for DMs
+     */
+    existsByDiscordMessageId(lookup: {
+        discordMessageId: string;
+        channelId: string;
+        guildId: string;
+    }): Promise<boolean>;
 
     /**
      * Delete a single message row by its Discord message ID, guild, and channel.

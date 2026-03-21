@@ -18,7 +18,6 @@ import { GeminiApiKeySyncService } from "./application/services/GeminiApiKeySync
 import { GeminiFileRefreshService } from "./application/services/GeminiFileRefreshService.ts";
 import { GetNextPageUseCase } from "./application/use-cases/GetNextPage.ts";
 import { HandleDiscordMessageUseCase } from "./application/use-cases/HandleDiscordMessage.ts";
-import { RetryDiscordMessageUseCase } from "./application/use-cases/RetryDiscordMessage.ts";
 import { FetchAttachmentDownloader } from "./infrastructure/attachments/FetchAttachmentDownloader.ts";
 import { FetchDiskAttachmentDownloader } from "./infrastructure/attachments/FetchDiskAttachmentDownloader.ts";
 import { GenaiFileUploaderRegistry } from "./infrastructure/attachments/GenaiFileUploaderRegistry.ts";
@@ -30,6 +29,7 @@ import { PgMessagePageRepository } from "./infrastructure/db/repositories/PgMess
 import { PgMessageRepository } from "./infrastructure/db/repositories/PgMessageRepository.ts";
 import { DiscordChatMessageService } from "./infrastructure/discord/DiscordChatMessageService.ts";
 import { DiscordClient } from "./infrastructure/discord/DiscordClient.ts";
+import { DiscordCommandRegistry } from "./infrastructure/discord/DiscordCommandRegistry.ts";
 import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
 import { DiscordMediaService } from "./infrastructure/discord/DiscordMediaService.ts";
 import { StatusMessageUpdater } from "./infrastructure/discord/StatusMessageUpdater.ts";
@@ -105,6 +105,11 @@ const searchProvider = new SearchModelProvider({
 
 // Discord client lifecycle wrapper — created before use cases and gateway so both can share it
 const discordClient = new DiscordClient(config.discordToken, logger.child({ module: "discord-client" }));
+const commandRegistry = new DiscordCommandRegistry(
+    discordClient,
+    config.discordClientId,
+    logger.child({ module: "discord-commands" }),
+);
 
 // Gemini file refresh service — depends on discordMediaService for re-fetching expired CDN URLs
 const discordMediaService = new DiscordMediaService(discordClient);
@@ -161,13 +166,6 @@ const messagePageRepository = new PgMessagePageRepository(db, logger.child({ mod
 const getNextPageQuery = new PgGetNextPageQuery(db);
 const getNextPage = new GetNextPageUseCase(getNextPageQuery, logger.child({ module: "get-next-page-use-case" }));
 
-// Retry orchestration use case
-const retryDiscordMessageUseCase = new RetryDiscordMessageUseCase(
-    messageRepository,
-    agentOrchestrator,
-    logger.child({ module: "discord-message-retry-use-case" }),
-);
-
 // Discord gateway
 const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
 const discordGateway = new DiscordGateway(
@@ -177,7 +175,6 @@ const discordGateway = new DiscordGateway(
     statusUpdater,
     messagePageRepository,
     getNextPage,
-    retryDiscordMessageUseCase,
     messageRepository,
     config.file,
 );
@@ -205,4 +202,5 @@ process.on("uncaughtException", (error) => {
     process.exit(1);
 });
 
+void commandRegistry.register().catch(() => {});
 await discordClient.start();
