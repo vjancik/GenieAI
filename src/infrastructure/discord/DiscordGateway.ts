@@ -1083,7 +1083,7 @@ export class DiscordGateway {
             return;
         }
 
-        await interaction.deferReply();
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         const markdown = await this.resolveExportContent(target);
         const html = this.markdownToHtml.render(markdown);
