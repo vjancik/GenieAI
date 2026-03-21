@@ -196,9 +196,17 @@ function withoutButton(message: Message, removeId: string): (TopLevelComponent |
             result.push(row);
             continue;
         }
-        const remaining = row.components.filter((c) => c.type !== ComponentType.Button || c.customId !== removeId);
+        // Components from message.components are raw API objects; only buttons are ever
+        // added by this bot, so filter to buttons only and wrap in ButtonBuilder so
+        // ActionRowBuilder can serialize them correctly (label/emoji accessible).
+        const remaining = row.components.filter(
+            (c): c is (typeof row.components)[number] & { type: ComponentType.Button } =>
+                c.type === ComponentType.Button && c.customId !== removeId,
+        );
         if (remaining.length === 0) continue;
-        result.push(new ActionRowBuilder({ components: remaining }));
+        result.push(
+            new ActionRowBuilder<ButtonBuilder>({ components: remaining.map((c) => ButtonBuilder.from(c.toJSON())) }),
+        );
     }
     return result;
 }
