@@ -5,6 +5,17 @@ WORKDIR /usr/src/app
 
 # install dependencies into temp directory
 # this will cache them and speed up future builds
+FROM base AS base_with_playwright_deps
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    bunx playwright@1.58.2 install-deps chromium
+
+FROM base_with_playwright_deps AS base_with_playwright
+RUN bunx playwright@1.58.2 install chromium
+# Load custom fonts into the system font cache
+COPY src/infrastructure/exporters/fonts /usr/local/share/fonts/genie
+RUN fc-cache -f -v
+
 FROM base AS install
 # RUN mkdir -p /temp/dev
 # COPY package.json bun.lock /temp/dev/
@@ -22,7 +33,7 @@ FROM base AS prerelease
 COPY . .
 
 # copy production dependencies and source code into final image
-FROM base AS release
+FROM base_with_playwright AS release
 COPY --from=install /temp/prod/node_modules node_modules
 COPY --from=prerelease /usr/src/app/src ./src
 COPY --from=prerelease /usr/src/app/package.json .

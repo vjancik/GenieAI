@@ -30,9 +30,16 @@ import type { IMessageRepository } from "../../domain/message/IMessageRepository
 import type { MessageInteractionType } from "../../domain/message/Message.ts";
 import { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { IMessagePageRepository } from "../../domain/message/MessagePage.ts";
+import type { HtmlToImageRenderer } from "../exporters/HtmlToImageRenderer.ts";
+import type { MarkdownToHtmlRenderer } from "../exporters/MarkdownToHtmlRenderer.ts";
 import { shortenRedirectUrl } from "../http/redirectUrl.ts";
+import { dbMessagesToLangchain, extractContent } from "../llm/utils/messageTransformers.ts";
 import type { DiscordClient } from "./DiscordClient.ts";
-import { SUMMARIZE_COMMAND_NAME } from "./DiscordCommandRegistry.ts";
+import {
+    EXPORT_HTML_COMMAND_NAME,
+    EXPORT_IMAGE_COMMAND_NAME,
+    SUMMARIZE_COMMAND_NAME,
+} from "./DiscordCommandRegistry.ts";
 import { InteractionLock } from "./InteractionLock.ts";
 import { buildSnapshot, extractAttachments, extractEmbeds } from "./messageExtractors.ts";
 import { RateLimiter } from "./RateLimiter.ts";
@@ -211,6 +218,8 @@ export class DiscordGateway {
         { windowMs: 60_000, limit: 10 },
     ]);
 
+    private previousBotId: string | undefined;
+
     /** Set to true on graceful shutdown — prevents new handlers from starting. */
     private shutdownPending = false;
     /** Monotonically-increasing key for tracking in-flight handler promises. */
@@ -227,9 +236,12 @@ export class DiscordGateway {
         private readonly getNextPageUseCase: GetNextPageUseCase,
         private readonly messageRepo: IMessageRepository,
         config: Pick<FileConfig, "discord">,
+        private readonly markdownToHtml: MarkdownToHtmlRenderer,
+        private readonly htmlToImage: HtmlToImageRenderer,
     ) {
         this.client = discordClient.client;
         this.defaultRetriesLeft = config.discord.defaultRetriesLeft;
+        this.previousBotId = config.discord.previousBotId;
         this.registerEventHandlers();
     }
 
@@ -249,6 +261,10 @@ export class DiscordGateway {
             if (interaction.isMessageContextMenuCommand()) {
                 if (interaction.commandName === SUMMARIZE_COMMAND_NAME) {
                     this.trackHandler(this.handleSummarizeContextMenu(interaction));
+                } else if (interaction.commandName === EXPORT_HTML_COMMAND_NAME) {
+                    this.trackHandler(this.handleExportHtmlContextMenu(interaction));
+                } else if (interaction.commandName === EXPORT_IMAGE_COMMAND_NAME) {
+                    this.trackHandler(this.handleExportImageContextMenu(interaction));
                 }
                 return;
             }
@@ -994,6 +1010,86 @@ export class DiscordGateway {
             fetchHistory: false,
             ephemeralInstructionMessage: "Summarize this:",
         });
+    }
+
+    /** Handles the "Export as HTML" message context menu command. */
+    private async handleExportHtmlContextMenu(interaction: MessageContextMenuCommandInteraction): Promise<void> {
+        const botUserId = this.client.user?.id;
+        if (!botUserId) throw new Error("Missing bot ID. This shouldn't happen.");
+
+        const target = interaction.targetMessage;
+
+        // Only allow exporting messages authored by this bot or the previous bot
+        if (target.author.id !== botUserId && target.author.id !== this.previousBotId) {
+            await interaction.reply({ content: "*You can only export bot messages.*", flags: MessageFlags.Ephemeral });
+            return;
+        }
+
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+        const markdown = await this.resolveExportContent(target);
+        const html = this.markdownToHtml.render(markdown);
+        const filename = `render-${target.id}.html`;
+
+        await interaction.editReply({
+            files: [{ attachment: Buffer.from(html, "utf-8"), name: filename }],
+        });
+    }
+
+    /** Handles the "Export as Image" message context menu command. */
+    private async handleExportImageContextMenu(interaction: MessageContextMenuCommandInteraction): Promise<void> {
+        const botUserId = this.client.user?.id;
+        if (!botUserId) throw new Error("Missing bot ID. This shouldn't happen.");
+
+        const target = interaction.targetMessage;
+
+        // Only allow exporting messages authored by this bot or the previous bot
+        if (target.author.id !== botUserId && target.author.id !== this.previousBotId) {
+            await interaction.reply({ content: "*You can only export bot messages.*", flags: MessageFlags.Ephemeral });
+            return;
+        }
+
+        await interaction.deferReply();
+
+        const markdown = await this.resolveExportContent(target);
+        const html = this.markdownToHtml.render(markdown);
+        const png = await this.htmlToImage.render(html);
+        const filename = `render-${target.id}.png`;
+
+        await interaction.editReply({
+            files: [{ attachment: png, name: filename }],
+        });
+    }
+
+    /**
+     * Resolves the full markdown content for a bot message to export.
+     *
+     * Looks up the DB row for the target message and extracts text from its
+     * persisted LangChain messages (which may contain the full multi-page content).
+     * Falls back to the Discord message content if no DB row exists.
+     */
+    private async resolveExportContent(target: Message): Promise<string> {
+        const guildId = target.guildId ?? DM_GUILD_TOKEN;
+        const row = await this.messageRepo.findByDiscordMessageId({
+            discordMessageId: target.id,
+            channelId: target.channelId,
+            guildId,
+        });
+
+        if (row && row.langchainMessages.length > 0) {
+            // Find the last AI message in the stored LangChain messages and extract its content
+            const langchainMessages = dbMessagesToLangchain([row], this.logger);
+            // Walk from the end to find the last substantive AI response
+            for (let i = langchainMessages.length - 1; i >= 0; i--) {
+                const msg = langchainMessages[i];
+                if (msg === undefined) continue;
+                const content = extractContent(msg);
+                if (content.trim().length > 0) return content;
+            }
+        }
+
+        // Fallback: use the raw Discord message content
+        return target.cleanContent;
     }
 
     private async handleMessageCreate(message: Message, retriesLeft?: number | null): Promise<void> {

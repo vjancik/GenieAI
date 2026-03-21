@@ -43,3 +43,7 @@ config.local.yaml
 
 # Claude local settings
 .claude
+
+# Generated dev script outputs
+scripts/dev/*.html
+scripts/dev/*.png

@@ -33,6 +33,8 @@ import { DiscordCommandRegistry } from "./infrastructure/discord/DiscordCommandR
 import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
 import { DiscordMediaService } from "./infrastructure/discord/DiscordMediaService.ts";
 import { StatusMessageUpdater } from "./infrastructure/discord/StatusMessageUpdater.ts";
+import { HtmlToImageRenderer } from "./infrastructure/exporters/HtmlToImageRenderer.ts";
+import { MarkdownToHtmlRenderer } from "./infrastructure/exporters/MarkdownToHtmlRenderer.ts";
 import { AgentOrchestrator } from "./infrastructure/llm/agents/geminiAgentOrchestrator.ts";
 import { GeneralModelProvider } from "./infrastructure/llm/models/generalModel.ts";
 import { SearchModelProvider } from "./infrastructure/llm/models/searchModel.ts";
@@ -166,6 +168,10 @@ const messagePageRepository = new PgMessagePageRepository(db, logger.child({ mod
 const getNextPageQuery = new PgGetNextPageQuery(db);
 const getNextPage = new GetNextPageUseCase(getNextPageQuery, logger.child({ module: "get-next-page-use-case" }));
 
+// Exporters — singletons shared across all export command invocations
+const markdownToHtml = new MarkdownToHtmlRenderer();
+const htmlToImage = new HtmlToImageRenderer();
+
 // Discord gateway
 const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
 const discordGateway = new DiscordGateway(
@@ -177,6 +183,8 @@ const discordGateway = new DiscordGateway(
     getNextPage,
     messageRepository,
     config.file,
+    markdownToHtml,
+    htmlToImage,
 );
 
 // Graceful shutdown

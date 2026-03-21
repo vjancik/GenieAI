@@ -24,6 +24,7 @@
     "devDependencies": {
         "@biomejs/biome": "2.4.5",
         "@types/bun": "latest",
+        "@types/katex": "^0.16.8",
         "@types/turndown": "^5.0.6",
         "cross-env": "^10.1.0",
         "drizzle-kit": "^0.31.9",
@@ -41,8 +42,12 @@
         "@sentry/bun": "^10.42.0",
         "discord.js": "^14.25.1",
         "drizzle-orm": "^0.45.1",
+        "katex": "^0.16.40",
         "langchain": "^1.2.35",
+        "marked": "^17.0.5",
+        "marked-katex-extension": "^5.1.7",
         "pino": "^10.3.1",
+        "playwright": "^1.58.2",
         "turndown": "^7.2.2",
         "zod": "^4.3.6"
     }
