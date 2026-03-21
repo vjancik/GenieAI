@@ -50,6 +50,13 @@
             "when": 1774053114724,
             "tag": "0006_petite_serpent_society",
             "breakpoints": true
+        },
+        {
+            "idx": 7,
+            "version": "7",
+            "when": 1774067051058,
+            "tag": "0007_many_wraith",
+            "breakpoints": true
         }
     ]
 }

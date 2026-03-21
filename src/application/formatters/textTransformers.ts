@@ -71,8 +71,8 @@ type MessageForLlm = {
  * Renders a single embed's text fields (no URLs) as a labelled block.
  * Returns an empty string when there are no displayable text fields.
  */
-function renderEmbed(embed: DiscordEmbedInfo): string {
-    const lines: string[] = [`[${embed.type}]`];
+function renderEmbed(embed: DiscordEmbedInfo, index: number): string {
+    const lines: string[] = [`Embed #${index + 1}`, `Type: ${embed.type}`];
     if (embed.title) lines.push(`Title: ${embed.title}`);
     // YouTube descriptions are full of links & SEO dumps — omit to avoid
     // flooding the LLM context with content that rarely adds conversational value.
@@ -132,7 +132,9 @@ function renderNestedSnapshots(snapshots: MessageForLlm[] | undefined): string {
 export function discordMessageToLlmText(snapshot: MessageForLlm): string {
     const header = snapshot.isForwarded ? "Forwarded message:" : `Message from user ${snapshot.authorDisplayName}:`;
 
-    const embedsBlock = renderEmbeds(snapshot.embeds);
+    // For forwarded messages the embeds live inside the nested snapshot — skip
+    // the outer embeds block to avoid rendering them twice.
+    const embedsBlock = snapshot.isForwarded ? "" : renderEmbeds(snapshot.embeds);
     const snapshotsBlock = renderNestedSnapshots(snapshot.messageSnapshots);
     const hasSupplement = embedsBlock !== "" || snapshotsBlock !== "";
 

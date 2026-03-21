@@ -4,7 +4,7 @@ import { AIMessage, type BaseMessage, HumanMessage } from "@langchain/core/messa
 import * as Sentry from "@sentry/bun";
 import { randomUUIDv7 } from "bun";
 import { extractDisplayMessage } from "../../domain/errors/AppError.ts";
-import type { GeminiFile } from "../../domain/message/GeminiFile.ts";
+import { EMBED_MEDIA_KEYS, type GeminiFile, GeminiFileSourceType } from "../../domain/message/GeminiFile.ts";
 import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
 import type { DiscordMessage } from "../../domain/message/Message.ts";
 import type { MessageIntent } from "../../domain/message/MessageIntent.ts";
@@ -12,7 +12,7 @@ import { type AppConfig, AttachmentMode } from "../config/AppConfig.ts";
 import { discordMessageToLlmText } from "../formatters/textTransformers.ts";
 import type { IAgentOrchestrator } from "../ports/IAgentOrchestrator.ts";
 import type { DiscordAttachmentInfo, IAttachmentDownloader } from "../ports/IAttachmentDownloader.ts";
-import type { DiscordMessageSnapshot, IChatMessageService } from "../ports/IChatMessageService.ts";
+import type { DiscordEmbedInfo, DiscordMessageSnapshot, IChatMessageService } from "../ports/IChatMessageService.ts";
 import type { IDiskAttachmentDownloader } from "../ports/IDiskAttachmentDownloader.ts";
 import type { IGeminiFileRepository } from "../ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploader } from "../ports/IGeminiFileUploader.ts";
@@ -43,6 +43,11 @@ type PendingGeminiRecord = {
         uploadedAt: Date;
     };
 };
+
+/** Returns true if at least one embed contains a URL for any of the tracked media keys. */
+function embedsHaveMedia(embeds: DiscordEmbedInfo[]): boolean {
+    return embeds.some((embed) => EMBED_MEDIA_KEYS.some((key) => embed[key]?.url != null));
+}
 
 /**
  * Application use case: handle an incoming Discord message.
@@ -83,7 +88,7 @@ export class HandleDiscordMessageUseCase {
     ) {
         this.maxInlineBytes = config.file.agent.maxInlineAttachmentSizeMB * 1024 * 1024;
         this.attachmentMode = config.file.agent.uploadAttachmentMode;
-        this.attachmentsTempDir = config.file.attachmentsTempDir;
+        this.attachmentsTempDir = config.file.attachmentDownloader.tempDir;
     }
 
     /**
@@ -119,6 +124,7 @@ export class HandleDiscordMessageUseCase {
         discordAuthorId: string;
         userContent: string;
         attachments: DiscordAttachmentInfo[];
+        embeds?: DiscordEmbedInfo[];
         intent: MessageIntent;
         onStatusUpdate?: OnStatusUpdate;
         reuseHumanMessage?: boolean;
@@ -229,6 +235,7 @@ export class HandleDiscordMessageUseCase {
                             role: "human",
                             content: params.userContent,
                             attachments: params.attachments,
+                            embeds: params.embeds,
                             onStatusUpdate: params.onStatusUpdate,
                         });
 
@@ -412,6 +419,7 @@ export class HandleDiscordMessageUseCase {
                             role: snapshot.isOwnBot ? "assistant" : "human",
                             content,
                             attachments: snapshot.attachments,
+                            embeds: snapshot.embeds,
                             onStatusUpdate,
                         });
 
@@ -522,12 +530,13 @@ export class HandleDiscordMessageUseCase {
         role: R;
         content: string;
         attachments: DiscordAttachmentInfo[];
+        embeds?: DiscordEmbedInfo[];
         onStatusUpdate?: OnStatusUpdate;
     }): Promise<{
         msg: R extends "human" ? HumanMessage : AIMessage;
         pendingRecords: PendingGeminiRecord[];
     }> {
-        const { role, content, attachments, onStatusUpdate } = params;
+        const { role, content, attachments, embeds, onStatusUpdate } = params;
 
         // TYPE COERCION: TypeScript cannot narrow a conditional return type (R extends "human" ? ...)
         // from within the generic implementation body — the union HumanMessage | AIMessage is not
@@ -537,27 +546,34 @@ export class HandleDiscordMessageUseCase {
                 ? new HumanMessage({ content: contentParts })
                 : new AIMessage({ content: contentParts })) as R extends "human" ? HumanMessage : AIMessage;
 
-        if (attachments.length === 0) {
+        const hasMedia = attachments.length > 0 || (embeds != null && embedsHaveMedia(embeds));
+        if (!hasMedia) {
             return { msg: wrap(content), pendingRecords: [] };
         }
 
         onStatusUpdate?.({ type: AgentStatusType.DOWNLOADING_ATTACHMENTS });
 
         if (this.attachmentMode === AttachmentMode.upload) {
-            const { contentParts, pendingRecords } = await this.buildUploadModeContentParts(content, attachments);
+            const { contentParts, pendingRecords } = await this.buildUploadModeContentParts(
+                content,
+                attachments,
+                embeds,
+            );
             return { msg: wrap(contentParts), pendingRecords };
         }
 
-        const contentParts = await this.buildInlineModeContentParts(content, attachments);
+        const contentParts = await this.buildInlineModeContentParts(content, attachments, embeds);
         return { msg: wrap(contentParts), pendingRecords: [] };
     }
 
     /**
-     * Inline mode: downloads each attachment to memory as base64, embeds directly in message content parts.
+     * Inline mode: downloads each attachment and embed media item to memory as base64,
+     * embeds directly in message content parts.
      */
     private async buildInlineModeContentParts(
         content: string,
         attachments: DiscordAttachmentInfo[],
+        embeds?: DiscordEmbedInfo[],
     ): Promise<Array<{ type: "text"; text: string } | { type: "media"; mimeType: string; data: string }>> {
         return Sentry.startSpan(
             {
@@ -566,9 +582,53 @@ export class HandleDiscordMessageUseCase {
                 attributes: { "app.attachment_count": attachments.length },
             },
             async () => {
-                const downloaded = await Promise.all(
-                    attachments.map(this.attachmentDownloader.download.bind(this.attachmentDownloader)),
+                // Collect embed media as DiscordAttachmentInfo using their direct URLs.
+                // Size is unknown for embed media — use 0 as a sentinel (checked upstream only in upload guard).
+                const embedMediaItems: { attachment: DiscordAttachmentInfo; acceptTypes: string }[] = [];
+                if (embeds) {
+                    for (const [embedIndex, embed] of embeds.entries()) {
+                        for (const key of EMBED_MEDIA_KEYS) {
+                            const media = embed[key];
+                            if (!media?.url) continue;
+                            const capitalizedKey = key.charAt(0).toUpperCase() + key.slice(1);
+                            embedMediaItems.push({
+                                attachment: {
+                                    id: media.url,
+                                    url: media.url,
+                                    proxyURL: media.proxyURL ?? media.url,
+                                    name: `Embed-${embedIndex}-${capitalizedKey}`,
+                                    size: 0,
+                                    contentType: null,
+                                },
+                                acceptTypes: key === "video" ? "video/*" : "image/*",
+                            });
+                        }
+                    }
+                }
+
+                // Attachments are downloaded together — Discord CDN is reliable and any failure throws.
+                // Embed media URLs are from third-party CDNs and may be flaky — skip failures.
+                const attachmentsPromise = Promise.all(attachments.map((a) => this.attachmentDownloader.download(a)));
+                const embedsPromise = Promise.allSettled(
+                    embedMediaItems.map(({ attachment, acceptTypes }) =>
+                        this.attachmentDownloader.download(attachment, acceptTypes),
+                    ),
                 );
+                const [downloadedAttachments, embedResults] = await Promise.all([attachmentsPromise, embedsPromise]);
+                const downloadedEmbeds = embedResults.flatMap((result, i) => {
+                    if (result.status === "fulfilled") return [result.value];
+                    this.logger.warn(
+                        {
+                            err: result.reason,
+                            name: embedMediaItems[i]?.attachment.name,
+                            url: embedMediaItems[i]?.attachment.url,
+                        },
+                        "Failed to download embed media for inline embedding — skipping",
+                    );
+                    return [];
+                });
+
+                const downloaded = [...downloadedAttachments, ...downloadedEmbeds];
 
                 this.logger.debug(
                     {
@@ -598,8 +658,9 @@ export class HandleDiscordMessageUseCase {
     }
 
     /**
-     * Upload mode: streams each attachment to a temp file, uploads to Gemini Files API,
-     * then returns content parts with Gemini URL references and pending Gemini records.
+     * Upload mode: streams each attachment and embed media item to a temp file, uploads
+     * to Gemini Files API, then returns content parts with Gemini URL references and
+     * pending Gemini records.
      *
      * Temp files are deleted in a try/finally after each upload.
      * Gemini file records are NOT saved here — they are returned as `pendingRecords`
@@ -609,6 +670,7 @@ export class HandleDiscordMessageUseCase {
     private async buildUploadModeContentParts(
         content: string,
         attachments: DiscordAttachmentInfo[],
+        embeds?: DiscordEmbedInfo[],
     ): Promise<{
         contentParts: Array<{ type: "text"; text: string } | { type: "media"; mimeType: string; fileUri: string }>;
         pendingRecords: PendingGeminiRecord[];
@@ -661,8 +723,11 @@ export class HandleDiscordMessageUseCase {
                         pendingRecords.push({
                             fileAnchor: {
                                 originalGeminiUrl: uploaded.geminiUrl,
+                                sourceType: GeminiFileSourceType.ATTACHMENT,
                                 discordAttachmentId: attachment.id,
                                 discordFilename: attachment.name,
+                                embedIndex: null,
+                                embedMediaKey: null,
                             },
                             uploadData: {
                                 geminiFileName: uploaded.geminiFileName,
@@ -680,6 +745,90 @@ export class HandleDiscordMessageUseCase {
                         await unlink(tempPath).catch((err) => {
                             this.logger.warn({ tempPath, err }, "Failed to delete temp file after Gemini upload");
                         });
+                    }
+                }
+
+                // Upload embed media items (image, video, thumbnail) for each embed
+                if (embeds) {
+                    for (const [embedIndex, embed] of embeds.entries()) {
+                        for (const key of EMBED_MEDIA_KEYS) {
+                            const media = embed[key];
+                            if (!media?.url) continue;
+
+                            const capitalizedKey = (key.charAt(0).toUpperCase() + key.slice(1)) as Capitalize<
+                                typeof key
+                            >;
+                            const displayName = `Embed-${embedIndex}-${capitalizedKey}`;
+                            const tempPath = join(this.attachmentsTempDir, `${randomUUIDv7()}-${displayName}`);
+                            try {
+                                const embedAttachment: DiscordAttachmentInfo = {
+                                    id: media.url,
+                                    url: media.url,
+                                    proxyURL: media.proxyURL ?? media.url,
+                                    name: displayName,
+                                    size: 0,
+                                    contentType: null,
+                                };
+                                const acceptTypes = key === "video" ? "video/*" : "image/*";
+                                const mimeType = await this.diskDownloader.downloadToFile(
+                                    embedAttachment,
+                                    tempPath,
+                                    acceptTypes,
+                                );
+
+                                const fileName = `files/${randomUUIDv7()}`;
+                                const uploaded = await this.geminiFileUploader.upload(
+                                    tempPath,
+                                    fileName,
+                                    mimeType,
+                                    displayName,
+                                );
+
+                                this.logger.debug(
+                                    {
+                                        embedIndex,
+                                        key,
+                                        geminiFileName: uploaded.geminiFileName,
+                                        mimeType,
+                                    },
+                                    "Uploaded embed media to Gemini Files API",
+                                );
+
+                                pendingRecords.push({
+                                    fileAnchor: {
+                                        originalGeminiUrl: uploaded.geminiUrl,
+                                        sourceType: GeminiFileSourceType.EMBED_MEDIA,
+                                        discordAttachmentId: null,
+                                        discordFilename: null,
+                                        embedIndex,
+                                        embedMediaKey: key,
+                                    },
+                                    uploadData: {
+                                        geminiFileName: uploaded.geminiFileName,
+                                        geminiUrl: uploaded.geminiUrl,
+                                        uploadedAt: new Date(),
+                                    },
+                                });
+
+                                uploadedParts.push({
+                                    type: "media",
+                                    mimeType,
+                                    fileUri: uploaded.geminiUrl,
+                                });
+                            } catch (err) {
+                                this.logger.warn(
+                                    { err, embedIndex, key, url: media.url },
+                                    "Failed to download or upload embed media — skipping",
+                                );
+                            } finally {
+                                await unlink(tempPath).catch((unlinkErr) => {
+                                    this.logger.warn(
+                                        { tempPath, err: unlinkErr },
+                                        "Failed to delete temp embed media file after Gemini upload",
+                                    );
+                                });
+                            }
+                        }
                     }
                 }
 

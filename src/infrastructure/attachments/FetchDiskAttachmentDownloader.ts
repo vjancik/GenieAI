@@ -2,6 +2,7 @@ import { mkdir, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import * as Sentry from "@sentry/bun";
 import { file as bunFile } from "bun";
+import type { AppConfig } from "../../application/config/AppConfig.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { IDiskAttachmentDownloader } from "../../application/ports/IDiskAttachmentDownloader.ts";
 import type { Logger } from "../../application/types/Logger.ts";
@@ -17,9 +18,18 @@ import { AppError } from "../../domain/errors/AppError.ts";
  * The caller is responsible for deleting the destination file after use.
  */
 export class FetchDiskAttachmentDownloader implements IDiskAttachmentDownloader {
-    constructor(private readonly logger: Logger) {}
+    private readonly responseTimeoutMs: number;
+    private readonly maxSizeBytes: number;
 
-    async downloadToFile(attachment: DiscordAttachmentInfo, destPath: string): Promise<string> {
+    constructor(
+        private readonly logger: Logger,
+        config: Pick<AppConfig, "file">,
+    ) {
+        this.responseTimeoutMs = config.file.attachmentDownloader.timeoutMs;
+        this.maxSizeBytes = config.file.attachmentDownloader.disk.maxSizeMB * 1024 * 1024;
+    }
+
+    async downloadToFile(attachment: DiscordAttachmentInfo, destPath: string, acceptTypes?: string): Promise<string> {
         return Sentry.startSpan(
             {
                 name: "Download Discord attachment to disk",
@@ -30,6 +40,14 @@ export class FetchDiskAttachmentDownloader implements IDiskAttachmentDownloader 
                 },
             },
             async (span) => {
+                // size > 0 means Discord reported a known size — skip if it already exceeds the limit
+                if (attachment.size > 0 && attachment.size > this.maxSizeBytes) {
+                    throw new AppError(
+                        "ATTACHMENT_TOO_LARGE",
+                        `Attachment "${attachment.name}" is ${attachment.size} bytes, exceeding the ${this.maxSizeBytes / 1024 / 1024} MB disk limit`,
+                    );
+                }
+
                 this.logger.debug(
                     { name: attachment.name, size: attachment.size, destPath },
                     "Downloading attachment to disk",
@@ -40,7 +58,7 @@ export class FetchDiskAttachmentDownloader implements IDiskAttachmentDownloader 
 
                 let result: { mimeType: string | null };
                 try {
-                    result = await this.streamToFile(attachment.url, destPath);
+                    result = await this.streamToFile(attachment.url, destPath, acceptTypes);
                 } catch (primaryErr) {
                     this.logger.warn(
                         {
@@ -51,7 +69,7 @@ export class FetchDiskAttachmentDownloader implements IDiskAttachmentDownloader 
                         "Primary attachment URL failed, trying proxy URL",
                     );
                     try {
-                        result = await this.streamToFile(attachment.proxyURL, destPath);
+                        result = await this.streamToFile(attachment.proxyURL, destPath, acceptTypes);
                     } catch (proxyErr) {
                         throw new AppError(
                             "ATTACHMENT_DOWNLOAD_FAILED",
@@ -77,9 +95,27 @@ export class FetchDiskAttachmentDownloader implements IDiskAttachmentDownloader 
      * Creates or overwrites the file at `destPath`.
      * Cleans up a partially written file on failure.
      */
-    private async streamToFile(url: string, destPath: string): Promise<{ mimeType: string | null }> {
+    private async streamToFile(
+        url: string,
+        destPath: string,
+        acceptTypes?: string,
+    ): Promise<{ mimeType: string | null }> {
         this.logger.debug({ url }, "Fetching attachment URL");
-        const response = await fetch(url);
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), this.responseTimeoutMs);
+
+        const headers: Record<string, string> = {};
+        if (acceptTypes !== undefined) headers.Accept = acceptTypes;
+
+        let response: Response;
+        try {
+            response = await fetch(url, { signal: controller.signal, headers });
+        } finally {
+            // Clear the timeout once headers arrive — body streaming must not be interrupted
+            clearTimeout(timeoutId);
+        }
+
         if (!response.ok) {
             throw new AppError("ATTACHMENT_DOWNLOAD_FAILED", `HTTP ${response.status} fetching attachment from ${url}`);
         }
@@ -88,8 +124,37 @@ export class FetchDiskAttachmentDownloader implements IDiskAttachmentDownloader 
             throw new AppError("ATTACHMENT_DOWNLOAD_FAILED", `No response body for attachment at ${url}`);
         }
 
+        // If the server advertises a Content-Length, check it before streaming to disk
+        const contentLengthHeader = response.headers.get("content-length");
+        if (contentLengthHeader !== null) {
+            const contentLength = Number(contentLengthHeader);
+            if (!Number.isNaN(contentLength) && contentLength > this.maxSizeBytes) {
+                throw new AppError(
+                    "ATTACHMENT_TOO_LARGE",
+                    `Response Content-Length ${contentLength} bytes from ${url} exceeds the ${this.maxSizeBytes / 1024 / 1024} MB disk limit`,
+                );
+            }
+        }
+
         const rawContentType = response.headers.get("content-type");
         const mimeType = rawContentType?.split(";")[0]?.trim() ?? null;
+
+        // Validate the response MIME type against the requested Accept types.
+        // A wildcard pattern like "image/*" matches any "image/" prefix.
+        if (acceptTypes !== undefined && mimeType !== null) {
+            const accepted = acceptTypes.split(",").map((t) => t.trim());
+            const isAccepted = accepted.some((pattern) => {
+                if (pattern.endsWith("/*")) return mimeType.startsWith(pattern.slice(0, -1));
+                return mimeType === pattern;
+            });
+            if (!isAccepted) {
+                throw new AppError(
+                    "UNEXPECTED_CONTENT_TYPE",
+                    `Expected ${acceptTypes} from ${url} but got "${mimeType}"`,
+                );
+            }
+        }
+
         const contentLength = response.headers.get("content-length");
         this.logger.debug({ mimeType, contentLength, destPath }, "Response received, writing to disk");
 

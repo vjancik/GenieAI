@@ -86,8 +86,11 @@ function filePayload(
 ): Omit<GeminiFile, "id" | "discordMessageId" | "discordChannelId"> {
     return {
         originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/test-file",
+        sourceType: "attachment",
         discordAttachmentId: "att-001",
         discordFilename: "photo.png",
+        embedIndex: null,
+        embedMediaKey: null,
         messageId,
         ...overrides,
     };

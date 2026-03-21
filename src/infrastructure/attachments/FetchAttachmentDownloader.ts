@@ -1,4 +1,5 @@
 import * as Sentry from "@sentry/bun";
+import type { AppConfig } from "../../application/config/AppConfig.ts";
 import type {
     DiscordAttachmentInfo,
     DownloadedAttachment,
@@ -18,15 +19,19 @@ import { AppError } from "../../domain/errors/AppError.ts";
  * Primary URL is attempted first; on failure the proxy URL is tried.
  * Throws {@link AppError} with code `ATTACHMENT_DOWNLOAD_FAILED` if both fail.
  */
-const DEFAULT_RESPONSE_TIMEOUT_MS = 10_000;
-
 export class FetchAttachmentDownloader implements IAttachmentDownloader {
+    private readonly responseTimeoutMs: number;
+    private readonly maxSizeBytes: number;
+
     constructor(
         private readonly logger: Logger,
-        private readonly responseTimeoutMs: number = DEFAULT_RESPONSE_TIMEOUT_MS,
-    ) {}
+        config: Pick<AppConfig, "file">,
+    ) {
+        this.responseTimeoutMs = config.file.attachmentDownloader.timeoutMs;
+        this.maxSizeBytes = config.file.attachmentDownloader.memory.maxSizeMB * 1024 * 1024;
+    }
 
-    async download(attachment: DiscordAttachmentInfo): Promise<DownloadedAttachment> {
+    async download(attachment: DiscordAttachmentInfo, acceptTypes?: string): Promise<DownloadedAttachment> {
         return Sentry.startSpan(
             {
                 name: "Download Discord attachment (inline)",
@@ -37,7 +42,14 @@ export class FetchAttachmentDownloader implements IAttachmentDownloader {
                 },
             },
             async (span) => {
-                const buffer = await this.fetchWithFallback(attachment);
+                // size > 0 means Discord reported a known size — skip if it already exceeds the limit
+                if (attachment.size > 0 && attachment.size > this.maxSizeBytes) {
+                    throw new AppError(
+                        "ATTACHMENT_TOO_LARGE",
+                        `Attachment "${attachment.name}" is ${attachment.size} bytes, exceeding the ${this.maxSizeBytes / 1024 / 1024} MB inline limit`,
+                    );
+                }
+                const buffer = await this.fetchWithFallback(attachment, acceptTypes);
                 const mimeType = buffer.mimeType ?? attachment.contentType ?? "application/octet-stream";
 
                 span.setAttribute("attachment.mime_type", mimeType);
@@ -64,10 +76,11 @@ export class FetchAttachmentDownloader implements IAttachmentDownloader {
      */
     private async fetchWithFallback(
         attachment: DiscordAttachmentInfo,
+        acceptTypes?: string,
     ): Promise<{ bytes: ArrayBuffer; mimeType: string | null }> {
         // Try primary URL first
         try {
-            return await this.fetchUrl(attachment.url);
+            return await this.fetchUrl(attachment.url, acceptTypes);
         } catch (primaryErr) {
             this.logger.warn(
                 { err: primaryErr, url: attachment.url, name: attachment.name },
@@ -77,7 +90,7 @@ export class FetchAttachmentDownloader implements IAttachmentDownloader {
 
         // Fall back to proxy URL
         try {
-            return await this.fetchUrl(attachment.proxyURL);
+            return await this.fetchUrl(attachment.proxyURL, acceptTypes);
         } catch (proxyErr) {
             throw new AppError(
                 "ATTACHMENT_DOWNLOAD_FAILED",
@@ -92,13 +105,19 @@ export class FetchAttachmentDownloader implements IAttachmentDownloader {
      * Once the response headers are received the timeout is cleared, so large body
      * downloads are not interrupted regardless of how long they take.
      */
-    private async fetchUrl(url: string): Promise<{ bytes: ArrayBuffer; mimeType: string | null }> {
+    private async fetchUrl(
+        url: string,
+        acceptTypes?: string,
+    ): Promise<{ bytes: ArrayBuffer; mimeType: string | null }> {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), this.responseTimeoutMs);
 
+        const headers: Record<string, string> = {};
+        if (acceptTypes !== undefined) headers.Accept = acceptTypes;
+
         let response: Response;
         try {
-            response = await fetch(url, { signal: controller.signal });
+            response = await fetch(url, { signal: controller.signal, headers });
         } finally {
             // Clear the timeout whether fetch succeeded or failed — body download must not be interrupted
             clearTimeout(timeoutId);
@@ -107,10 +126,40 @@ export class FetchAttachmentDownloader implements IAttachmentDownloader {
         if (!response.ok) {
             throw new AppError("ATTACHMENT_DOWNLOAD_FAILED", `HTTP ${response.status} fetching attachment from ${url}`);
         }
+
+        // If the server advertises a Content-Length, check it before buffering the body
+        const contentLengthHeader = response.headers.get("content-length");
+        if (contentLengthHeader !== null) {
+            const contentLength = Number(contentLengthHeader);
+            if (!Number.isNaN(contentLength) && contentLength > this.maxSizeBytes) {
+                throw new AppError(
+                    "ATTACHMENT_TOO_LARGE",
+                    `Response Content-Length ${contentLength} bytes from ${url} exceeds the ${this.maxSizeBytes / 1024 / 1024} MB inline limit`,
+                );
+            }
+        }
+
         const bytes = await response.arrayBuffer();
         // Strip parameters (e.g. "image/jpeg; charset=utf-8") to get the base type
         const rawContentType = response.headers.get("content-type");
         const mimeType = rawContentType?.split(";")[0]?.trim() ?? null;
+
+        // Validate the response MIME type against the requested Accept types.
+        // A wildcard pattern like "image/*" matches any "image/" prefix.
+        if (acceptTypes !== undefined && mimeType !== null) {
+            const accepted = acceptTypes.split(",").map((t) => t.trim());
+            const isAccepted = accepted.some((pattern) => {
+                if (pattern.endsWith("/*")) return mimeType.startsWith(pattern.slice(0, -1));
+                return mimeType === pattern;
+            });
+            if (!isAccepted) {
+                throw new AppError(
+                    "UNEXPECTED_CONTENT_TYPE",
+                    `Expected ${acceptTypes} from ${url} but got "${mimeType}"`,
+                );
+            }
+        }
+
         return { bytes, mimeType };
     }
 }

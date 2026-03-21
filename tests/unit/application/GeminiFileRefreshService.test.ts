@@ -25,7 +25,12 @@ const TEST_API_KEY_ID = "test-key-uuid";
  */
 const testConfig = {
     file: {
-        attachmentsTempDir: "/var/tmp/genie-attachments",
+        attachmentDownloader: {
+            tempDir: "/var/tmp/genie-attachments",
+            timeoutMs: 10_000,
+            memory: { maxSizeMB: 100 },
+            disk: { maxSizeMB: 1_000 },
+        },
         globalModelTimeoutMs: 600_000,
         geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 60 },
         discord: { defaultChainLimit: 100, defaultRetriesLeft: 3 },
@@ -48,8 +53,11 @@ function makeFile(overrides: Partial<GeminiFile> = {}): GeminiFile {
     return {
         id: "file-uuid-1",
         originalGeminiUrl: GEMINI_URL,
+        sourceType: "attachment",
         discordAttachmentId: "att-001",
         discordFilename: "image.png",
+        embedIndex: null,
+        embedMediaKey: null,
         messageId: "msg-uuid-1",
         discordMessageId: "msg-001",
         discordChannelId: "chan-001",
@@ -139,6 +147,7 @@ function makeAttachmentFetcher(
 ): IDiscordMediaService {
     return {
         fetchAttachment: mock(async () => attachment),
+        fetchEmbedMedia: mock(async () => attachment),
     };
 }
 

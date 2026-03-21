@@ -1,8 +1,9 @@
+import type { EmbedMediaKey } from "../../domain/message/GeminiFile.ts";
 import type { DiscordAttachmentInfo } from "./IAttachmentDownloader.ts";
 
 /**
- * Port interface for fetching Discord media (attachments) by re-fetching the
- * source message from the Discord API to obtain a fresh CDN URL.
+ * Port interface for fetching Discord media (attachments and embed media) by
+ * re-fetching the source message from the Discord API to obtain a fresh CDN URL.
  *
  * Discord CDN URLs are time-limited and cannot be reconstructed from attachment
  * IDs alone. Implementations use the injected Discord client to re-fetch messages.
@@ -24,5 +25,23 @@ export interface IDiscordMediaService {
         channelId: string,
         messageDiscordId: string,
         attachmentId: string,
+    ): Promise<DiscordAttachmentInfo | null>;
+
+    /**
+     * Fetches a specific embed media item (image, video, or thumbnail) from a
+     * Discord message by re-fetching the message to get a fresh CDN URL.
+     * Returns `null` if the message no longer exists or the embed / media property
+     * is absent at the given index.
+     *
+     * @param channelId - Discord snowflake of the channel containing the message
+     * @param messageDiscordId - Discord snowflake of the message to fetch
+     * @param embedIndex - Zero-based index of the embed in the message's embeds array
+     * @param embedMediaKey - Which media property to extract: "image", "video", or "thumbnail"
+     */
+    fetchEmbedMedia(
+        channelId: string,
+        messageDiscordId: string,
+        embedIndex: number,
+        embedMediaKey: EmbedMediaKey,
     ): Promise<DiscordAttachmentInfo | null>;
 }

@@ -22,8 +22,11 @@ function buildFindWithUploadStateStmt(db: Db) {
         .select({
             fileId: geminiFiles.id,
             fileOriginalGeminiUrl: geminiFiles.originalGeminiUrl,
+            fileSourceType: geminiFiles.sourceType,
             fileDiscordAttachmentId: geminiFiles.discordAttachmentId,
             fileDiscordFilename: geminiFiles.discordFilename,
+            fileEmbedIndex: geminiFiles.embedIndex,
+            fileEmbedMediaKey: geminiFiles.embedMediaKey,
             fileMessageId: geminiFiles.messageId,
             // discordMessageId and channelId are joined from messages to avoid storing
             // them redundantly on gemini_files — cheap join on indexed PK/FK.
@@ -133,8 +136,11 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                         .values(
                             records.map((r) => ({
                                 originalGeminiUrl: r.originalGeminiUrl,
+                                sourceType: r.sourceType,
                                 discordAttachmentId: r.discordAttachmentId,
                                 discordFilename: r.discordFilename,
+                                embedIndex: r.embedIndex,
+                                embedMediaKey: r.embedMediaKey,
                                 messageId: r.messageId,
                             })),
                         )
@@ -203,8 +209,11 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                         const file: GeminiFile = {
                             id: row.fileId,
                             originalGeminiUrl: row.fileOriginalGeminiUrl,
+                            sourceType: row.fileSourceType,
                             discordAttachmentId: row.fileDiscordAttachmentId,
                             discordFilename: row.fileDiscordFilename,
+                            embedIndex: row.fileEmbedIndex,
+                            embedMediaKey: row.fileEmbedMediaKey,
                             messageId: row.fileMessageId,
                             discordMessageId: row.msgDiscordMessageId,
                             discordChannelId: row.msgChannelId,

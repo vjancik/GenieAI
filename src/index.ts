@@ -63,8 +63,8 @@ const apiKeySyncService = new GeminiApiKeySyncService(geminiApiKeyRepository, lo
 const { freeKeys, paidKey } = await apiKeySyncService.sync(config.googleFreeApiKeys, config.googlePaidApiKey);
 
 // Attachment infrastructure
-const attachmentDownloader = new FetchAttachmentDownloader(logger.child({ module: "attachments" }));
-const diskDownloader = new FetchDiskAttachmentDownloader(logger.child({ module: "attachments:disk" }));
+const attachmentDownloader = new FetchAttachmentDownloader(logger.child({ module: "attachments" }), config);
+const diskDownloader = new FetchDiskAttachmentDownloader(logger.child({ module: "attachments:disk" }), config);
 
 // Lazy uploader registry — one GenaiFileUploader per API key, constructed on first use
 const uploaderRegistry = new GenaiFileUploaderRegistry(

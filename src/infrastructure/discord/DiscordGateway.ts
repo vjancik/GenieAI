@@ -20,6 +20,7 @@ import { extractWebGroundingChunks, formatGroundingSources } from "../../applica
 import { splitMarkdown } from "../../application/formatters/markdownSplitter.ts";
 import { discordMessageToLlmText, llmTextToDiscordText } from "../../application/formatters/textTransformers.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
+import type { DiscordEmbedInfo } from "../../application/ports/IChatMessageService.ts";
 import type { AgentStatusUpdate, OnStatusUpdate } from "../../application/types/AgentStatus.ts";
 import { AgentStatusType, assertNever } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";
@@ -33,7 +34,7 @@ import { shortenRedirectUrl } from "../http/redirectUrl.ts";
 import type { DiscordClient } from "./DiscordClient.ts";
 import { SUMMARIZE_COMMAND_NAME } from "./DiscordCommandRegistry.ts";
 import { InteractionLock } from "./InteractionLock.ts";
-import { buildSnapshot, extractAttachments } from "./messageExtractors.ts";
+import { buildSnapshot, extractAttachments, extractEmbeds } from "./messageExtractors.ts";
 import { RateLimiter } from "./RateLimiter.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
 
@@ -953,6 +954,7 @@ export class DiscordGateway {
 
         const targetMessage = interaction.targetMessage;
         const attachments = extractAttachments(targetMessage);
+        const embeds = extractEmbeds(targetMessage);
         const botRoleId = targetMessage.guild?.members.me?.roles.botRole?.id ?? null;
         const userContent = extractUserContent(targetMessage, botUserId, botRoleId);
 
@@ -982,6 +984,7 @@ export class DiscordGateway {
             botUserId,
             userContent,
             attachments,
+            embeds,
             intent: MessageIntent.SUMMARY,
             pingUser,
             replyPrefix,
@@ -1087,6 +1090,7 @@ export class DiscordGateway {
         botUserId: string;
         userContent: string | null;
         attachments: DiscordAttachmentInfo[] | null;
+        embeds?: DiscordEmbedInfo[];
         intent: MessageIntent;
         retriesLeft?: number | null;
         /** Whether to ping the author of message in the bot reply. Defaults to true. */
@@ -1106,6 +1110,7 @@ export class DiscordGateway {
             botUserId,
             userContent,
             attachments,
+            embeds,
             intent,
             retriesLeft,
             pingUser,
@@ -1186,6 +1191,9 @@ export class DiscordGateway {
                             discordAuthorId: message.author.id,
                             userContent: llmContent,
                             attachments: attachments ?? [],
+                            // Prefer caller-provided embeds; fall back to those on the snapshot
+                            // (rawSnapshot is always built from the same message so they match).
+                            embeds: embeds ?? rawSnapshot.embeds,
                             intent,
                             onStatusUpdate,
                             reuseHumanMessage,

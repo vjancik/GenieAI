@@ -17,7 +17,12 @@ const testConfig = {
     attachmentMode: "inline" as const,
     maxInlineAttachmentSizeMB: 100,
     file: {
-        attachmentsTempDir: "/var/tmp/genie-attachments",
+        attachmentDownloader: {
+            tempDir: "/var/tmp/genie-attachments",
+            timeoutMs: 10_000,
+            memory: { maxSizeMB: 100 },
+            disk: { maxSizeMB: 1_000 },
+        },
         globalModelTimeoutMs: 600_000,
         geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 15 },
         discord: { defaultChainLimit: 100, defaultRetriesLeft: 3 },

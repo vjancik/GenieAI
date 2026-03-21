@@ -44,7 +44,7 @@ describe("discordMessageToLlmText", () => {
                 ],
             });
             expect(result).toContain("Embedded content:");
-            expect(result).toContain("[rich]");
+            expect(result).toContain("Type: rich");
             expect(result).toContain("Title: My Title");
             expect(result).toContain("Description: A description");
             expect(result).toContain("Author: Author Name");
@@ -58,7 +58,7 @@ describe("discordMessageToLlmText", () => {
                 content: "look",
                 embeds: [{ type: "image" }],
             });
-            expect(result).toContain("[image]");
+            expect(result).toContain("Type: image");
             expect(result).toContain("END");
         });
 

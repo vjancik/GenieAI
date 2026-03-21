@@ -14,6 +14,18 @@ import {
 import type { DiscordMessage } from "../../domain/message/Message.ts";
 
 /**
+ * Discriminates between a Discord attachment and an embed media property
+ * as the source of a Gemini file upload.
+ */
+export const geminiFileSourceTypeEnum = pgEnum("gemini_file_source_type", ["attachment", "embed_media"]);
+
+/**
+ * The property on a Discord embed that contains the media to upload.
+ * Matches the keys on {@link DiscordEmbedInfo} that carry media URLs.
+ */
+export const embedMediaKeyEnum = pgEnum("embed_media_key", ["image", "video", "thumbnail"]);
+
+/**
  * Postgres enum for the interaction pathway that produced a bot response.
  * Matches {@link MessageInteractionType} in the domain layer.
  */
@@ -161,13 +173,18 @@ export const geminiApiKeys = pgTable("gemini_api_keys", {
 /**
  * Permanent anchor table for files uploaded to the Gemini Files API.
  *
- * Each row corresponds to one Discord attachment that has been uploaded at least
- * once. This table is NEVER cleaned — it holds the immutable Discord context
- * (discordAttachmentId, discordFilename, messageId) needed to re-download
- * the file if it must be refreshed for a different API key.
+ * Each row corresponds to one Discord attachment or embed media item that has been
+ * uploaded at least once. This table is NEVER cleaned — it holds the immutable
+ * Discord context needed to re-download the file if it must be refreshed for a
+ * different API key.
  *
  * The `original_gemini_url` is the URI returned at the very first upload and is
  * stored in LangChain content blocks as the stable lookup key. It never changes.
+ *
+ * `source_type` discriminates between a direct attachment and an embed media item.
+ * When `source_type = 'embed_media'`, `embed_index` and `embed_media_key` identify
+ * the specific embed property to re-fetch; `discord_attachment_id` and
+ * `discord_filename` are NULL in that case.
  */
 export const geminiFiles = pgTable("gemini_files", {
     id: uuid("id").primaryKey().default(sql`uuidv7()`),
@@ -176,10 +193,26 @@ export const geminiFiles = pgTable("gemini_files", {
      * content blocks and used as the stable lookup key. Never updated after insert.
      */
     originalGeminiUrl: text("original_gemini_url").notNull().unique(),
-    /** Discord attachment snowflake — stable identifier for re-downloading. */
-    discordAttachmentId: text("discord_attachment_id").notNull(),
-    /** Original filename as uploaded in Discord. Used as displayName on re-upload. */
-    discordFilename: text("discord_filename").notNull(),
+    /**
+     * Discriminates the source of this file.
+     * - `attachment`: a direct Discord message attachment
+     * - `embed_media`: an image/video/thumbnail from a Discord embed
+     */
+    sourceType: geminiFileSourceTypeEnum("source_type").notNull().default("attachment"),
+    /** Discord attachment snowflake — stable identifier for re-downloading. NULL for embed_media rows. */
+    discordAttachmentId: text("discord_attachment_id"),
+    /** Original filename as uploaded in Discord. Used as displayName on re-upload. NULL for embed_media rows. */
+    discordFilename: text("discord_filename"),
+    /**
+     * Zero-based index of the embed in the message's embeds array.
+     * Only set when `source_type = 'embed_media'`; NULL for attachment rows.
+     */
+    embedIndex: integer("embed_index"),
+    /**
+     * The property on the embed that contains the media URL.
+     * Only set when `source_type = 'embed_media'`; NULL for attachment rows.
+     */
+    embedMediaKey: embedMediaKeyEnum("embed_media_key"),
     /**
      * UUID primary key of the messages row that originally created this upload.
      * FK → messages(id); ON DELETE CASCADE removes file records when the originating message is deleted.

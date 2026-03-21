@@ -1,8 +1,15 @@
 import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 import pino from "pino";
+import type { AppConfig } from "../../../src/application/config/AppConfig.ts";
 import type { DiscordAttachmentInfo } from "../../../src/application/ports/IAttachmentDownloader.ts";
 import { AppError } from "../../../src/domain/errors/AppError.ts";
 import { FetchAttachmentDownloader } from "../../../src/infrastructure/attachments/FetchAttachmentDownloader.ts";
+
+function makeConfig(timeoutMs: number, maxSizeMB = 100): Pick<AppConfig, "file"> {
+    return {
+        file: { attachmentDownloader: { timeoutMs, memory: { maxSizeMB }, disk: { maxSizeMB: 1_000 } } },
+    } as Pick<AppConfig, "file">;
+}
 
 const testLogger = pino({ level: "silent" });
 
@@ -31,7 +38,7 @@ describe("FetchAttachmentDownloader", () => {
     let downloader: FetchAttachmentDownloader;
 
     beforeEach(() => {
-        downloader = new FetchAttachmentDownloader(testLogger);
+        downloader = new FetchAttachmentDownloader(testLogger, makeConfig(10_000));
     });
 
     test("downloads and base64-encodes content from primary URL", async () => {
@@ -144,7 +151,7 @@ describe("FetchAttachmentDownloader", () => {
 
     test("aborts fetch when response timeout is exceeded", async () => {
         // Use a 1 ms timeout so the signal is aborted before the fetch resolves
-        const timedOutDownloader = new FetchAttachmentDownloader(testLogger, 1);
+        const timedOutDownloader = new FetchAttachmentDownloader(testLogger, makeConfig(1));
 
         const globalFetch = spyOn(globalThis, "fetch").mockImplementation(
             // TYPE COERCION: mock only needs to satisfy the Promise<Response> return; full fetch signature not needed
@@ -162,7 +169,7 @@ describe("FetchAttachmentDownloader", () => {
 
     test("does not abort body download after response is received", async () => {
         // Use a 1 ms timeout — body download must still succeed after timeout fires
-        const timedOutDownloader = new FetchAttachmentDownloader(testLogger, 1);
+        const timedOutDownloader = new FetchAttachmentDownloader(testLogger, makeConfig(1));
         const data = new Uint8Array([7, 8, 9]);
 
         const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(makeResponse(data, "image/png"));

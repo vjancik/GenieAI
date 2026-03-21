@@ -35,5 +35,11 @@ export interface DownloadedAttachment {
  * with a resolved MIME type.
  */
 export interface IAttachmentDownloader {
-    download(attachment: DiscordAttachmentInfo): Promise<DownloadedAttachment>;
+    /**
+     * @param attachment - Discord attachment metadata including CDN URLs
+     * @param acceptTypes - Optional `Accept` header value (e.g. `"image/*"`, `"video/*"`).
+     *   When provided, the header is sent with the request and the response Content-Type
+     *   is validated against it — throws `UNEXPECTED_CONTENT_TYPE` if it does not match.
+     */
+    download(attachment: DiscordAttachmentInfo, acceptTypes?: string): Promise<DownloadedAttachment>;
 }

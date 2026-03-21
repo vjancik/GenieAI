@@ -34,12 +34,11 @@ export interface IGeminiFileRepository {
      * ensures `.returning()` always yields all rows — including pre-existing ones —
      * so callers never need a fallback SELECT per row.
      *
-     * @param records - All fields except `id` (assigned by the database)
-     * @returns The DB-assigned UUIDs, index-aligned with the input array
-     */
-    /**
      * `discordMessageId` and `discordChannelId` are intentionally excluded — they are
      * not stored on `gemini_files` and are sourced from the joined `messages` row at read time.
+     *
+     * @param records - All fields except `id` (assigned by the database)
+     * @returns The DB-assigned UUIDs, index-aligned with the input array
      */
     saveFiles(records: Omit<GeminiFile, "id" | "discordMessageId" | "discordChannelId">[]): Promise<{ id: string }[]>;
 

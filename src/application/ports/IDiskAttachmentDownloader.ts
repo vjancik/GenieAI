@@ -20,9 +20,14 @@ export interface IDiskAttachmentDownloader {
      *
      * @param attachment - Discord attachment metadata including CDN URLs
      * @param destPath - Absolute path to write the downloaded file
+     * @param acceptTypes - Optional `Accept` header value (e.g. `"image/*"`, `"video/*"`).
+     *   When provided, the header is sent with the request and the response Content-Type
+     *   is validated against it — throws `UNEXPECTED_CONTENT_TYPE` if it does not match.
      * @returns The resolved MIME type (from response Content-Type header,
      *          Discord metadata, or `"application/octet-stream"` as fallback)
      * @throws {@link AppError} with code `ATTACHMENT_DOWNLOAD_FAILED` if both URLs fail
+     * @throws {@link AppError} with code `UNEXPECTED_CONTENT_TYPE` if the response MIME type
+     *   does not match `acceptTypes`
      */
-    downloadToFile(attachment: DiscordAttachmentInfo, destPath: string): Promise<string>;
+    downloadToFile(attachment: DiscordAttachmentInfo, destPath: string, acceptTypes?: string): Promise<string>;
 }
