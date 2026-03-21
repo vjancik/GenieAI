@@ -54,6 +54,26 @@ const RETRY_BUTTON_ID = "retry_mention";
 /** Custom ID for the Next Page button attached to paginated bot responses. */
 const NEXT_PAGE_BUTTON_ID = "next_page";
 
+/** Custom ID for the Render button attached to responses containing extended markdown. */
+const RENDER_BUTTON_ID = "render_image";
+
+/**
+ * Returns true if the text contains any markdown features that benefit from
+ * rich rendering: inline equations ($...$), block equations ($$...$$), or
+ * GFM tables (a pipe-delimited header row followed by a separator row).
+ */
+export function hasExtendedMarkdown(text: string): boolean {
+    // Block equations: $$...$$
+    if (/\$\$[\s\S]+?\$\$/.test(text)) return true;
+    // Inline equations: $...$  where content starts and ends with a non-whitespace character.
+    // False positives (e.g. mixed prefix/suffix currency in the same sentence) are acceptable —
+    // it's better to show the Render button unnecessarily than to miss a real equation.
+    if (/\$\S[^$\n]+\S\$/.test(text)) return true;
+    // GFM table: a line with pipes, followed by a separator line (---|:---:|etc.)
+    if (/^\|.+\|[ \t]*\n\|[ \t]*[-:| \t]+\|/m.test(text)) return true;
+    return false;
+}
+
 /**
  * Maps each recognized bot command prefix to its corresponding {@link MessageIntent}.
  * Commands must appear at the start of a message, followed by at least one whitespace.
@@ -274,6 +294,8 @@ export class DiscordGateway {
                 this.trackHandler(this.handleRetryButton(interaction));
             } else if (interaction.customId === NEXT_PAGE_BUTTON_ID) {
                 this.trackHandler(this.handleNextPageButton(interaction));
+            } else if (interaction.customId === RENDER_BUTTON_ID) {
+                this.trackHandler(this.handleRenderButton(interaction));
             }
         });
 
@@ -423,6 +445,12 @@ export class DiscordGateway {
                   )
                 : undefined;
 
+        // Attach a Render button when the full response contains extended markdown features
+        // (LaTeX equations or tables) that benefit from rich rendering.
+        const renderButton = hasExtendedMarkdown(response)
+            ? new ButtonBuilder().setCustomId(RENDER_BUTTON_ID).setLabel("Render").setStyle(ButtonStyle.Secondary)
+            : undefined;
+
         if (discordResponse.length > 2000) {
             // --- PAGINATED PATH ---
             // Split on discordResponse (without footer) so the newOffset stored in the DB
@@ -448,6 +476,7 @@ export class DiscordGateway {
                     .setLabel(`Next Page · Page 1 of ${totalPages}`)
                     .setStyle(ButtonStyle.Primary),
                 ...(retryRow ? retryRow.components : []),
+                ...(renderButton ? [renderButton] : []),
             );
 
             const components: ActionRowBuilder<ButtonBuilder>[] = [firstPageRow];
@@ -509,9 +538,14 @@ export class DiscordGateway {
                     ? `${responseWithFooter}\n${sourcesLine}`
                     : null;
 
+            const singleRow = new ActionRowBuilder<ButtonBuilder>();
+            if (retryRow) singleRow.addComponents(...retryRow.components);
+            if (renderButton) singleRow.addComponents(renderButton);
+            const nonPaginatedComponents = singleRow.components.length > 0 ? [singleRow] : [];
+
             const botReply = await replyTarget.reply({
                 content: (replyPrefix ? `${replyPrefix} ` : "") + (combined ?? responseWithFooter),
-                ...(retryRow && { components: [retryRow] }),
+                ...(nonPaginatedComponents.length > 0 && { components: nonPaginatedComponents }),
                 ...(!pingUser && {
                     allowedMentions: {
                         repliedUser: false,
@@ -1059,6 +1093,34 @@ export class DiscordGateway {
         await interaction.editReply({
             files: [{ attachment: png, name: filename }],
         });
+    }
+
+    /** Handles the "Render" button attached to bot replies containing extended markdown. */
+    private async handleRenderButton(interaction: ButtonInteraction): Promise<void> {
+        const botMessage = interaction.message;
+
+        if (this.interactionLock.isLocked(botMessage.id, RENDER_BUTTON_ID)) {
+            await interaction.reply({ content: "*Already rendering, please wait.*", flags: MessageFlags.Ephemeral });
+            return;
+        }
+
+        this.interactionLock.setLocked(botMessage.id, RENDER_BUTTON_ID);
+        try {
+            await interaction.deferReply();
+            const markdown = await this.resolveExportContent(botMessage);
+            const html = this.markdownToHtml.render(markdown);
+            const png = await this.htmlToImage.render(html);
+            const filename = `render-${botMessage.id}.png`;
+
+            await interaction.editReply({
+                files: [{ attachment: png, name: filename }],
+            });
+
+            // Remove the Render button from the original message now that it's been rendered
+            await botMessage.edit({ components: withoutButton(botMessage, RENDER_BUTTON_ID) });
+        } finally {
+            this.interactionLock.clearLock(botMessage.id, RENDER_BUTTON_ID);
+        }
     }
 
     /**
