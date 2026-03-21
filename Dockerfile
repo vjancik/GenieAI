@@ -11,6 +11,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     bunx playwright@1.58.2 install-deps chromium
 
 FROM base_with_playwright_deps AS base_with_playwright
+# Install to a fixed path accessible by all users (including the 'bun' user at runtime)
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN bunx playwright@1.58.2 install chromium
 # Load custom fonts into the system font cache
 COPY src/infrastructure/exporters/fonts /usr/local/share/fonts/genie
@@ -39,6 +41,7 @@ COPY --from=prerelease /usr/src/app/src ./src
 COPY --from=prerelease /usr/src/app/package.json .
 
 ENV NODE_ENV=production
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # run the app
 USER bun

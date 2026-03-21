@@ -64,12 +64,7 @@ export class MarkdownToHtmlRenderer {
     @font-face {
       font-family: "gg sans";
       src: local("gg sans Medium");
-      font-weight: 500;
-    }
-    @font-face {
-      font-family: "gg sans";
-      src: local("gg sans Normal");
-      font-weight: 400;
+      font-weight: 400 500;
     }
     /* Discord dark theme tokens */
     :root {
