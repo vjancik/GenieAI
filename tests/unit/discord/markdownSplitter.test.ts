@@ -162,20 +162,28 @@ describe("splitMarkdown — regression: long single-line content (message1)", ()
         expect(text.length).toBeGreaterThan(2000);
     });
 
-    it("page 1 content is non-empty and within the 2000-char limit", () => {
-        const result = splitMarkdown(text, 0, 2000, { pageCount: true });
-        expect(result.content.length).toBeGreaterThan(0);
-        expect(result.content.length).toBeLessThanOrEqual(2000);
+    it("splits into exactly 3 pages", () => {
+        const { pageCount } = splitMarkdown(text, 0, 2000, { pageCount: true });
+        expect(pageCount).toBe(3);
     });
 
-    it("page 2 content is non-empty (hard-splits the long line)", () => {
-        const page1 = splitMarkdown(text, 0, 2000, { pageCount: true });
-        expect(page1.newOffset).toBeGreaterThan(0);
+    it("all 3 pages are non-empty and within the 2000-char limit", () => {
+        const page1 = splitMarkdown(text, 0, 2000);
         const page2 = splitMarkdown(text, page1.newOffset, 2000);
-        expect(page2.content.length).toBeGreaterThan(0);
+        const page3 = splitMarkdown(text, page2.newOffset, 2000);
+        for (const page of [page1, page2, page3]) {
+            expect(page.content.length).toBeGreaterThan(0);
+            expect(page.content.length).toBeLessThanOrEqual(2000);
+        }
     });
 
-    it("paginating step-by-step covers the full text without infinite loop", () => {
+    it("page 2 ends with the ellipsis (hard-split mid-line)", () => {
+        const page1 = splitMarkdown(text, 0, 2000);
+        const page2 = splitMarkdown(text, page1.newOffset, 2000);
+        expect(page2.content.endsWith("…")).toBe(true);
+    });
+
+    it("paginating step-by-step covers the full text", () => {
         let offset = 0;
         let pages = 0;
         while (offset < text.length) {
@@ -186,6 +194,7 @@ describe("splitMarkdown — regression: long single-line content (message1)", ()
             if (pages > 10) break; // safety
         }
         expect(offset).toBe(text.length);
+        expect(pages).toBe(3);
     });
 });
 
