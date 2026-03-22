@@ -1114,14 +1114,32 @@ export class DiscordGateway {
 
         this.interactionLock.setLocked(botMessage.id, RENDER_BUTTON_ID);
         try {
-            await interaction.deferReply();
+            // Acknowledge the button press without creating an interaction reply — the
+            // rendered image will be sent as a normal reply to the bot message instead.
+            await interaction.deferUpdate();
+
             const markdown = await this.resolveExportContent(botMessage);
             const html = this.markdownToHtml.render(markdown);
             const png = await this.htmlToImage.render(html);
             const filename = `render-${botMessage.id}.png`;
 
-            await interaction.editReply({
+            const renderReply = await botMessage.reply({
                 files: [{ attachment: png, name: filename }],
+                allowedMentions: { repliedUser: false },
+            });
+
+            // Persist so the render reply participates in the DB reply chain
+            await this.messageRepo.saveAssistantMessage({
+                discordMessageId: renderReply.id,
+                repliesToDiscordId: botMessage.id,
+                channelId: renderReply.channelId,
+                guildId: renderReply.guildId ?? DM_GUILD_TOKEN,
+                discordAuthorId: this.client.user?.id ?? "",
+                newMessages: [],
+                retriesLeft: null,
+                usedFallback: false,
+                interactionType: "message_create",
+                interactionAuthorDiscordId: interaction.user.id,
             });
 
             // Remove the Render button from the original message now that it's been rendered
