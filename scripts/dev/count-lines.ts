@@ -55,12 +55,17 @@ const PROJECT_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
 const SEARCH_DIRS = ["src", "tests"];
 
-/** Recursively collects *.ts file paths under a directory. */
+/** Directories to exclude from collection, relative to PROJECT_ROOT. */
+const EXCLUDE_DIRS: string[] = [];
+
+/** Recursively collects *.ts file paths under a directory, skipping excluded dirs. */
 function collectTsFiles(dir: string): string[] {
     const results: string[] = [];
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const fullPath = join(dir, entry.name);
         if (entry.isDirectory()) {
+            const rel = fullPath.slice(PROJECT_ROOT.length).replace(/\\/g, "/");
+            if (EXCLUDE_DIRS.includes(rel)) continue;
             results.push(...collectTsFiles(fullPath));
         } else if (entry.isFile() && entry.name.endsWith(".ts")) {
             results.push(fullPath);
