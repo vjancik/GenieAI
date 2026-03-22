@@ -74,6 +74,24 @@ const TABLE_SEPARATOR_RE = /^\|[\s|:-]+\|?\s*$/;
 /** Closing fence added to page content when a split falls inside a code block. */
 const CODE_FENCE_CLOSE = "\n```";
 
+/** Ellipsis appended to hard-split content to signal truncation mid-line. */
+const HARD_SPLIT_ELLIPSIS = "…";
+
+/**
+ * Returns the content and newOffset for a hard split at `limit` characters.
+ * Reserves {@link HARD_SPLIT_ELLIPSIS}.length characters for the trailing ellipsis
+ * so the reader knows the line continues.
+ */
+function hardSplit(text: string, offset: number, limit: number): Omit<SplitMarkdownResult, "pageCount"> {
+    const cutoff = limit - HARD_SPLIT_ELLIPSIS.length;
+    return {
+        content: text.slice(offset, offset + cutoff) + HARD_SPLIT_ELLIPSIS,
+        newOffset: offset + cutoff,
+        endedInCodeBlock: false,
+        codeBlockType: null,
+    };
+}
+
 /**
  * Builds the continuation header prepended to a page that resumes an open code block.
  * Not counted toward text offsets — it is purely cosmetic markup.
@@ -199,10 +217,7 @@ function extractPage(
                 }
                 // No viable newline inside the block — hard split
                 return {
-                    content: text.slice(offset, offset + limit),
-                    newOffset: offset + limit,
-                    endedInCodeBlock: false,
-                    codeBlockType: null,
+                    ...hardSplit(text, offset, limit),
                 };
             }
 
@@ -283,7 +298,14 @@ function extractPage(
                 };
             }
 
-            // Normal case: not in a protected block — split before this line
+            // Normal case: not in a protected block — split before this line.
+            // If accumulated is empty the current line itself exceeds the limit (no
+            // newline to split on). Hard-split at limit to guarantee forward progress.
+            if (accumulated.length === 0) {
+                return {
+                    ...hardSplit(text, offset, limit),
+                };
+            }
             break;
         }
 

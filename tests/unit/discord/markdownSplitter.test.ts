@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { file } from "bun";
 import { splitMarkdown } from "../../../src/application/formatters/markdownSplitter.ts";
 
 // ---------------------------------------------------------------------------
@@ -136,18 +137,55 @@ describe("splitMarkdown — basic splitting", () => {
         expect(result.newOffset).toBe(text.length);
     });
 
-    it("single line exceeding limit is returned as-is (no newline to split on)", () => {
-        // No newlines — can't split, so the whole thing is returned even if over limit.
-        // extractPage will try to add it: accumulated is empty, addition = line (> limit).
-        // It doesn't enter the split branch (accumulated.length + addition.length > limit
-        // triggers, but we break before adding — accumulated stays empty, loop exits).
-        // Result: empty content, newOffset = offset.
-        // This is a degenerate case; in practice the caller should handle 0-length pages.
+    it("single line exceeding limit is hard-split with trailing ellipsis", () => {
+        // No newlines — falls back to a hard split; 1 char reserved for "…"
         const text = chars(3000);
         const result = splitMarkdown(text, 0, 2000);
-        // The line is one token, accumulated stays "", we break — content is ""
-        expect(result.content).toBe("");
-        expect(result.newOffset).toBe(0);
+        expect(result.content).toBe(`${chars(1999)}…`);
+        expect(result.newOffset).toBe(1999);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Regression test: message1 fixture — single long line > 2000 chars
+// The content is a 98-char header line, a blank line, then a 2103-char single
+// line (all facts on one line). The splitter must hard-split that line mid-way
+// and produce a non-empty page 2.
+// ---------------------------------------------------------------------------
+describe("splitMarkdown — regression: long single-line content (message1)", () => {
+    let text: string;
+    beforeAll(async () => {
+        text = await file(new URL("data/markdownSplitterTest-message1.md", import.meta.url)).text();
+    });
+
+    it("total text length exceeds 2000 characters", () => {
+        expect(text.length).toBeGreaterThan(2000);
+    });
+
+    it("page 1 content is non-empty and within the 2000-char limit", () => {
+        const result = splitMarkdown(text, 0, 2000, { pageCount: true });
+        expect(result.content.length).toBeGreaterThan(0);
+        expect(result.content.length).toBeLessThanOrEqual(2000);
+    });
+
+    it("page 2 content is non-empty (hard-splits the long line)", () => {
+        const page1 = splitMarkdown(text, 0, 2000, { pageCount: true });
+        expect(page1.newOffset).toBeGreaterThan(0);
+        const page2 = splitMarkdown(text, page1.newOffset, 2000);
+        expect(page2.content.length).toBeGreaterThan(0);
+    });
+
+    it("paginating step-by-step covers the full text without infinite loop", () => {
+        let offset = 0;
+        let pages = 0;
+        while (offset < text.length) {
+            const { newOffset } = splitMarkdown(text, offset, 2000);
+            expect(newOffset).toBeGreaterThan(offset);
+            offset = newOffset;
+            pages++;
+            if (pages > 10) break; // safety
+        }
+        expect(offset).toBe(text.length);
     });
 });
 
@@ -256,10 +294,10 @@ describe("splitMarkdown — pageCount option", () => {
     });
 
     it("returns correct pageCount for two-page text", () => {
-        // Two lines of 1001 chars each — each line exactly fits in 1001, but together > 2000
-        const line = chars(1001);
+        // Two lines of 1000 chars each joined by \n = 2001 chars total.
+        // Limit 1001: page 1 fits "line1\n" (1001 chars) but not line2, page 2 gets line2.
+        const line = chars(1000);
         const text = `${line}\n${line}`;
-        // With limit 1001: line1 fits on page 1, line2 on page 2
         const result = splitMarkdown(text, 0, 1001, { pageCount: true });
         expect(result.pageCount).toBe(2);
     });
