@@ -147,4 +147,9 @@ describe("hasExtendedMarkdown — acceptable false positives", () => {
         // No emphasis punctuation adjacent to either $ — acceptable false positive
         expect(hasExtendedMarkdown("tickets are $10/$20 for student/adult")).toBe(true);
     });
+
+    test("price range with en dash: $20B–$25B", () => {
+        // $20B...B$ — no emphasis punctuation adjacent to either $; acceptable false positive
+        expect(hasExtendedMarkdown("valuation is $20B–$25B")).toBe(true);
+    });
 });

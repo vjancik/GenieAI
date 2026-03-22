@@ -42,7 +42,16 @@ export function safeParseTavilyResponse(raw: unknown) {
     return { objResponse, parsed: TavilySearchResponseResultsSchema.safeParse(objResponse) };
 }
 
+const ROUTE_TO_SEARCH_NAME = "web_search";
+const ROUTE_TO_SEARCH_DESCRIPTION =
+    "Use this when the question requires " +
+    "up-to-date information, current events, recent news, live data, or " +
+    "niche topics where web search would significantly improve accuracy. " +
+    "The input query should be a one sentence natural language query that can span multiple topics.";
+
 export const tool = new TavilySearch({
+    name: ROUTE_TO_SEARCH_NAME,
+    description: ROUTE_TO_SEARCH_DESCRIPTION,
     maxResults: 10,
     includeUsage: true,
     responseFormat: "content",

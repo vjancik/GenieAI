@@ -20,8 +20,7 @@ import { is429Error } from "../errors/is429Error.ts";
 import { isModelFallbackError } from "../errors/isModelFallbackError.ts";
 import { buildGeneralSystemPrompt, type GeneralModel } from "../models/generalModel.ts";
 import { buildSearchSystemPrompt, type SearchModel } from "../models/searchModel.ts";
-import type { TriageModel } from "../models/triageModel.ts";
-import { TRIAGE_SYSTEM_PROMPT } from "../models/triageModel.ts";
+import { buildTriageSystemPrompt, type TriageModel } from "../models/triageModel.ts";
 import type { GetVideoCaptionsTool } from "../tools/getVideoCaptionsTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
 import { safeParseTavilyResponse } from "../tools/tavilySearchTool.ts";
@@ -45,8 +44,6 @@ const booleanOrReducer = {
 const OrchestratorStateSchema = new StateSchema({
     messages: MessagesValue,
     intent: z.custom<MessageIntent>(),
-    /** Query string emitted by the triage model when routing to Tavily search. */
-    searchQuery: z.string().optional(),
     /**
      * Set to true by generalNode or searchNode when the fallback model was used.
      * Signals to the caller that the response quality may be degraded and a retry is worthwhile.
@@ -486,7 +483,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             );
             const triageWindow =
                 secondToLastHumanIdx === -1 ? state.messages : state.messages.slice(secondToLastHumanIdx);
-            const messages: BaseMessage[] = [new SystemMessage(TRIAGE_SYSTEM_PROMPT), ...triageWindow];
+            const messages: BaseMessage[] = [
+                new SystemMessage(buildTriageSystemPrompt(this.searchMode)),
+                ...triageWindow,
+            ];
 
             const { result: triageResponse } = await this.invokeWithFreeKeyRotation(
                 this.triageProvider.get.bind(this.triageProvider),
@@ -536,12 +536,17 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 return new Command({ goto: OrchestratorNode.GENERAL });
             }
             switch (routingCall.name) {
-                case "route_to_search": {
-                    // Routing sentinel: do NOT add triage message to state.
-                    // Capture the query arg if the triage model provided one (Tavily mode).
-                    const searchQuery = (routingCall.args as { query?: string }).query;
-                    return new Command({ goto: OrchestratorNode.SEARCH, update: { searchQuery } });
-                }
+                case "route_to_search":
+                    // Routing sentinel (Google mode): do NOT add triage message to state.
+                    return new Command({ goto: OrchestratorNode.SEARCH });
+
+                case "web_search":
+                    // Real Tavily tool call (Tavily mode): add triage AIMessage to state so the
+                    // ToolMessage created in searchNode has a valid tool_call_id in history.
+                    return new Command({
+                        goto: OrchestratorNode.SEARCH,
+                        update: { messages: [triageResponse] },
+                    });
 
                 case "route_to_general":
                     // Routing sentinel: do NOT add triage message to state
@@ -712,12 +717,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * In Google mode: passes the system prompt and state to the Gemini model with
      * native Google Search grounding bound. Always uses the paid API key.
      *
-     * In Tavily mode: calls the Tavily tool directly with the query captured by triage,
-     * then injects two "fake" messages into history before invoking the LLM so the model
-     * sees the search results as prior context without a live tool-call round-trip:
-     *   1. An AIMessage with a `tavily_search` tool_call (mirrors what the model would emit)
-     *   2. A ToolMessage carrying the raw Tavily result entries
-     * Both messages are included in the state update so they are persisted for future turns.
+     * In Tavily mode: reads the `web_search` tool call from the triage AIMessage already in
+     * state, invokes the Tavily tool with that query, then prepends the ToolMessage result to
+     * the history before invoking the LLM. Both the ToolMessage and the final AIMessage are
+     * included in the state update so they are persisted for future turns.
      */
     private async searchNode(
         state: GraphState,
@@ -736,16 +739,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             });
 
             if (this.searchMode === SearchMode.tavily) {
-                const { searchQuery } = state;
-
-                if (!searchQuery) {
-                    // Should not happen in Tavily mode — triage tool always supplies a query.
-                    throw new AppError(
-                        "ORCHESTRATOR_MISSING_SEARCH_QUERY",
-                        "Tavily search mode requires a query from triage, but none was found in state",
-                    );
-                }
-
                 if (!this.tavilyTool) {
                     throw new AppError(
                         "ORCHESTRATOR_MISSING_TAVILY_TOOL",
@@ -753,9 +746,24 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     );
                 }
 
+                // The triage AIMessage (with the web_search tool call) was added to state
+                // by triageNode — read the query from its tool_calls.
+                const triageMessage = state.messages.at(-1);
+                const webSearchCall =
+                    triageMessage instanceof AIMessage
+                        ? triageMessage.tool_calls?.find((tc) => tc.name === "web_search")
+                        : undefined;
+                if (!webSearchCall) {
+                    throw new AppError(
+                        "ORCHESTRATOR_MISSING_SEARCH_QUERY",
+                        "Tavily search mode: expected last state message to carry a web_search tool call",
+                    );
+                }
+                // TYPE COERCION: tool_call args typed as Record<string, unknown>; schema guarantees query: string
+                const searchQuery = (webSearchCall.args as { query: string }).query;
+
                 this.logger.debug({ searchQuery }, "Tavily search node invoking tool");
 
-                const toolCallId = Math.random().toString(36).slice(2);
                 const rawResult = await this.tavilyTool.invoke({ query: searchQuery });
                 const { objResponse, parsed } = safeParseTavilyResponse(rawResult);
 
@@ -766,17 +774,11 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     );
                 }
 
-                // Synthetic AIMessage representing what the model would have emitted to call Tavily.
-                const tavilyCallMessage = new AIMessage({
-                    tool_calls: [{ name: "tavily_search", args: { query: searchQuery }, id: toolCallId }],
-                });
-
-                // ToolMessage carrying the raw result object — passed through regardless of schema
-                // validation so the LLM always receives the search content.
+                // ToolMessage responding to the triage AIMessage's web_search tool call.
                 const tavilyResultMessage = new ToolMessage({
                     content: JSON.stringify(objResponse.results),
-                    name: "tavily_search",
-                    tool_call_id: toolCallId,
+                    name: "web_search",
+                    tool_call_id: webSearchCall.id ?? "",
                 });
 
                 // Grounding chunks in the Google Search shape, to be merged onto the final AIMessage
@@ -795,7 +797,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 const invokeMessages: BaseMessage[] = [
                     new SystemMessage(buildSearchSystemPrompt(dateStr, this.searchMode)),
                     ...state.messages,
-                    tavilyCallMessage,
                     tavilyResultMessage,
                 ];
 
@@ -806,21 +807,13 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     this.nodeTimeoutsMs?.search,
                 );
 
-                result.additional_kwargs = { ...result.additional_kwargs, ...tavilyGroundingKwargs };
+                Object.assign(result.additional_kwargs, tavilyGroundingKwargs);
 
                 return {
-                    messages: [tavilyCallMessage, tavilyResultMessage, result],
+                    messages: [tavilyResultMessage, result],
                     isRetryable: usedFallback,
                     usedFallback,
                 };
-            }
-
-            // Google mode: warn if triage unexpectedly produced a query (misconfiguration).
-            if (state.searchQuery) {
-                this.logger.warn(
-                    { searchQuery: state.searchQuery },
-                    "Triage generated a search query parameter in Google Search mode — query is ignored",
-                );
             }
 
             const messages: BaseMessage[] = [
