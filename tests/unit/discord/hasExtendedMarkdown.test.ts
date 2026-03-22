@@ -5,6 +5,10 @@ import { hasExtendedMarkdown } from "../../../src/infrastructure/discord/Discord
 // ─── True negatives (must return false) ───────────────────────────────────────
 
 describe("hasExtendedMarkdown — plain currency (must not trigger)", () => {
+    test("price range with en dash: $20B–$25B", () => {
+        expect(hasExtendedMarkdown("valuation is $20B–$25B")).toBe(false);
+    });
+
     test("single price suffix: costs $5", () => {
         expect(hasExtendedMarkdown("The item costs $5.")).toBe(false);
     });
@@ -146,10 +150,5 @@ describe("hasExtendedMarkdown — acceptable false positives", () => {
     test("price range with slash: $10/$20", () => {
         // No emphasis punctuation adjacent to either $ — acceptable false positive
         expect(hasExtendedMarkdown("tickets are $10/$20 for student/adult")).toBe(true);
-    });
-
-    test("price range with en dash: $20B–$25B", () => {
-        // $20B...B$ — no emphasis punctuation adjacent to either $; acceptable false positive
-        expect(hasExtendedMarkdown("valuation is $20B–$25B")).toBe(true);
     });
 });

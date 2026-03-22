@@ -75,7 +75,7 @@ export function hasExtendedMarkdown(text: string): boolean {
     //   This rejects prefix-style bold currency like **$45,000** (ends with ** before $).
     // Equations inside bold like **$E = mc^2$** are unaffected — inner $ delimiters
     // are surrounded by alphanumeric chars on both sides.
-    if (/\$[\p{L}\p{N}\\][^$\n]+[^*_~|\s]\$/u.test(text)) return true;
+    if (/\$[\p{L}\p{N}\\][^$\n]+[^*_~–—\-|\s]\$/u.test(text)) return true;
     // GFM table: a line with pipes, followed by a separator line (---|:---:|etc.)
     if (/^\|.+\|[ \t]*\n\|[ \t]*[-:| \t]+\|/m.test(text)) return true;
     return false;
