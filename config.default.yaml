@@ -69,3 +69,8 @@ agent:
       fallbackModel: "gemini-2.5-flash" # <optional>
       # Maximum milliseconds to wait for a search model response before aborting.
       timeoutMs: 120000                 # <required>
+      # Search backend to use. Options: "google" | "tavily"   <optional, default: "google">
+      #   google: Google Search grounding via Gemini API. Requires GOOGLE_PAID_API_KEY.
+      #           Free only for gemini-2.5 models — gemini-3+ requires a paid plan.
+      #   tavily: Tavily Search API. Requires TAVILY_API_KEY env var.
+      mode: "google"

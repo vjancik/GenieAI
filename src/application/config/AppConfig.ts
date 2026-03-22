@@ -14,6 +14,21 @@ export type AttachmentMode = (typeof AttachmentMode)[keyof typeof AttachmentMode
 
 const ATTACHMENT_MODES = Object.values(AttachmentMode) as readonly AttachmentMode[];
 
+/**
+ * Controls which search backend is used by the search node.
+ * - "google": Google Search grounding via the Gemini API (requires a paid API key;
+ *   only free for gemini-2.5 models — gemini-3+ requires a paid plan).
+ * - "tavily": Tavily Search API (requires TAVILY_API_KEY env var).
+ */
+export const SearchMode = {
+    google: "google",
+    tavily: "tavily",
+} as const;
+
+export type SearchMode = (typeof SearchMode)[keyof typeof SearchMode];
+
+const SEARCH_MODES = Object.values(SearchMode) as readonly SearchMode[];
+
 // ---------------------------------------------------------------------------
 // Defaults
 // ---------------------------------------------------------------------------
@@ -84,6 +99,22 @@ const agentModelSchema = z.object({
     fallbackModel: z.string().optional(),
     /** Maximum milliseconds to wait for a model response before aborting. */
     timeoutMs: z.number().int().positive(),
+});
+
+const searchModelSchema = agentModelSchema.extend({
+    /**
+     * Which search backend to use.
+     * - "google": Google Search grounding via the Gemini API (requires a paid key;
+     *   free only for gemini-2.5 models — gemini-3+ requires a paid plan).
+     * - "tavily": Tavily Search API (requires TAVILY_API_KEY env var).
+     * Defaults to "google".
+     */
+    mode: z
+        .string()
+        .transform((v) => v.toLowerCase())
+        .pipe(z.enum(SEARCH_MODES))
+        .optional()
+        .prefault(SearchMode.google),
 });
 
 const triageModelSchema = agentModelSchema.extend({
@@ -196,7 +227,7 @@ const fileConfigSchema = z.object({
         nodes: z.object({
             triage: triageModelSchema,
             general: agentModelSchema,
-            search: agentModelSchema,
+            search: searchModelSchema,
         }),
     }),
     ytDlp: z
@@ -245,6 +276,15 @@ const envConfigSchema = z
                 "GOOGLE_PAID_API_KEY must be a single key. For multiple keys use GOOGLE_FREE_API_KEYS.",
             )
             .transform((v) => v.trim()),
+        /**
+         * Tavily Search API key — required when agent.nodes.search.mode is "tavily".
+         * Obtain a key at https://tavily.com.
+         */
+        TAVILY_API_KEY: z
+            .string()
+            .min(1)
+            .transform((v) => v.trim())
+            .optional(),
     })
     .transform((env) => ({
         discordClientId: env.DISCORD_CLIENT_ID,
@@ -252,6 +292,7 @@ const envConfigSchema = z
         databaseUrl: env.DATABASE_URL,
         googleFreeApiKeys: env.GOOGLE_FREE_API_KEYS,
         googlePaidApiKey: env.GOOGLE_PAID_API_KEY,
+        tavilyApiKey: env.TAVILY_API_KEY,
     }));
 
 /** Inferred type from the environment variable schema. */

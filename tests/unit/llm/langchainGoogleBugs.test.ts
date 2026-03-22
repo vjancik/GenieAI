@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { HumanMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { ChatGoogle } from "@langchain/google";
 
 // ---------------------------------------------------------------------------
@@ -262,5 +262,61 @@ describe("@langchain/google — HumanMessage multimodal serialization", () => {
   },
 ]
 `);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Bug: ToolMessage is silently dropped when its content is a plain object
+// Introduced in @langchain/google@0.1.8, fixed in TBD
+// (reported upstream — tracked by the regression test below)
+// ---------------------------------------------------------------------------
+
+describe("@langchain/google — ToolMessage serialization", () => {
+    /**
+     * A ToolMessage whose content is an array of objects must not be dropped from
+     * the history sent to the Gemini API.
+     *
+     * BUG (@langchain/google@0.1.8): when ToolMessage content is a non-string value,
+     * the message is silently omitted from the `contents` array, so the model receives
+     * only two turns instead of three.
+     *
+     * This test checks for the presence of a `functionResponse` part in the third
+     * content turn — if the bug is active, `contents` will only have two entries and
+     * the assertion fails.
+     */
+    test("ToolMessage with array content is not dropped from generateContent request", async () => {
+        const model = new ChatGoogle({
+            model: "gemini-2.5-flash",
+            apiKey: "test-api-key-fake",
+        });
+
+        const messages = [
+            new HumanMessage("What is the result of my_tool?"),
+            new AIMessage({
+                content: "",
+                tool_calls: [{ id: "tool-call-123", name: "my_tool", args: { input: "test" } }],
+            }),
+            new ToolMessage({
+                // TYPE COERCION: deliberately passing an array of objects as content
+                // to reproduce the bug where non-string ToolMessage content causes the
+                // message to be dropped entirely from the Gemini API request.
+                content: [
+                    { status: "ok", value: 42 },
+                    { label: "extra", items: ["foo", "bar"] },
+                ] as unknown as string,
+                tool_call_id: "tool-call-123",
+                name: "my_tool",
+            }),
+        ];
+
+        const body = await captureGenerateContentBody(() => model.invoke(messages));
+        const contents = body.contents as Array<{ role: string; parts: Array<Record<string, unknown>> }>;
+
+        // All three turns must be present — the bug causes the ToolMessage turn to be dropped.
+        expect(contents).toHaveLength(3);
+
+        // The third turn must carry a functionResponse part.
+        const thirdTurnParts = contents[2]?.parts ?? [];
+        expect(thirdTurnParts.some((p) => "functionResponse" in p)).toBe(true);
     });
 });

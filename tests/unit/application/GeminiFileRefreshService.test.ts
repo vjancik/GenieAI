@@ -41,7 +41,7 @@ const testConfig = {
             nodes: {
                 triage: { model: "gemini-test", timeoutMs: 60_000, thinkingLevel: "LOW" as const },
                 general: { model: "gemini-test", timeoutMs: 120_000 },
-                search: { model: "gemini-test", timeoutMs: 120_000 },
+                search: { model: "gemini-test", timeoutMs: 120_000, mode: "google" as const },
             },
         },
         ytDlp: { retries: 1 },

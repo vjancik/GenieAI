@@ -2,23 +2,40 @@ import { tool } from "@langchain/core/tools";
 import { ChatGoogle } from "@langchain/google/node";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
+import { SearchMode } from "../../../application/config/AppConfig.ts";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
 import type { GetVideoCaptionsTool } from "../tools/getVideoCaptionsTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
 import { blockNoneSafetySettings } from "./sharedGeminiSettings.ts";
 
+const ROUTE_TO_SEARCH_NAME = "route_to_search";
+const ROUTE_TO_SEARCH_DESCRIPTION =
+    "Route to a search-capable agent. Use this when the question requires " +
+    "up-to-date information, current events, recent news, live data, or " +
+    "niche topics where web search would significantly improve accuracy.";
+
 /**
- * Sentinel tool that signals routing to the search agent.
+ * Sentinel tool that signals routing to the Google Search agent.
  * The triage model calls this when the user's question needs up-to-date information.
+ * Google Search grounding is handled by the search model itself — no query needed here.
  */
-const routeToSearchTool = tool(async () => JSON.stringify({ route: "search" }), {
-    name: "route_to_search",
-    description:
-        "Route to a search-capable agent. Use this when the question requires " +
-        "up-to-date information, current events, recent news, live data, or " +
-        "niche topics where web search would significantly improve accuracy.",
+const routeToGoogleSearchTool = tool(async () => JSON.stringify({ route: "search" }), {
+    name: ROUTE_TO_SEARCH_NAME,
+    description: ROUTE_TO_SEARCH_DESCRIPTION,
     schema: z.object({}),
+});
+
+/**
+ * Sentinel tool that signals routing to the Tavily Search agent.
+ * Requires a pre-formed query so the orchestrator can pass it directly to the Tavily API.
+ */
+const routeToTavilySearchTool = tool(async () => JSON.stringify({ route: "search" }), {
+    name: ROUTE_TO_SEARCH_NAME,
+    description: ROUTE_TO_SEARCH_DESCRIPTION,
+    schema: z.object({
+        query: z.string().min(1).describe("A one sentence natural language query that can span multiple topics."),
+    }),
 });
 
 /**
@@ -59,17 +76,21 @@ interface TriageModelOptions {
     thinkingLevel: ThinkingLevel;
     /** Whether to include thought tokens in the model response. */
     includeThoughts: boolean;
+    /** Which search backend is active — determines which route_to_search tool is bound. */
+    searchMode: SearchMode;
     getWebsiteTool: GetWebsiteTool;
     getVideoCaptionsTool: GetVideoCaptionsTool;
 }
 
 /**
- * Creates the triage model with all four routing tools bound.
+ * Creates the triage model with all routing tools bound.
  *
  * The triage model is invoked with a single-pass (no ReAct loop) — the orchestrator
  * inspects the tool call from the response and routes accordingly.
  *
  * Uses a low thinking budget to keep latency and cost minimal for classification.
+ * The search routing tool is selected based on `searchMode`: Google grounding needs no
+ * query (the search model handles it), while Tavily requires a pre-formed query string.
  */
 function createTriageModel(
     apiKey: string,
@@ -90,6 +111,9 @@ function createTriageModel(
         safetySettings: blockNoneSafetySettings,
         callbacks: sentryCallback,
     });
+
+    const routeToSearchTool =
+        options.searchMode === SearchMode.tavily ? routeToTavilySearchTool : routeToGoogleSearchTool;
 
     const tools = [options.getWebsiteTool, options.getVideoCaptionsTool, routeToSearchTool, routeToGeneralTool];
     return llm.bindTools(tools, { tool_choice: "any" });

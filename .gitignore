@@ -47,3 +47,4 @@ config.local.yaml
 # Generated dev script outputs
 scripts/dev/*.html
 scripts/dev/*.png
+scripts/dev/*.json

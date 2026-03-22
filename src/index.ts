@@ -43,6 +43,7 @@ import { RoundRobinFreeKeyProvider } from "./infrastructure/llm/RoundRobinFreeKe
 import { SinglePaidKeyProvider } from "./infrastructure/llm/SinglePaidKeyProvider.ts";
 import { createGetVideoCaptionsTool } from "./infrastructure/llm/tools/getVideoCaptionsTool.ts";
 import { createGetWebsiteTool } from "./infrastructure/llm/tools/getWebsiteTool.ts";
+import { tool as tavilyTool } from "./infrastructure/llm/tools/tavilySearchTool.ts";
 import { createLogger } from "./infrastructure/logging/logger.ts";
 
 const logger = createLogger(
@@ -91,6 +92,7 @@ const triageProvider = new TriageModelProvider({
     fallbackModelName: config.file.agent.nodes.triage.fallbackModel,
     thinkingLevel: config.file.agent.nodes.triage.thinkingLevel,
     includeThoughts: config.file.geminiModels.includeThoughts,
+    searchMode: config.file.agent.nodes.search.mode,
     getWebsiteTool,
     getVideoCaptionsTool,
 });
@@ -103,6 +105,7 @@ const searchProvider = new SearchModelProvider({
     modelName: config.file.agent.nodes.search.model,
     fallbackModelName: config.file.agent.nodes.search.fallbackModel,
     includeThoughts: config.file.geminiModels.includeThoughts,
+    searchMode: config.file.agent.nodes.search.mode,
 });
 
 // Discord client lifecycle wrapper — created before use cases and gateway so both can share it
@@ -136,6 +139,7 @@ const agentOrchestrator = new AgentOrchestrator(
     logger.child({ module: "agent-orchestrator" }),
     config,
     geminiFileRefreshService,
+    config.file.agent.nodes.search.mode === "tavily" ? tavilyTool : undefined,
 );
 
 // The primary uploader for new uploads in HandleDiscordMessage uses the current free key.

@@ -15,7 +15,7 @@ import {
     type TextBasedChannel,
     type TopLevelComponent,
 } from "discord.js";
-import type { FileConfig } from "../../application/config/AppConfig.ts";
+import { type FileConfig, SearchMode } from "../../application/config/AppConfig.ts";
 import { extractWebGroundingChunks, formatGroundingSources } from "../../application/formatters/groundingSources.ts";
 import { splitMarkdown } from "../../application/formatters/markdownSplitter.ts";
 import { discordMessageToLlmText, llmTextToDiscordText } from "../../application/formatters/textTransformers.ts";
@@ -218,23 +218,6 @@ function withoutButton(message: Message, removeId: string): (TopLevelComponent |
     return result;
 }
 
-async function resolveGroundingSources(newMessages: BaseMessage[]): Promise<string | null> {
-    const lastMessage = newMessages.at(-1);
-    if (!(lastMessage instanceof AIMessage)) return null;
-
-    const rawChunks = extractWebGroundingChunks(lastMessage.additional_kwargs);
-    if (rawChunks.length === 0) return null;
-
-    const sources = await Promise.all(
-        rawChunks.map(async ({ uri, title }) => ({
-            title,
-            url: await shortenRedirectUrl(uri),
-        })),
-    );
-
-    return formatGroundingSources(sources);
-}
-
 /**
  * Manages Discord event dispatching for incoming messages and button interactions.
  *
@@ -254,6 +237,7 @@ export class DiscordGateway {
     ]);
 
     private previousBotId: string | undefined;
+    private readonly searchMode: SearchMode;
 
     /** Set to true on graceful shutdown — prevents new handlers from starting. */
     private shutdownPending = false;
@@ -270,13 +254,14 @@ export class DiscordGateway {
         private readonly messagePageRepo: IMessagePageRepository,
         private readonly getNextPageUseCase: GetNextPageUseCase,
         private readonly messageRepo: IMessageRepository,
-        config: Pick<FileConfig, "discord">,
+        config: Pick<FileConfig, "discord" | "agent">,
         private readonly markdownToHtml: MarkdownToHtmlRenderer,
         private readonly htmlToImage: HtmlToImageRenderer,
     ) {
         this.client = discordClient.client;
         this.defaultRetriesLeft = config.discord.defaultRetriesLeft;
         this.previousBotId = config.discord.previousBotId;
+        this.searchMode = config.agent.nodes.search.mode;
         this.registerEventHandlers();
     }
 
@@ -442,7 +427,7 @@ export class DiscordGateway {
 
         // Resolve grounding sources in parallel with the response being sent.
         // Only populated when the response came from the searchNode (Google Search grounding).
-        const sourcesLine = await resolveGroundingSources(newMessages);
+        const sourcesLine = await this.resolveGroundingSources(newMessages);
 
         // Attach a Retry button when the use case signals a retryable failure and retries remain.
         // retriesLeft=undefined means this is a fresh response — use defaultRetriesLeft.
@@ -1445,5 +1430,43 @@ export class DiscordGateway {
                 }
             },
         );
+    }
+
+    /**
+     * Extracts grounding source chunks from the last AIMessage in `newMessages` and
+     * formats them as a Discord sources line.
+     *
+     * In Google Search mode, URIs are Google redirect URLs — resolved via HEAD request
+     * to unwrap the canonical destination. Any URI not starting with the expected Google
+     * redirect prefix is logged as an error (guard against future URL scheme changes).
+     *
+     * In Tavily mode, URIs are already canonical — no redirect resolution is needed.
+     */
+    private async resolveGroundingSources(newMessages: BaseMessage[]): Promise<string | null> {
+        const lastMessage = newMessages.at(-1);
+        if (!(lastMessage instanceof AIMessage)) return null;
+
+        const rawChunks = extractWebGroundingChunks(lastMessage.additional_kwargs);
+        if (rawChunks.length === 0) return null;
+
+        const GOOGLE_REDIRECT_PREFIX = "https://vertexaisearch.cloud.google.com";
+
+        const sources = await Promise.all(
+            rawChunks.map(async ({ uri, title }) => {
+                if (this.searchMode === SearchMode.google) {
+                    if (!uri.startsWith(GOOGLE_REDIRECT_PREFIX)) {
+                        this.logger.error(
+                            { uri },
+                            "Google Search grounding URI does not match expected redirect prefix — may need updating",
+                        );
+                        return { title, url: uri };
+                    }
+                    return { title, url: await shortenRedirectUrl(uri) };
+                }
+                return { title, url: uri };
+            }),
+        );
+
+        return formatGroundingSources(sources);
     }
 }
