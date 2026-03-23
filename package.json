@@ -9,6 +9,8 @@
         "typecheck": "tsc --noEmit",
         "codecheck:fix": "biome check --fix",
         "test": "bun test",
+        "test:coverage": "bun run test --coverage",
+        "test:coverage:lcov": "bun run test --coverage --coverage-reporter=lcov",
         "local:prod:up": "docker compose -f docker-compose.local-prod.yml up -d --build --timeout 120",
         "local:prod:down": "docker compose -f docker-compose.local-prod.yml down --timeout 120",
         "db:studio": "drizzle-kit studio",
