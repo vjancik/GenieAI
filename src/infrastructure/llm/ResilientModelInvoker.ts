@@ -4,7 +4,7 @@ import type { AttachmentMode } from "../../application/config/AppConfig.ts";
 import { AttachmentMode as AttachmentModeValues } from "../../application/config/AppConfig.ts";
 import type { IGeminiFileRefreshService } from "../../application/ports/IGeminiFileRefreshService.ts";
 import type {
-    InvokableModel,
+    IInvokableModel,
     IResilientModelInvoker,
     ModelInvocationResult,
 } from "../../application/ports/IResilientModelInvoker.ts";
@@ -34,21 +34,21 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
         private readonly fileRefreshService?: IGeminiFileRefreshService,
     ) {}
 
-    invokeWithFreeKeys<T extends BaseMessage>(
-        getModel: (key: GeminiApiKey) => InvokableModel<T>,
-        getFallbackModel: ((key: GeminiApiKey) => InvokableModel<T> | undefined) | undefined,
+    invokeWithFreeKeys(
+        getModel: (key: GeminiApiKey) => IInvokableModel,
+        getFallbackModel: ((key: GeminiApiKey) => IInvokableModel | undefined) | undefined,
         messages: BaseMessage[],
         timeoutMs?: number,
-    ): Promise<ModelInvocationResult<T>> {
+    ): Promise<ModelInvocationResult> {
         return this.invokeWithKeyRotation(getModel, getFallbackModel, messages, timeoutMs, this.freeKeyProvider, false);
     }
 
-    invokeWithPaidKey<T extends BaseMessage>(
-        getModel: (key: GeminiApiKey) => InvokableModel<T>,
-        getFallbackModel: ((key: GeminiApiKey) => InvokableModel<T> | undefined) | undefined,
+    invokeWithPaidKey(
+        getModel: (key: GeminiApiKey) => IInvokableModel,
+        getFallbackModel: ((key: GeminiApiKey) => IInvokableModel | undefined) | undefined,
         messages: BaseMessage[],
         timeoutMs?: number,
-    ): Promise<ModelInvocationResult<T>> {
+    ): Promise<ModelInvocationResult> {
         return this.invokeWithKeyRotation(getModel, getFallbackModel, messages, timeoutMs, this.paidKeyProvider, true);
     }
 
@@ -63,14 +63,14 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
      * @throws {@link PaidKeyExhaustedError} if `isPaid` is true and the key returns 429
      * @throws The original error immediately for non-429 / non-fallback failures
      */
-    private async invokeWithKeyRotation<T extends BaseMessage>(
-        getModel: (key: GeminiApiKey) => InvokableModel<T>,
-        getFallbackModel: ((key: GeminiApiKey) => InvokableModel<T> | undefined) | undefined,
+    private async invokeWithKeyRotation(
+        getModel: (key: GeminiApiKey) => IInvokableModel,
+        getFallbackModel: ((key: GeminiApiKey) => IInvokableModel | undefined) | undefined,
         messages: BaseMessage[],
         timeoutMs: number | undefined,
         keyProvider: IRoundRobinKeyProvider,
         isPaid: boolean,
-    ): Promise<ModelInvocationResult<T>> {
+    ): Promise<ModelInvocationResult> {
         return Sentry.startSpan(
             {
                 name: "Invoke model with key rotation",

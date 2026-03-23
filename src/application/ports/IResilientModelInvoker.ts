@@ -1,14 +1,14 @@
-import type { BaseMessage } from "@langchain/core/messages";
+import type { AIMessageChunk, BaseMessage } from "@langchain/core/messages";
 import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
 
 /** Minimal invokable model interface used by the resilient invoker. */
-export interface InvokableModel<T extends BaseMessage> {
-    invoke(messages: BaseMessage[], options?: unknown): Promise<T>;
+export interface IInvokableModel {
+    invoke(messages: BaseMessage[], options?: unknown): Promise<AIMessageChunk>;
 }
 
 /** Result of a resilient model invocation. */
-export interface ModelInvocationResult<T extends BaseMessage> {
-    result: T;
+export interface ModelInvocationResult {
+    result: AIMessageChunk;
     /** True when the primary model was unavailable and a fallback model was substituted. */
     usedFallback: boolean;
 }
@@ -35,22 +35,22 @@ export interface IResilientModelInvoker {
      *
      * @throws {AllFreeKeysExhaustedError} if all free keys are rate-limited
      */
-    invokeWithFreeKeys<T extends BaseMessage>(
-        getModel: (key: GeminiApiKey) => InvokableModel<T>,
-        getFallbackModel: ((key: GeminiApiKey) => InvokableModel<T> | undefined) | undefined,
+    invokeWithFreeKeys(
+        getModel: (key: GeminiApiKey) => IInvokableModel,
+        getFallbackModel: ((key: GeminiApiKey) => IInvokableModel | undefined) | undefined,
         messages: BaseMessage[],
         timeoutMs?: number,
-    ): Promise<ModelInvocationResult<T>>;
+    ): Promise<ModelInvocationResult>;
 
     /**
      * Invokes a model against the single paid API key.
      *
      * @throws {PaidKeyExhaustedError} if the paid key is rate-limited
      */
-    invokeWithPaidKey<T extends BaseMessage>(
-        getModel: (key: GeminiApiKey) => InvokableModel<T>,
-        getFallbackModel: ((key: GeminiApiKey) => InvokableModel<T> | undefined) | undefined,
+    invokeWithPaidKey(
+        getModel: (key: GeminiApiKey) => IInvokableModel,
+        getFallbackModel: ((key: GeminiApiKey) => IInvokableModel | undefined) | undefined,
         messages: BaseMessage[],
         timeoutMs?: number,
-    ): Promise<ModelInvocationResult<T>>;
+    ): Promise<ModelInvocationResult>;
 }

@@ -14,9 +14,9 @@ import type { Logger } from "../../../application/types/Logger.ts";
 import { AppError } from "../../../domain/errors/AppError.ts";
 import type { DiscordMessage } from "../../../domain/message/Message.ts";
 import { MessageIntent } from "../../../domain/message/MessageIntent.ts";
-import { buildGeneralSystemPrompt, type GeneralModel } from "../models/generalModel.ts";
-import { buildSearchSystemPrompt, type SearchModel } from "../models/searchModel.ts";
-import { buildTriageSystemPrompt, type TriageModel } from "../models/triageModel.ts";
+import { buildGeneralSystemPrompt } from "../models/generalModel.ts";
+import { buildSearchSystemPrompt } from "../models/searchModel.ts";
+import { buildTriageSystemPrompt } from "../models/triageModel.ts";
 import type { GetVideoCaptionsTool } from "../tools/getVideoCaptionsTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
 import { safeParseTavilyResponse } from "../tools/tavilySearchTool.ts";
@@ -138,9 +138,9 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     private readonly searchMode: SearchMode;
 
     constructor(
-        private readonly triageProvider: IModelProvider<TriageModel>,
-        private readonly generalProvider: IModelProvider<GeneralModel>,
-        private readonly searchProvider: IModelProvider<SearchModel>,
+        private readonly triageProvider: IModelProvider,
+        private readonly generalProvider: IModelProvider,
+        private readonly searchProvider: IModelProvider,
         private readonly invoker: IResilientModelInvoker,
         private readonly getWebsiteTool: GetWebsiteTool,
         private readonly getVideoCaptionsTool: GetVideoCaptionsTool,

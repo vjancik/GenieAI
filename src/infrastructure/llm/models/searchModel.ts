@@ -82,20 +82,18 @@ function createSearchModel(
     }
 }
 
-export type SearchModel = ReturnType<typeof createSearchModel>;
-
 /**
  * Lazy-caching provider for the search model.
  *
  * Builds one {@link SearchModel} per unique `[apiKey, modelName]` pair.
  * The fallback model (if configured) is cached in the same map under its own key.
  */
-export class SearchModelProvider extends ModelProvider<SearchModel> {
+export class SearchModelProvider extends ModelProvider {
     constructor(private readonly options: SearchModelOptions) {
         super(options.modelName, options.fallbackModelName);
     }
 
-    protected create(apiKey: string, modelName: string): SearchModel {
+    protected create(apiKey: string, modelName: string) {
         return createSearchModel(apiKey, modelName, this.options);
     }
 }
