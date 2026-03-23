@@ -1,12 +1,12 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import { Command, END, MessagesValue, ReducedValue, START, StateGraph, StateSchema } from "@langchain/langgraph";
-import type { TavilySearch } from "@langchain/tavily";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
 import { type AppConfig, SearchMode } from "../../../application/config/AppConfig.ts";
 import type { IAgentOrchestrator } from "../../../application/ports/IAgentOrchestrator.ts";
 import type { IModelProvider } from "../../../application/ports/IModelProvider.ts";
+import type { IModelTool } from "../../../application/ports/IModelTool.ts";
 import type { IResilientModelInvoker } from "../../../application/ports/IResilientModelInvoker.ts";
 import type { OnStatusUpdate } from "../../../application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../../application/types/AgentStatus.ts";
@@ -17,8 +17,6 @@ import { MessageIntent } from "../../../domain/message/MessageIntent.ts";
 import { buildGeneralSystemPrompt } from "../models/generalModel.ts";
 import { buildSearchSystemPrompt } from "../models/searchModel.ts";
 import { buildTriageSystemPrompt } from "../models/triageModel.ts";
-import type { GetVideoCaptionsTool } from "../tools/getVideoCaptionsTool.ts";
-import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
 import { safeParseTavilyResponse } from "../tools/tavilySearchTool.ts";
 import { dbMessagesToLangchain, extractContent } from "../utils/messageTransformers.ts";
 
@@ -142,11 +140,11 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         private readonly generalProvider: IModelProvider,
         private readonly searchProvider: IModelProvider,
         private readonly invoker: IResilientModelInvoker,
-        private readonly getWebsiteTool: GetWebsiteTool,
-        private readonly getVideoCaptionsTool: GetVideoCaptionsTool,
+        private readonly getWebsiteTool: IModelTool<{ urls: string[] }>,
+        private readonly getVideoCaptionsTool: IModelTool<{ urls: string[] }>,
         private readonly logger: Logger,
         config: Pick<AppConfig, "file">,
-        private readonly tavilyTool?: TavilySearch,
+        private readonly tavilyTool?: IModelTool<{ query: string }>,
     ) {
         this.searchMode = config.file.agent.nodes.search.mode;
         this.nodeTimeoutsMs = {
