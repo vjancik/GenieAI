@@ -7,7 +7,7 @@ import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
 import { AllFreeKeysExhaustedError, AppError } from "../../../src/domain/errors/AppError.ts";
 import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
 import { MessageIntent } from "../../../src/domain/message/MessageIntent.ts";
-import { AgentOrchestrator } from "../../../src/infrastructure/llm/agents/geminiAgentOrchestrator.ts";
+import { AgentOrchestrator } from "../../../src/infrastructure/llm/agents/agentOrchestrator.ts";
 import type { WebsiteResultEntry } from "../../../src/infrastructure/llm/tools/getWebsiteTool.ts";
 import { dbMessagesToLangchain } from "../../../src/infrastructure/llm/utils/messageTransformers.ts";
 

@@ -35,7 +35,7 @@ import { DiscordMediaService } from "./infrastructure/discord/DiscordMediaServic
 import { StatusMessageUpdater } from "./infrastructure/discord/StatusMessageUpdater.ts";
 import { HtmlToImageRenderer } from "./infrastructure/exporters/HtmlToImageRenderer.ts";
 import { MarkdownToHtmlRenderer } from "./infrastructure/exporters/MarkdownToHtmlRenderer.ts";
-import { AgentOrchestrator } from "./infrastructure/llm/agents/geminiAgentOrchestrator.ts";
+import { AgentOrchestrator } from "./infrastructure/llm/agents/agentOrchestrator.ts";
 import { GeneralModelProvider } from "./infrastructure/llm/models/generalModel.ts";
 import { SearchModelProvider } from "./infrastructure/llm/models/searchModel.ts";
 import { TriageModelProvider } from "./infrastructure/llm/models/triageModel.ts";
