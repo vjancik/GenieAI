@@ -4,13 +4,10 @@ import type { Span } from "@sentry/core";
 import {
     ActionRowBuilder,
     ButtonBuilder,
-    type ButtonInteraction,
     ButtonStyle,
-    type Client,
     ComponentType,
     Events,
     type Message,
-    type MessageContextMenuCommandInteraction,
     MessageFlags,
     type TextBasedChannel,
     type TopLevelComponent,
@@ -22,6 +19,10 @@ import { splitMarkdown } from "../../application/formatters/markdownSplitter.ts"
 import { llmTextToDiscordText } from "../../application/formatters/textTransformers.ts";
 import { hasExtendedMarkdown } from "../../application/helpers/hasExtendedMarkdown.ts";
 import { COMMAND_PREFIX_REGEX, parseMessageIntent } from "../../application/helpers/parseMessageIntent.ts";
+import type { IChatClientBot } from "../../application/ports/chat/IChatClientBot.ts";
+import type { IChatClientButtonInteraction } from "../../application/ports/chat/IChatClientButtonInteraction.ts";
+import type { IChatClientContextMenuInteraction } from "../../application/ports/chat/IChatClientContextMenuInteraction.ts";
+import type { IChatClientMessage } from "../../application/ports/chat/IChatClientMessage.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { DiscordEmbedInfo } from "../../application/ports/IChatMessageService.ts";
 import type { OnStatusUpdate } from "../../application/types/AgentStatus.ts";
@@ -36,6 +37,10 @@ import type { HtmlToImageRenderer } from "../exporters/HtmlToImageRenderer.ts";
 import type { MarkdownToHtmlRenderer } from "../exporters/MarkdownToHtmlRenderer.ts";
 import { shortenRedirectUrl } from "../http/redirectUrl.ts";
 import { dbMessagesToLangchain, extractContent } from "../llm/utils/messageTransformers.ts";
+import { DiscordClientBot } from "./chat/DiscordClientBot.ts";
+import { DiscordClientButtonInteraction } from "./chat/DiscordClientButtonInteraction.ts";
+import { DiscordClientContextMenuInteraction } from "./chat/DiscordClientContextMenuInteraction.ts";
+import { DiscordClientMessage } from "./chat/DiscordClientMessage.ts";
 import type { DiscordClient } from "./DiscordClient.ts";
 import {
     EXPORT_HTML_COMMAND_NAME,
@@ -142,8 +147,9 @@ function withoutButton(message: Message, removeId: string): (TopLevelComponent |
  * direct reference to the underlying discord.js Client for use in event handlers.
  */
 export class DiscordGateway {
-    /** Saved reference to the underlying discord.js Client. */
-    private readonly client: Client;
+    /** Raw discord.js Client — used only for event registration in this class. */
+    private readonly client: DiscordClient["client"];
+    private readonly bot: IChatClientBot;
     private readonly defaultRetriesLeft: number;
     private readonly interactionLock = new InteractionLock();
     // used only in CreateMessage handler for now
@@ -175,6 +181,7 @@ export class DiscordGateway {
         private readonly htmlToImage: HtmlToImageRenderer,
     ) {
         this.client = discordClient.client;
+        this.bot = new DiscordClientBot(discordClient.client);
         this.defaultRetriesLeft = config.discord.defaultRetriesLeft;
         this.previousBotId = config.discord.previousBotId;
         this.searchMode = config.agent.nodes.search.mode;
@@ -183,7 +190,7 @@ export class DiscordGateway {
 
     private registerEventHandlers(): void {
         this.client.on(Events.MessageCreate, (message) => {
-            this.trackHandler(this.handleMessageCreate(message));
+            this.trackHandler(this.handleMessageCreate(new DiscordClientMessage(message)));
         });
 
         this.client.on(Events.InteractionCreate, (interaction) => {
@@ -195,23 +202,25 @@ export class DiscordGateway {
             }
 
             if (interaction.isMessageContextMenuCommand()) {
+                const wrapped = new DiscordClientContextMenuInteraction(interaction);
                 if (interaction.commandName === SUMMARIZE_COMMAND_NAME) {
-                    this.trackHandler(this.handleSummarizeContextMenu(interaction));
+                    this.trackHandler(this.handleSummarizeContextMenu(wrapped));
                 } else if (interaction.commandName === EXPORT_HTML_COMMAND_NAME) {
-                    this.trackHandler(this.handleExportHtmlContextMenu(interaction));
+                    this.trackHandler(this.handleExportHtmlContextMenu(wrapped));
                 } else if (interaction.commandName === EXPORT_IMAGE_COMMAND_NAME) {
-                    this.trackHandler(this.handleExportImageContextMenu(interaction));
+                    this.trackHandler(this.handleExportImageContextMenu(wrapped));
                 }
                 return;
             }
 
             if (!interaction.isButton()) return;
+            const wrapped = new DiscordClientButtonInteraction(interaction);
             if (interaction.customId === RETRY_BUTTON_ID) {
-                this.trackHandler(this.handleRetryButton(interaction));
+                this.trackHandler(this.handleRetryButton(wrapped));
             } else if (interaction.customId === NEXT_PAGE_BUTTON_ID) {
-                this.trackHandler(this.handleNextPageButton(interaction));
+                this.trackHandler(this.handleNextPageButton(wrapped));
             } else if (interaction.customId === RENDER_BUTTON_ID) {
-                this.trackHandler(this.handleRenderButton(interaction));
+                this.trackHandler(this.handleRenderButton(wrapped));
             }
         });
 
@@ -282,7 +291,7 @@ export class DiscordGateway {
      * @param params.span - Active Sentry span for attribute recording
      */
     private async sendBotReply(params: {
-        replyTarget: Message;
+        replyTarget: IChatClientMessage;
         response: string;
         newMessages: BaseMessage[];
         isFailure?: boolean;
@@ -294,7 +303,7 @@ export class DiscordGateway {
          * When 0 the Retry button is suppressed entirely.
          */
         retriesLeft?: number | null;
-        thinkingMessagePromise: ReturnType<Message["reply"]>;
+        thinkingMessagePromise: Promise<IChatClientMessage>;
         span: Span;
         /** Whether to ping the author of replyTarget. Defaults to true. */
         pingUser?: boolean;
@@ -428,7 +437,7 @@ export class DiscordGateway {
                 repliesToDiscordId: replyTarget.id,
                 channelId: botReply.channelId,
                 guildId: botReply.guildId ?? DM_GUILD_TOKEN,
-                discordAuthorId: this.client.user?.id ?? "",
+                discordAuthorId: this.bot.userId,
                 newMessages,
                 retriesLeft: isRetryable ? effectiveRetriesLeft : null,
                 usedFallback: usedFallback ?? false,
@@ -483,7 +492,7 @@ export class DiscordGateway {
                 repliesToDiscordId: replyTarget.id,
                 channelId: botReply.channelId,
                 guildId: botReply.guildId ?? DM_GUILD_TOKEN,
-                discordAuthorId: this.client.user?.id ?? "",
+                discordAuthorId: this.bot.userId,
                 newMessages,
                 retriesLeft: isRetryable ? effectiveRetriesLeft : null,
                 usedFallback: usedFallback ?? false,
@@ -526,7 +535,7 @@ export class DiscordGateway {
         channelId: string,
         guildId: string,
     ): void {
-        const botId = this.client.user?.id;
+        const botId = this.bot.userId;
 
         channel.messages
             .fetch({ after: deletedMessageId, limit: 10 })
@@ -567,7 +576,7 @@ export class DiscordGateway {
      * @param replyTo - The bot message to reply to
      * @param sourcesLine - The formatted sources string (≤ 2000 chars)
      */
-    private async sendSourcesReply(replyTo: Message, sourcesLine: string): Promise<void> {
+    private async sendSourcesReply(replyTo: IChatClientMessage, sourcesLine: string): Promise<void> {
         try {
             const sourcesReply = await replyTo.reply({ content: sourcesLine });
             await this.messageRepo.saveAssistantMessage({
@@ -575,7 +584,7 @@ export class DiscordGateway {
                 repliesToDiscordId: replyTo.id,
                 channelId: sourcesReply.channelId,
                 guildId: sourcesReply.guildId ?? DM_GUILD_TOKEN,
-                discordAuthorId: this.client.user?.id ?? "",
+                discordAuthorId: this.bot.userId,
                 newMessages: [],
                 retriesLeft: null,
                 usedFallback: false,
@@ -600,9 +609,11 @@ export class DiscordGateway {
      *
      * In both scenarios, the old failed bot reply is deleted before sending a new response.
      */
-    private async handleRetryButton(interaction: ButtonInteraction): Promise<void> {
-        const originalMessageId = interaction.message.reference?.messageId;
-        const channel = interaction.channel;
+    private async handleRetryButton(interaction: IChatClientButtonInteraction): Promise<void> {
+        // Use escape hatch: referencedMessageId and channel fetching require discord.js types
+        const discordInteraction = (interaction as DiscordClientButtonInteraction).discordInteraction;
+        const originalMessageId = discordInteraction.message.reference?.messageId;
+        const channel = discordInteraction.channel;
 
         let originalMessage: Message | undefined;
         if (originalMessageId && channel?.isTextBased()) {
@@ -621,7 +632,7 @@ export class DiscordGateway {
                     flags: MessageFlags.Ephemeral,
                 }),
                 interaction.message.edit({
-                    components: withoutButton(interaction.message, RETRY_BUTTON_ID),
+                    components: withoutButton(discordInteraction.message, RETRY_BUTTON_ID),
                 }),
             ]);
             return;
@@ -685,7 +696,7 @@ export class DiscordGateway {
                 // unsatisfactory. Failed responses are open to anyone since retrying benefits all.
                 if (botRecord?.usedFallback && humanRecord?.role === "human") {
                     const originalAuthorId = humanRecord.discordAuthorId;
-                    if (interaction.user.id !== originalAuthorId) {
+                    if (interaction.userId !== originalAuthorId) {
                         await interaction.followUp({
                             content: "*This message was generated for someone else and can only be retried by them.*",
                             flags: MessageFlags.Ephemeral,
@@ -709,9 +720,10 @@ export class DiscordGateway {
                     });
 
                     // If the deleted message had a sources follow-up, clean it up too.
-                    if (interaction.channel) {
+                    // Use escape hatch: deleteDanglingSourcesMessageOptimistically requires TextBasedChannel.
+                    if (discordInteraction.channel) {
                         this.deleteDanglingSourcesMessageOptimistically(
-                            interaction.channel,
+                            discordInteraction.channel,
                             interaction.message.id,
                             originalMessage.channelId,
                             guildId,
@@ -735,10 +747,9 @@ export class DiscordGateway {
                         // reuseHumanMessage skips re-building/re-persisting the human message row
                         // and reconstructs the full conversation chain from DB instead.
                         span.setAttribute("discord.retry_scenario", "A");
-                        const botUserId = this.client.user?.id;
-                        if (!botUserId) throw new Error("Missing bot ID. This shouldn't happen.");
+                        const botUserId = this.bot.userId;
                         await this.invokeAgentWithMessage({
-                            message: originalMessage,
+                            message: new DiscordClientMessage(originalMessage),
                             botUserId,
                             userContent: null,
                             attachments: null,
@@ -754,7 +765,7 @@ export class DiscordGateway {
                     } else {
                         // --- Scenario B: human message not in DB, run full pipeline ---
                         span.setAttribute("discord.retry_scenario", "B");
-                        await this.handleMessageCreate(originalMessage, retriesLeft);
+                        await this.handleMessageCreate(new DiscordClientMessage(originalMessage), retriesLeft);
                     }
                 } finally {
                     this.interactionLock.clearLock(interaction.message.id, interaction.customId);
@@ -772,7 +783,7 @@ export class DiscordGateway {
      *
      * If the page state is missing (e.g. stale button), removes the button and returns.
      */
-    private async handleNextPageButton(interaction: ButtonInteraction): Promise<void> {
+    private async handleNextPageButton(interaction: IChatClientButtonInteraction): Promise<void> {
         if (this.interactionLock.isLocked(interaction.message.id, interaction.customId)) {
             await interaction.deferUpdate();
             return;
@@ -791,6 +802,10 @@ export class DiscordGateway {
                     attributes: { "discord.message_id": currentBotMessageId },
                 },
                 async (span) => {
+                    // withoutButton requires the raw discord.js Message to read its components
+                    const discordBotMessage = (interaction as DiscordClientButtonInteraction).discordInteraction
+                        .message;
+
                     // Step 1: Compute next page content via use case
                     let result: Awaited<ReturnType<GetNextPageUseCase["execute"]>>;
                     try {
@@ -804,7 +819,7 @@ export class DiscordGateway {
                         this.logger.error({ err, currentBotMessageId }, "Failed to compute next page");
                         Sentry.captureException(err);
                         await interaction.message
-                            .edit({ components: withoutButton(interaction.message, NEXT_PAGE_BUTTON_ID) })
+                            .edit({ components: withoutButton(discordBotMessage, NEXT_PAGE_BUTTON_ID) })
                             .catch(() => {});
                         return;
                     }
@@ -812,7 +827,7 @@ export class DiscordGateway {
                     if (!result) {
                         // No pending page state — stale button click
                         await interaction.message
-                            .edit({ components: withoutButton(interaction.message, NEXT_PAGE_BUTTON_ID) })
+                            .edit({ components: withoutButton(discordBotMessage, NEXT_PAGE_BUTTON_ID) })
                             .catch((err) => {
                                 this.logger.warn(
                                     { err, currentBotMessageId },
@@ -839,7 +854,7 @@ export class DiscordGateway {
                           );
 
                     // Step 3: Send the next page as a reply to the current bot message
-                    let newBotMessage: Awaited<ReturnType<Message["reply"]>>;
+                    let newBotMessage: IChatClientMessage;
                     try {
                         newBotMessage = await interaction.message.reply({
                             content: result.content,
@@ -858,7 +873,7 @@ export class DiscordGateway {
                         repliesToDiscordId: currentBotMessageId,
                         channelId: newBotMessage.channelId,
                         guildId: newBotMessage.guildId ?? DM_GUILD_TOKEN,
-                        discordAuthorId: this.client.user?.id ?? "",
+                        discordAuthorId: this.bot.userId,
                         newMessages: [],
                         retriesLeft: null,
                         usedFallback: false,
@@ -889,7 +904,7 @@ export class DiscordGateway {
                         // Remove only the Next Page button from the OLD bot message,
                         // preserving any Retry button that may also be present.
                         interaction.message
-                            .edit({ components: withoutButton(interaction.message, NEXT_PAGE_BUTTON_ID) })
+                            .edit({ components: withoutButton(discordBotMessage, NEXT_PAGE_BUTTON_ID) })
                             .catch((err) => {
                                 this.logger.warn(
                                     { err, currentBotMessageId },
@@ -921,15 +936,16 @@ export class DiscordGateway {
      * invokes the agent with SUMMARY intent. The bot reply is sent as a reply to the
      * target message and prefixed with a mention of the invoker.
      */
-    private async handleSummarizeContextMenu(interaction: MessageContextMenuCommandInteraction): Promise<void> {
-        const botUserId = this.client.user?.id;
-        if (!botUserId) throw new Error("Missing bot ID. This shouldn't happen.");
+    private async handleSummarizeContextMenu(interaction: IChatClientContextMenuInteraction): Promise<void> {
+        const botUserId = this.bot.userId;
 
         const targetMessage = interaction.targetMessage;
-        const attachments = extractAttachments(targetMessage);
-        const embeds = extractEmbeds(targetMessage);
-        const botRoleId = targetMessage.guild?.members.me?.roles.botRole?.id ?? null;
-        const userContent = extractUserContent(targetMessage, botUserId, botRoleId);
+        // Use escape hatch for extractAttachments/extractEmbeds/extractUserContent —
+        // these utilities require the full discord.js Message type.
+        const rawTargetMessage = (targetMessage as DiscordClientMessage).discordMessage;
+        const attachments = extractAttachments(rawTargetMessage);
+        const embeds = extractEmbeds(rawTargetMessage);
+        const userContent = extractUserContent(rawTargetMessage, botUserId, targetMessage.botRoleId);
 
         // ACK the interaction with a visible ephemeral reply so Discord doesn't show
         // "interaction failed". Deleted after 5 seconds — the thinking placeholder on
@@ -940,9 +956,9 @@ export class DiscordGateway {
         // When the invoker is also the message author, replying to their own message already
         // pings them via Discord's reply mechanism — no explicit mention prefix needed, and
         // allowedMentions.repliedUser suppression would strip it anyway.
-        const isSelfReply = interaction.user.id === targetMessage.author.id;
+        const isSelfReply = interaction.userId === targetMessage.authorId;
         const pingUser = isSelfReply;
-        const replyPrefix = isSelfReply ? undefined : `<@${interaction.user.id}>`;
+        const replyPrefix = isSelfReply ? undefined : `<@${interaction.userId}>`;
 
         // If this message was already saved (e.g. summarized before), skip re-inserting
         // the human message row — reuse the existing DB record instead.
@@ -962,7 +978,7 @@ export class DiscordGateway {
             pingUser,
             replyPrefix,
             interactionType: "summary_command",
-            interactionAuthorDiscordId: interaction.user.id,
+            interactionAuthorDiscordId: interaction.userId,
             reuseHumanMessage,
             fetchHistory: false,
             // TODO: add a language preference to config
@@ -971,14 +987,13 @@ export class DiscordGateway {
     }
 
     /** Handles the "Export as HTML" message context menu command. */
-    private async handleExportHtmlContextMenu(interaction: MessageContextMenuCommandInteraction): Promise<void> {
-        const botUserId = this.client.user?.id;
-        if (!botUserId) throw new Error("Missing bot ID. This shouldn't happen.");
+    private async handleExportHtmlContextMenu(interaction: IChatClientContextMenuInteraction): Promise<void> {
+        const botUserId = this.bot.userId;
 
         const target = interaction.targetMessage;
 
         // Only allow exporting messages authored by this bot or the previous bot
-        if (target.author.id !== botUserId && target.author.id !== this.previousBotId) {
+        if (target.authorId !== botUserId && target.authorId !== this.previousBotId) {
             await interaction.reply({ content: "*You can only export bot messages.*", flags: MessageFlags.Ephemeral });
             return;
         }
@@ -995,14 +1010,13 @@ export class DiscordGateway {
     }
 
     /** Handles the "Export as Image" message context menu command. */
-    private async handleExportImageContextMenu(interaction: MessageContextMenuCommandInteraction): Promise<void> {
-        const botUserId = this.client.user?.id;
-        if (!botUserId) throw new Error("Missing bot ID. This shouldn't happen.");
+    private async handleExportImageContextMenu(interaction: IChatClientContextMenuInteraction): Promise<void> {
+        const botUserId = this.bot.userId;
 
         const target = interaction.targetMessage;
 
         // Only allow exporting messages authored by this bot or the previous bot
-        if (target.author.id !== botUserId && target.author.id !== this.previousBotId) {
+        if (target.authorId !== botUserId && target.authorId !== this.previousBotId) {
             await interaction.reply({ content: "*You can only export bot messages.*", flags: MessageFlags.Ephemeral });
             return;
         }
@@ -1020,7 +1034,7 @@ export class DiscordGateway {
     }
 
     /** Handles the "Render" button attached to bot replies containing extended markdown. */
-    private async handleRenderButton(interaction: ButtonInteraction): Promise<void> {
+    private async handleRenderButton(interaction: IChatClientButtonInteraction): Promise<void> {
         const botMessage = interaction.message;
 
         if (this.interactionLock.isLocked(botMessage.id, RENDER_BUTTON_ID)) {
@@ -1050,16 +1064,18 @@ export class DiscordGateway {
                 repliesToDiscordId: botMessage.id,
                 channelId: renderReply.channelId,
                 guildId: renderReply.guildId ?? DM_GUILD_TOKEN,
-                discordAuthorId: this.client.user?.id ?? "",
+                discordAuthorId: this.bot.userId,
                 newMessages: [],
                 retriesLeft: null,
                 usedFallback: false,
                 interactionType: "message_create",
-                interactionAuthorDiscordId: interaction.user.id,
+                interactionAuthorDiscordId: interaction.userId,
             });
 
-            // Remove the Render button from the original message now that it's been rendered
-            await botMessage.edit({ components: withoutButton(botMessage, RENDER_BUTTON_ID) });
+            // Remove the Render button from the original message now that it's been rendered.
+            // Use escape hatch: withoutButton requires the raw discord.js Message for its components.
+            const discordBotMessage = (interaction as DiscordClientButtonInteraction).discordInteraction.message;
+            await botMessage.edit({ components: withoutButton(discordBotMessage, RENDER_BUTTON_ID) });
         } finally {
             this.interactionLock.clearLock(botMessage.id, RENDER_BUTTON_ID);
         }
@@ -1072,7 +1088,7 @@ export class DiscordGateway {
      * persisted LangChain messages (which may contain the full multi-page content).
      * Falls back to the Discord message content if no DB row exists.
      */
-    private async resolveExportContent(target: Message): Promise<string> {
+    private async resolveExportContent(target: IChatClientMessage): Promise<string> {
         const guildId = target.guildId ?? DM_GUILD_TOKEN;
         const row = await this.messageRepo.findByDiscordMessageId({
             discordMessageId: target.id,
@@ -1092,33 +1108,30 @@ export class DiscordGateway {
             }
         }
 
-        // Fallback: use the raw Discord message content
+        // Fallback: use mention-resolved message content
         return target.cleanContent;
     }
 
-    private async handleMessageCreate(message: Message, retriesLeft?: number | null): Promise<void> {
+    private async handleMessageCreate(message: IChatClientMessage, retriesLeft?: number | null): Promise<void> {
         // Ignore all bot messages (including our own) to prevent feedback loops
-        if (message.author.bot) return;
+        if (message.isAuthorBot) return;
 
-        const botUserId = this.client.user?.id;
-        if (!botUserId) throw new Error("Missing bot ID. This shouldn't happen.");
+        const botUserId = this.bot.userId;
 
-        // botRole is the managed role Discord auto-creates for the bot in each guild; null in DMs
-        const botRoleId = message.guild?.members.me?.roles.botRole?.id ?? null;
         // Parse intent from raw content before stripping, so the command prefix is visible
         const intent = parseMessageIntent(message.content);
 
         // Only respond to explicit @mentions or recognized command prefixes
-        if (intent === MessageIntent.UNKNOWN && !isExplicitMention(message, botUserId)) return;
+        if (intent === MessageIntent.UNKNOWN && !message.hasExplicitMention(botUserId)) return;
 
         if (this.shutdownPending) {
-            const reply = await message.reply("*A restart is pending, try again later.*");
+            const reply = await message.reply({ content: "*A restart is pending, try again later.*" });
             await this.messageRepo.saveAssistantMessage({
                 discordMessageId: reply.id,
                 repliesToDiscordId: message.id,
                 channelId: reply.channelId,
                 guildId: reply.guildId ?? DM_GUILD_TOKEN,
-                discordAuthorId: this.client.user?.id ?? "",
+                discordAuthorId: this.bot.userId,
                 newMessages: [],
                 retriesLeft: null,
                 usedFallback: false,
@@ -1128,17 +1141,18 @@ export class DiscordGateway {
             return;
         }
 
-        const rateLimit = this.rateLimiter.check(message.author.id);
+        const rateLimit = this.rateLimiter.check(message.authorId);
         if (!rateLimit.allowed) {
-            const rateLimitReply = await message.reply(
-                "Hi! It seems you have sent too many messages at once recently. Please wait a while before sending more.",
-            );
+            const rateLimitReply = await message.reply({
+                content:
+                    "Hi! It seems you have sent too many messages at once recently. Please wait a while before sending more.",
+            });
             await this.messageRepo.saveAssistantMessage({
                 discordMessageId: rateLimitReply.id,
                 repliesToDiscordId: message.id,
                 channelId: rateLimitReply.channelId,
                 guildId: rateLimitReply.guildId ?? DM_GUILD_TOKEN,
-                discordAuthorId: this.client.user?.id ?? "",
+                discordAuthorId: this.bot.userId,
                 newMessages: [],
                 retriesLeft: null,
                 usedFallback: false,
@@ -1147,14 +1161,18 @@ export class DiscordGateway {
             });
             return;
         }
-        const userContent = extractUserContent(message, botUserId, botRoleId);
-        const attachments: DiscordAttachmentInfo[] = extractAttachments(message);
+
+        // Use escape hatch for extractUserContent / extractAttachments — these take the raw
+        // discord.js Message and are infrastructure-internal extraction utilities.
+        const rawMessage = (message as DiscordClientMessage).discordMessage;
+        const userContent = extractUserContent(rawMessage, botUserId, message.botRoleId);
+        const attachments: DiscordAttachmentInfo[] = extractAttachments(rawMessage);
 
         // No usable content after stripping mentions/commands, no attachments, and no reply
         // reference — substitute a synthetic greeting so the agent can introduce itself.
         // When the message is a reply, context comes from the reply chain; skip the greeting.
         const effectiveUserContent =
-            !userContent && attachments.length === 0 && !message.reference?.messageId
+            !userContent && attachments.length === 0 && message.referencedMessageId === null
                 ? "Hi, can you introduce yourself?"
                 : userContent;
 
@@ -1162,7 +1180,7 @@ export class DiscordGateway {
             {
                 discordMessageId: message.id,
                 channelId: message.channelId,
-                referencedMessageId: message.reference?.messageId ?? null,
+                referencedMessageId: message.referencedMessageId,
                 attachmentCount: attachments.length,
             },
             "Processing bot message",
@@ -1185,8 +1203,8 @@ export class DiscordGateway {
      * use case, and calls {@link sendBotReply} with the result.
      */
     private async invokeAgentWithMessage(params: {
-        /** The Discord message to reply to (thinking placeholder and bot reply are sent as replies to this). */
-        message: Message;
+        /** The chat message to reply to (thinking placeholder and bot reply are sent as replies to this). */
+        message: IChatClientMessage;
         botUserId: string;
         userContent: string | null;
         attachments: DiscordAttachmentInfo[] | null;
@@ -1232,11 +1250,11 @@ export class DiscordGateway {
                     "discord.channel_id": message.channelId,
                     "discord.guild_id": message.guildId ?? DM_GUILD_TOKEN,
                     "discord.attachment_count": attachments?.length ?? 0,
-                    "discord.has_reply": message.reference?.messageId !== undefined,
+                    "discord.has_reply": message.referencedMessageId !== null,
                 },
             },
             async (span) => {
-                let thinkingMessagePromise: ReturnType<Message["reply"]> | undefined;
+                let thinkingMessagePromise: Promise<IChatClientMessage> | undefined;
                 try {
                     // Send the "Thinking" placeholder immediately — fire-and-forget (not awaited)
                     // so it does not delay AI processing. Sent as a reply with allowedMentions
@@ -1261,9 +1279,6 @@ export class DiscordGateway {
                                 async (content) =>
                                     void (await thinkingMessage.edit({
                                         content: `*${content} since <t:${Math.round(Date.now() / 1000)}:R>*`,
-                                        allowedMentions: {
-                                            repliedUser: false,
-                                        },
                                     })),
                                 agentStatusLabel(update),
                             );
@@ -1271,19 +1286,24 @@ export class DiscordGateway {
                         });
                     };
 
-                    // Build the application-layer snapshot from the discord.js Message.
+                    // Build the application-layer snapshot via the escape hatch — buildSnapshot
+                    // requires the full discord.js Message type and is infrastructure-internal.
                     // previousBotId is not relevant here — isOwnBot detection is only needed
                     // in the live chain fallback path, not for the current user message.
-                    const rawSnapshot = buildSnapshot(message, botUserId, undefined);
+                    const rawSnapshot = buildSnapshot(
+                        (message as DiscordClientMessage).discordMessage,
+                        botUserId,
+                        undefined,
+                    );
 
                     // handle() never throws — errors are caught internally and returned as a response
                     const { response, newMessages, isFailure, isRetryable, usedFallback } =
                         await this.handleDiscordMessageUseCase.execute({
                             discordMessageId: message.id,
-                            referencedMessageId: message.reference?.messageId ?? null,
+                            referencedMessageId: message.referencedMessageId,
                             channelId: message.channelId,
                             guildId: message.guildId ?? DM_GUILD_TOKEN,
-                            discordAuthorId: message.author.id,
+                            discordAuthorId: message.authorId,
                             // Merge stripped content into snapshot; null when reuseHumanMessage is true.
                             snapshot: userContent !== null ? { ...rawSnapshot, content: userContent } : null,
                             attachments: attachments ?? [],
@@ -1297,6 +1317,11 @@ export class DiscordGateway {
                             ephemeralInstructionMessage,
                         });
 
+                    // thinkingMessagePromise is always assigned two lines above this block,
+                    // before any await that could skip the assignment — it is never undefined here.
+                    // TYPE COERCION: narrowing from `Promise<IChatClientMessage> | undefined`
+                    // to `Promise<IChatClientMessage>`; the undefined case is structurally impossible.
+                    const definedThinkingPromise = thinkingMessagePromise as Promise<IChatClientMessage>;
                     await this.sendBotReply({
                         replyTarget: message,
                         response,
@@ -1305,7 +1330,7 @@ export class DiscordGateway {
                         isRetryable,
                         usedFallback,
                         retriesLeft,
-                        thinkingMessagePromise,
+                        thinkingMessagePromise: definedThinkingPromise,
                         span,
                         pingUser,
                         replyPrefix,
@@ -1323,9 +1348,9 @@ export class DiscordGateway {
                     thinkingMessagePromise
                         ?.then(async (thinkingMessage) => {
                             this.statusUpdater.cancel(thinkingMessage.id);
-                            const errorReply = await thinkingMessage.edit(
-                                "Sorry, I encountered an error processing your request.",
-                            );
+                            const errorReply = await thinkingMessage.edit({
+                                content: "Sorry, I encountered an error processing your request.",
+                            });
                             // Persist the error message so it participates in the reply chain.
                             // The thinking message was never saved, so we save it now after the edit.
                             await this.messageRepo.saveAssistantMessage({
@@ -1333,7 +1358,7 @@ export class DiscordGateway {
                                 repliesToDiscordId: message.id,
                                 channelId: errorReply.channelId,
                                 guildId: errorReply.guildId ?? DM_GUILD_TOKEN,
-                                discordAuthorId: this.client.user?.id ?? "",
+                                discordAuthorId: this.bot.userId,
                                 newMessages: [],
                                 retriesLeft: null,
                                 usedFallback: false,
