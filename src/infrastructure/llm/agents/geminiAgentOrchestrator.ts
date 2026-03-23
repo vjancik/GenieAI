@@ -183,7 +183,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         }
 
         this.attachmentMode = config.file.agent.uploadAttachmentMode;
-        this.maxInlineBytes = config.file.agent.maxInlineAttachmentSizeMB * 1024 * 1024;
+        this.maxInlineBytes = config.file.agent.maxInlineAttachmentSizeBytes;
         this.globalModelTimeoutMs = config.file.globalModelTimeoutMs;
         this.nodeTimeoutsMs = {
             triage: config.file.agent.nodes.triage.timeoutMs,

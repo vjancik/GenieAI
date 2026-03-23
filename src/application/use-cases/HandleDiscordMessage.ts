@@ -86,7 +86,7 @@ export class HandleDiscordMessageUseCase {
         private readonly geminiFileRepo?: IGeminiFileRepository,
         private readonly chatMessageService?: IChatMessageService,
     ) {
-        this.maxInlineBytes = config.file.agent.maxInlineAttachmentSizeMB * 1024 * 1024;
+        this.maxInlineBytes = config.file.agent.maxInlineAttachmentSizeBytes;
         this.attachmentMode = config.file.agent.uploadAttachmentMode;
         this.attachmentsTempDir = config.file.attachmentDownloader.tempDir;
     }

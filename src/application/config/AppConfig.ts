@@ -330,8 +330,36 @@ function applyEnvOverrides(fileConfig: FileConfig, overrides: EnvOverrideFile): 
 // AppConfig
 // ---------------------------------------------------------------------------
 
+/**
+ * Extends the parsed `file.agent` schema with pre-computed derived values
+ * nested alongside their source fields.
+ */
+type FileAgentConfigWithComputed = FileConfig["agent"] & {
+    /** `maxInlineAttachmentSizeMB` converted to bytes. */
+    maxInlineAttachmentSizeBytes: number;
+};
+
+/**
+ * Extends the parsed `file.geminiFileApi` schema with pre-computed derived values
+ * nested alongside their source fields.
+ */
+type FileGeminiApiConfigWithComputed = FileConfig["geminiFileApi"] & {
+    /** Stale threshold in ms: Gemini 48h TTL minus `fileStaleBeforeExpiryMinutes`. */
+    fileStaleBeforeExpiryMs: number;
+};
+
+/**
+ * {@link FileConfig} with pre-computed derived values mixed into the nested
+ * objects they derive from. Centralises conversions (MB → bytes, minutes → ms)
+ * so no consumer performs them ad-hoc.
+ */
+type FileConfigWithComputed = Omit<FileConfig, "agent" | "geminiFileApi"> & {
+    agent: FileAgentConfigWithComputed;
+    geminiFileApi: FileGeminiApiConfigWithComputed;
+};
+
 /** Typed configuration for the application. Combines env vars and yaml file config. */
-export type AppConfig = EnvConfig & { file: FileConfig };
+export type AppConfig = EnvConfig & { file: FileConfigWithComputed };
 
 // ---------------------------------------------------------------------------
 // File config loader
@@ -440,6 +468,24 @@ async function loadFileConfig(logger: Logger): Promise<FileConfig> {
 }
 
 // ---------------------------------------------------------------------------
+// Computed values
+// ---------------------------------------------------------------------------
+
+/**
+ * Extends a parsed config object with pre-computed derived values, nested
+ * alongside their source fields. Mutates in place via type cast to avoid
+ * an unnecessary object copy.
+ */
+function applyComputedValues(config: EnvConfig & { file: FileConfig }): AppConfig {
+    // TYPE COERCION: casting to AppConfig to assign computed fields onto the
+    // existing nested objects in place, avoiding unnecessary spreads/copies.
+    const out = config as AppConfig;
+    out.file.agent.maxInlineAttachmentSizeBytes = config.file.agent.maxInlineAttachmentSizeMB * 1024 * 1024;
+    out.file.geminiFileApi.fileStaleBeforeExpiryMs = config.file.geminiFileApi.fileStaleBeforeExpiryMinutes * 60 * 1000;
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // Main loader
 // ---------------------------------------------------------------------------
 
@@ -463,7 +509,7 @@ async function loadConfig(logger: Logger): Promise<AppConfig> {
 
     fileConfig = applyEnvOverrides(fileConfig, envOverrides);
 
-    return { ...envConfig, file: fileConfig };
+    return applyComputedValues({ ...envConfig, file: fileConfig });
 }
 
 // ---------------------------------------------------------------------------

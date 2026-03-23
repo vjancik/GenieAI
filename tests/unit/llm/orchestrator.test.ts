@@ -14,8 +14,6 @@ import { dbMessagesToLangchain } from "../../../src/infrastructure/llm/utils/mes
 const testLogger = pino({ level: "silent" });
 
 const testConfig = {
-    attachmentMode: "inline" as const,
-    maxInlineAttachmentSizeMB: 100,
     file: {
         attachmentDownloader: {
             tempDir: "/var/tmp/genie-attachments",
@@ -24,12 +22,18 @@ const testConfig = {
             disk: { maxSizeMB: 1_000 },
         },
         globalModelTimeoutMs: 600_000,
-        geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 15 },
+        geminiFileApi: {
+            pollIntervalMs: 5_000,
+            maxPollWaitMs: 120_000,
+            fileStaleBeforeExpiryMinutes: 15,
+            fileStaleBeforeExpiryMs: 15 * 60 * 1000,
+        },
         discord: { defaultChainLimit: 100, defaultRetriesLeft: 3 },
         geminiModels: { includeThoughts: false },
         agent: {
             uploadAttachmentMode: "upload" as const,
             maxInlineAttachmentSizeMB: 100,
+            maxInlineAttachmentSizeBytes: 100 * 1024 * 1024,
             nodes: {
                 triage: { model: "gemini-test", timeoutMs: 60_000, thinkingLevel: "LOW" as const },
                 general: { model: "gemini-test", timeoutMs: 120_000 },

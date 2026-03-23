@@ -79,8 +79,6 @@ function makeDownloader(): IAttachmentDownloader {
 }
 
 const testConfig = {
-    maxInlineAttachmentSizeMB: 100,
-    attachmentMode: "inline" as const,
     file: {
         attachmentDownloader: {
             tempDir: "/var/tmp/genie-attachments",
@@ -89,12 +87,18 @@ const testConfig = {
             disk: { maxSizeMB: 1_000 },
         },
         globalModelTimeoutMs: 600_000,
-        geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 15 },
+        geminiFileApi: {
+            pollIntervalMs: 5_000,
+            maxPollWaitMs: 120_000,
+            fileStaleBeforeExpiryMinutes: 15,
+            fileStaleBeforeExpiryMs: 15 * 60 * 1000,
+        },
         discord: { defaultChainLimit: 100, defaultRetriesLeft: 3 },
         geminiModels: { includeThoughts: false },
         agent: {
             uploadAttachmentMode: "upload" as const,
             maxInlineAttachmentSizeMB: 100,
+            maxInlineAttachmentSizeBytes: 100 * 1024 * 1024,
             nodes: {
                 triage: { model: "gemini-test", timeoutMs: 60_000, thinkingLevel: "LOW" as const },
                 general: { model: "gemini-test", timeoutMs: 120_000 },
@@ -329,6 +333,7 @@ describe("HandleDiscordMention.handle", () => {
                         ...testConfig.file.agent,
                         uploadAttachmentMode: "inline" as const,
                         maxInlineAttachmentSizeMB: 1,
+                        maxInlineAttachmentSizeBytes: 1 * 1024 * 1024,
                     },
                 },
             }, // 1 MB limit

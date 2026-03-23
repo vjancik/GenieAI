@@ -91,7 +91,7 @@ export class GeminiFileRefreshService {
     ) {
         // Gemini TTL is 48 hours; a file is stale when less than staleThreshold remains
         const geminiTtlMs = 48 * 60 * 60 * 1000;
-        this.staleThresholdMs = geminiTtlMs - config.file.geminiFileApi.fileStaleBeforeExpiryMinutes * 60 * 1000;
+        this.staleThresholdMs = geminiTtlMs - config.file.geminiFileApi.fileStaleBeforeExpiryMs;
         this.attachmentsTempDir = config.file.attachmentDownloader.tempDir;
     }
 
