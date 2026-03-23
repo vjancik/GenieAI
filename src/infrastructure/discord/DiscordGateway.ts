@@ -19,6 +19,7 @@ import { type FileConfig, SearchMode } from "../../application/config/AppConfig.
 import { extractWebGroundingChunks, formatGroundingSources } from "../../application/formatters/groundingSources.ts";
 import { splitMarkdown } from "../../application/formatters/markdownSplitter.ts";
 import { discordMessageToLlmText, llmTextToDiscordText } from "../../application/formatters/textTransformers.ts";
+import { COMMAND_PREFIX_REGEX, parseMessageIntent } from "../../application/helpers/parseMessageIntent.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { DiscordEmbedInfo } from "../../application/ports/IChatMessageService.ts";
 import type { AgentStatusUpdate, OnStatusUpdate } from "../../application/types/AgentStatus.ts";
@@ -82,49 +83,6 @@ export function hasExtendedMarkdown(text: string): boolean {
     // GFM table: a line with pipes, followed by a separator line (---|:---:|etc.)
     if (/^\|.+\|[ \t]*\n\|[ \t]*[-:| \t]+\|/m.test(text)) return true;
     return false;
-}
-
-/**
- * Maps each recognized bot command prefix to its corresponding {@link MessageIntent}.
- * Commands must appear at the start of a message, followed by at least one whitespace.
- * Matching is case-insensitive to accommodate phone auto-capitalization.
- *
- * Add new commands here — the rest of the pipeline picks up the intent automatically.
- */
-export const DiscordCommand: Record<string, MessageIntent> = {
-    "!ai": MessageIntent.GENERAL,
-    "!aisearch": MessageIntent.SEARCH,
-    "!aisummary": MessageIntent.SUMMARY,
-};
-
-/**
- * Builds a regex that matches any recognized command prefix at the start of the string,
- * followed by one or more whitespace characters. Case-insensitive.
- *
- * Longer commands are sorted first to prevent `!ai` from shadowing `!aisearch` / `!aisummary`.
- */
-function buildCommandPrefixRegex(): RegExp {
-    const sorted = Object.keys(DiscordCommand).sort((a, b) => b.length - a.length);
-    const escaped = sorted.map((cmd) => cmd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-    return new RegExp(`^(?:${escaped.join("|")})\\s+`, "i");
-}
-
-const COMMAND_PREFIX_REGEX = buildCommandPrefixRegex();
-
-/**
- * Determines the {@link MessageIntent} for a raw message string by checking for a
- * recognized command prefix at the start of the content (case-insensitive).
- * Returns {@link MessageIntent.UNKNOWN} if no command prefix is found.
- *
- * @param rawContent - The raw message string (before any stripping)
- */
-export function parseMessageIntent(rawContent: string): MessageIntent {
-    const match = COMMAND_PREFIX_REGEX.exec(rawContent);
-    if (!match) return MessageIntent.UNKNOWN;
-    // TYPE COERCION: match[0] is the matched prefix+whitespace; slice to get just the command token
-    // and lowercase it to normalize for the map lookup.
-    const command = match[0].trimEnd().toLowerCase();
-    return DiscordCommand[command] ?? MessageIntent.UNKNOWN;
 }
 
 /**
