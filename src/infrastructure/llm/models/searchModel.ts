@@ -25,7 +25,7 @@ export function buildSearchSystemPrompt(dateStr: string, searchMode: SearchMode)
         (searchMode === SearchMode.google
             ? "If the user asks a question that may require information that's more recent than January 2025, use Google Search to search the web for relevant information to answer the question.\n" +
               "Also use Google Search if the user asks a niche question that may not be answerable with your base knowledge."
-            : "") +
+            : "DO NOT call web_search again. Answer the query with the available information.") +
         SYSTEM_PROMPT_FOOTER
     );
 }
