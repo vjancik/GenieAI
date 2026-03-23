@@ -122,7 +122,11 @@ export class HandleDiscordMessageUseCase {
         guildId: string;
         /** Discord snowflake of the user who sent this message. Persisted for Retry button authorship checks. */
         discordAuthorId: string;
-        userContent: string;
+        /**
+         * Snapshot of the user's message with `content` already stripped of bot mentions and command
+         * prefixes. Null when `reuseHumanMessage` is true — the use case ignores it in that path.
+         */
+        snapshot: DiscordMessageSnapshot | null;
         attachments: DiscordAttachmentInfo[];
         embeds?: DiscordEmbedInfo[];
         intent: MessageIntent;
@@ -233,7 +237,8 @@ export class HandleDiscordMessageUseCase {
                         // be saved AFTER the user's message row exists (FK constraint).
                         const { msg: builtMsg, pendingRecords } = await this.buildMessage({
                             role: "human",
-                            content: params.userContent,
+                            // snapshot is non-null on this path (reuseHumanMessage is false)
+                            content: params.snapshot !== null ? discordMessageToLlmText(params.snapshot) : "",
                             attachments: params.attachments,
                             embeds: params.embeds,
                             onStatusUpdate: params.onStatusUpdate,

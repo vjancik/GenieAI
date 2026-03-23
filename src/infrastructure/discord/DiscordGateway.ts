@@ -18,7 +18,7 @@ import {
 import { type FileConfig, SearchMode } from "../../application/config/AppConfig.ts";
 import { extractWebGroundingChunks, formatGroundingSources } from "../../application/formatters/groundingSources.ts";
 import { splitMarkdown } from "../../application/formatters/markdownSplitter.ts";
-import { discordMessageToLlmText, llmTextToDiscordText } from "../../application/formatters/textTransformers.ts";
+import { llmTextToDiscordText } from "../../application/formatters/textTransformers.ts";
 import { hasExtendedMarkdown } from "../../application/helpers/hasExtendedMarkdown.ts";
 import { COMMAND_PREFIX_REGEX, parseMessageIntent } from "../../application/helpers/parseMessageIntent.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
@@ -1298,11 +1298,6 @@ export class DiscordGateway {
                     // in the live chain fallback path, not for the current user message.
                     const rawSnapshot = buildSnapshot(message, botUserId, undefined);
 
-                    // Enrich the stripped content with sender attribution and embed context for LLM.
-                    // userContent is null only when reuseHumanMessage is true — the use case ignores it.
-                    const llmContent =
-                        userContent !== null ? discordMessageToLlmText({ ...rawSnapshot, content: userContent }) : "";
-
                     // handle() never throws — errors are caught internally and returned as a response
                     const { response, newMessages, isFailure, isRetryable, usedFallback } =
                         await this.handleDiscordMessageUseCase.execute({
@@ -1311,7 +1306,8 @@ export class DiscordGateway {
                             channelId: message.channelId,
                             guildId: message.guildId ?? DM_GUILD_TOKEN,
                             discordAuthorId: message.author.id,
-                            userContent: llmContent,
+                            // Merge stripped content into snapshot; null when reuseHumanMessage is true.
+                            snapshot: userContent !== null ? { ...rawSnapshot, content: userContent } : null,
                             attachments: attachments ?? [],
                             // Prefer caller-provided embeds; fall back to those on the snapshot
                             // (rawSnapshot is always built from the same message so they match).

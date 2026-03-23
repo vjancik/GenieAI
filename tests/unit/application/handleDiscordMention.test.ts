@@ -55,6 +55,24 @@ function makeChatMessageService(snapshots: DiscordMessageSnapshot[] = []): IChat
     };
 }
 
+/** Builds a minimal DiscordMessageSnapshot with the given content for use in execute() calls. */
+function makeSnapshot(content: string): DiscordMessageSnapshot {
+    return {
+        id: "snap-test",
+        content,
+        authorId: "user-123",
+        authorUsername: "testuser",
+        authorDisplayName: "TestUser",
+        isBot: false,
+        isOwnBot: false,
+        attachments: [],
+        referencedMessageId: null,
+        channelId: "ch-1",
+        guildId: "guild-1",
+        createdAt: new Date(),
+    };
+}
+
 function makeOrchestrator(response = "AI response"): IAgentOrchestrator {
     return {
         // Return deserialized messages only when records are present — mirrors real behavior
@@ -127,7 +145,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            snapshot: makeSnapshot("Hello"),
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -153,7 +171,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "@me",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            snapshot: makeSnapshot("Hello"),
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -178,7 +196,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             discordAuthorId: "user-123",
-            userContent: "Follow-up",
+            snapshot: makeSnapshot("Follow-up"),
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -207,7 +225,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             discordAuthorId: "user-123",
-            userContent: "Follow-up",
+            snapshot: makeSnapshot("Follow-up"),
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -221,7 +239,7 @@ describe("HandleDiscordMention.handle", () => {
         expect(messages).toHaveLength(3);
         const userMessage = messages[messages.length - 1];
         expect(userMessage).toBeInstanceOf(HumanMessage);
-        expect((userMessage as HumanMessage).content).toBe("Follow-up");
+        expect((userMessage as HumanMessage).content).toContain("Follow-up");
     });
 
     test("forwards onStatusUpdate to orchestrator.process as the third argument", async () => {
@@ -243,7 +261,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "@me",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            snapshot: makeSnapshot("Hello"),
             attachments: [],
             intent: MessageIntent.UNKNOWN,
             onStatusUpdate,
@@ -272,7 +290,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "@me",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            snapshot: makeSnapshot("Hello"),
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -301,7 +319,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             discordAuthorId: "user-123",
-            userContent: "What is 2+2?",
+            snapshot: makeSnapshot("What is 2+2?"),
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -315,7 +333,7 @@ describe("HandleDiscordMention.handle", () => {
         // Verify the stored JSON preserves the message type and content
         const stored = saveCall.langchainMessages[0];
         expect(stored?.id).toContain("HumanMessage");
-        expect((stored?.kwargs as Record<string, unknown>)?.content).toBe("What is 2+2?");
+        expect((stored?.kwargs as Record<string, unknown>)?.content).toContain("What is 2+2?");
     });
 
     test("returns error response when attachment total size exceeds limit", async () => {
@@ -345,7 +363,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "@me",
             discordAuthorId: "user-123",
-            userContent: "Here are files",
+            snapshot: makeSnapshot("Here are files"),
             attachments: [
                 {
                     id: "att-001",
@@ -379,7 +397,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "@me",
             discordAuthorId: "user-123",
-            userContent: "What's in this image?",
+            snapshot: makeSnapshot("What's in this image?"),
             attachments: [
                 {
                     id: "att-002",
@@ -425,7 +443,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            snapshot: makeSnapshot("Hello"),
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -458,7 +476,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            snapshot: makeSnapshot("Hello"),
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -487,7 +505,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "@me",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            snapshot: makeSnapshot("Hello"),
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -554,7 +572,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            snapshot: makeSnapshot("Hello"),
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -591,7 +609,7 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            snapshot: makeSnapshot("Hello"),
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
