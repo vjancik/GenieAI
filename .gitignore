@@ -48,3 +48,5 @@ config.local.yaml
 scripts/dev/*.html
 scripts/dev/*.png
 scripts/dev/*.json
+
+docs/architecture/
