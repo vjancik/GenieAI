@@ -16,6 +16,7 @@ import {
     type TopLevelComponent,
 } from "discord.js";
 import { type FileConfig, SearchMode } from "../../application/config/AppConfig.ts";
+import { agentStatusLabel } from "../../application/formatters/agentStatus.ts";
 import { extractWebGroundingChunks, formatGroundingSources } from "../../application/formatters/groundingSources.ts";
 import { splitMarkdown } from "../../application/formatters/markdownSplitter.ts";
 import { llmTextToDiscordText } from "../../application/formatters/textTransformers.ts";
@@ -23,8 +24,7 @@ import { hasExtendedMarkdown } from "../../application/helpers/hasExtendedMarkdo
 import { COMMAND_PREFIX_REGEX, parseMessageIntent } from "../../application/helpers/parseMessageIntent.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { DiscordEmbedInfo } from "../../application/ports/IChatMessageService.ts";
-import type { AgentStatusUpdate, OnStatusUpdate } from "../../application/types/AgentStatus.ts";
-import { AgentStatusType, assertNever } from "../../application/types/AgentStatus.ts";
+import type { OnStatusUpdate } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import type { GetNextPageUseCase } from "../../application/use-cases/GetNextPage.ts";
 import type { HandleDiscordMessageUseCase } from "../../application/use-cases/HandleDiscordMessage.ts";
@@ -61,28 +61,6 @@ const NEXT_PAGE_BUTTON_ID = "next_page";
 
 /** Custom ID for the Render button attached to responses containing extended markdown. */
 const RENDER_BUTTON_ID = "render_image";
-
-/**
- * Maps an agent status update to the Discord message string shown to the user
- * while the bot is processing. The switch is exhaustive: any new AgentStatusType
- * value without a matching case here is caught at compile time via `assertNever`.
- */
-function statusUpdateContent(update: AgentStatusUpdate): string {
-    switch (update.type) {
-        case AgentStatusType.TRIAGE:
-            return "Analyzing your request since";
-        case AgentStatusType.DOWNLOADING_ATTACHMENTS:
-            return "Downloading attachments since";
-        case AgentStatusType.FETCHING_CONTENT:
-            return "Fetching content since";
-        case AgentStatusType.GENERATING:
-            return "Generating response since";
-        case AgentStatusType.SEARCHING:
-            return "Searching the web since";
-        default:
-            return assertNever(update.type);
-    }
-}
 
 /**
  * Determines whether the bot was explicitly @mentioned in a Discord message,
@@ -1282,12 +1260,12 @@ export class DiscordGateway {
                                 thinkingMessage.id,
                                 async (content) =>
                                     void (await thinkingMessage.edit({
-                                        content: `*${content} <t:${Math.round(Date.now() / 1000)}:R>*`,
+                                        content: `*${content} since <t:${Math.round(Date.now() / 1000)}:R>*`,
                                         allowedMentions: {
                                             repliedUser: false,
                                         },
                                     })),
-                                statusUpdateContent(update),
+                                agentStatusLabel(update),
                             );
                             return thinkingMessage;
                         });
