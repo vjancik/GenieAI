@@ -486,6 +486,35 @@ function applyComputedValues(config: EnvConfig & { file: FileConfig }): AppConfi
 }
 
 // ---------------------------------------------------------------------------
+// Cross-field validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Validates cross-field constraints on a fully-constructed {@link AppConfig}.
+ *
+ * Separates compatibility checks from schema parsing so that they run after
+ * computed values are applied and can be unit-tested independently.
+ *
+ * Throws {@link ConfigError} if any constraint is violated.
+ */
+export function validateConfig(config: AppConfig): void {
+    if (config.file.agent.uploadAttachmentMode !== AttachmentMode.upload) return;
+
+    // Upload mode uses the Gemini Files API, which is only supported by Gemini models.
+    const nodes = config.file.agent.nodes;
+    const providers: { name: string; model: string }[] = [
+        { name: "agent.nodes.triage.model", model: nodes.triage.model },
+        { name: "agent.nodes.general.model", model: nodes.general.model },
+        { name: "agent.nodes.search.model", model: nodes.search.model },
+    ];
+    for (const { name, model } of providers) {
+        if (!model.startsWith("gemini")) {
+            throw new ConfigError(`Upload attachment mode requires Gemini models, but "${name}" is set to: ${model}`);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main loader
 // ---------------------------------------------------------------------------
 
@@ -509,7 +538,9 @@ async function loadConfig(logger: Logger): Promise<AppConfig> {
 
     fileConfig = applyEnvOverrides(fileConfig, envOverrides);
 
-    return applyComputedValues({ ...envConfig, file: fileConfig });
+    const config = applyComputedValues({ ...envConfig, file: fileConfig });
+    validateConfig(config);
+    return config;
 }
 
 // ---------------------------------------------------------------------------

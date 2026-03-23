@@ -21,7 +21,9 @@ function toCacheKey(apiKey: string, modelName: string): ModelCacheKey {
  * distinguished by the composite `[apiKey, modelName]` key.
  *
  * Subclasses must supply `primaryModelName` and optionally `fallbackModelName`
- * to the super constructor.
+ * to the super constructor. {@link modelName} is an implementation-level property
+ * used internally for caching and model construction — it is not exposed through
+ * the {@link IModelProvider} port.
  *
  * @template T - The concrete model client type (e.g. `ChatGoogle` with bound tools)
  */
@@ -29,7 +31,7 @@ export abstract class ModelProvider<T> implements IModelProvider<T> {
     private readonly cache = new Map<ModelCacheKey, T>();
 
     constructor(
-        readonly modelName: string,
+        protected readonly modelName: string,
         protected readonly fallbackModelName: string | undefined,
     ) {}
 

@@ -166,22 +166,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     ) {
         const searchMode = config.file.agent.nodes.search.mode;
         this.searchMode = searchMode;
-        // Upload mode uses the Gemini Files API, which is only supported by Gemini models.
-        // Guard here using modelName to catch wiring mistakes early.
-        if (config.file.agent.uploadAttachmentMode === AttachmentMode.upload) {
-            for (const [name, modelName] of [
-                ["triageProvider", triageProvider.modelName],
-                ["generalProvider", generalProvider.modelName],
-                ["searchProvider", searchProvider.modelName],
-            ] as const) {
-                if (!modelName.startsWith("gemini")) {
-                    throw new Error(
-                        `Orchestrator: upload attachment mode requires Gemini models, but "${name}" uses model: ${modelName}`,
-                    );
-                }
-            }
-        }
-
         this.attachmentMode = config.file.agent.uploadAttachmentMode;
         this.maxInlineBytes = config.file.agent.maxInlineAttachmentSizeBytes;
         this.globalModelTimeoutMs = config.file.globalModelTimeoutMs;
