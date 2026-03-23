@@ -39,6 +39,7 @@ import { AgentOrchestrator } from "./infrastructure/llm/agents/agentOrchestrator
 import { GeneralModelProvider } from "./infrastructure/llm/models/generalModel.ts";
 import { SearchModelProvider } from "./infrastructure/llm/models/searchModel.ts";
 import { TriageModelProvider } from "./infrastructure/llm/models/triageModel.ts";
+import { ResilientModelInvoker } from "./infrastructure/llm/ResilientModelInvoker.ts";
 import { RoundRobinFreeKeyProvider } from "./infrastructure/llm/RoundRobinFreeKeyProvider.ts";
 import { SinglePaidKeyProvider } from "./infrastructure/llm/SinglePaidKeyProvider.ts";
 import { createGetVideoCaptionsTool } from "./infrastructure/llm/tools/getVideoCaptionsTool.ts";
@@ -127,18 +128,27 @@ const geminiFileRefreshService = new GeminiFileRefreshService(
     config,
 );
 
+// Resilient invoker — owns key rotation, file refresh, attachment filtering, and fallback policy
+const resilientInvoker = new ResilientModelInvoker(
+    freeKeyProvider,
+    paidKeyProvider,
+    config.file.agent.uploadAttachmentMode,
+    config.file.agent.maxInlineAttachmentSizeBytes,
+    config.file.globalModelTimeoutMs,
+    logger.child({ module: "resilient-invoker" }),
+    geminiFileRefreshService,
+);
+
 // Orchestrator
 const agentOrchestrator = new AgentOrchestrator(
     triageProvider,
     generalProvider,
     searchProvider,
-    freeKeyProvider,
-    paidKeyProvider,
+    resilientInvoker,
     getWebsiteTool,
     getVideoCaptionsTool,
     logger.child({ module: "agent-orchestrator" }),
     config,
-    geminiFileRefreshService,
     config.file.agent.nodes.search.mode === "tavily" ? tavilyTool : undefined,
 );
 

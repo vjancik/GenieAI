@@ -4,27 +4,22 @@ import { Command, END, MessagesValue, ReducedValue, START, StateGraph, StateSche
 import type { TavilySearch } from "@langchain/tavily";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
-import { type AppConfig, AttachmentMode, SearchMode } from "../../../application/config/AppConfig.ts";
+import { type AppConfig, SearchMode } from "../../../application/config/AppConfig.ts";
 import type { IAgentOrchestrator } from "../../../application/ports/IAgentOrchestrator.ts";
 import type { IModelProvider } from "../../../application/ports/IModelProvider.ts";
-import type { IRoundRobinKeyProvider } from "../../../application/ports/IRoundRobinKeyProvider.ts";
-import type { GeminiFileRefreshService } from "../../../application/services/GeminiFileRefreshService.ts";
+import type { IResilientModelInvoker } from "../../../application/ports/IResilientModelInvoker.ts";
 import type { OnStatusUpdate } from "../../../application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../../application/types/AgentStatus.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
-import { AllFreeKeysExhaustedError, AppError, PaidKeyExhaustedError } from "../../../domain/errors/AppError.ts";
-import type { GeminiApiKey } from "../../../domain/message/GeminiApiKey.ts";
+import { AppError } from "../../../domain/errors/AppError.ts";
 import type { DiscordMessage } from "../../../domain/message/Message.ts";
 import { MessageIntent } from "../../../domain/message/MessageIntent.ts";
-import { is429Error } from "../errors/is429Error.ts";
-import { isModelFallbackError } from "../errors/isModelFallbackError.ts";
 import { buildGeneralSystemPrompt, type GeneralModel } from "../models/generalModel.ts";
 import { buildSearchSystemPrompt, type SearchModel } from "../models/searchModel.ts";
 import { buildTriageSystemPrompt, type TriageModel } from "../models/triageModel.ts";
 import type { GetVideoCaptionsTool } from "../tools/getVideoCaptionsTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
 import { safeParseTavilyResponse } from "../tools/tavilySearchTool.ts";
-import { filterHistoryForInlineSize } from "../utils/inlineAttachmentFilter.ts";
 import { dbMessagesToLangchain, extractContent } from "../utils/messageTransformers.ts";
 
 /**
@@ -114,11 +109,6 @@ export interface ModelTimeouts {
     search: number;
 }
 
-/** Minimal invokable model interface used by the rotation and fallback helpers. */
-type InvokableModel<T extends BaseMessage> = {
-    invoke(messages: BaseMessage[], options?: unknown): Promise<T>;
-};
-
 /**
  * Orchestrates the multi-agent triage routing pipeline as a LangGraph StateGraph.
  *
@@ -144,31 +134,21 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     // Type inferred from buildGraph() return — avoids complex LangGraph generic annotation
     // biome-ignore lint/suspicious/noExplicitAny: LangGraph compiled graph generic is impractical to annotate
     private readonly graph: ReturnType<() => any>;
-    /** Pre-computed byte limit for inline attachment filtering (0 = no filtering). */
-    private readonly maxInlineBytes: number;
-    private readonly attachmentMode: AttachmentMode;
     private readonly nodeTimeoutsMs: ModelTimeouts;
-    private readonly globalModelTimeoutMs: number;
     private readonly searchMode: SearchMode;
 
     constructor(
         private readonly triageProvider: IModelProvider<TriageModel>,
         private readonly generalProvider: IModelProvider<GeneralModel>,
         private readonly searchProvider: IModelProvider<SearchModel>,
-        private readonly freeKeyProvider: IRoundRobinKeyProvider,
-        private readonly paidKeyProvider: IRoundRobinKeyProvider,
+        private readonly invoker: IResilientModelInvoker,
         private readonly getWebsiteTool: GetWebsiteTool,
         private readonly getVideoCaptionsTool: GetVideoCaptionsTool,
         private readonly logger: Logger,
         config: Pick<AppConfig, "file">,
-        private readonly geminiFileRefreshService?: GeminiFileRefreshService,
         private readonly tavilyTool?: TavilySearch,
     ) {
-        const searchMode = config.file.agent.nodes.search.mode;
-        this.searchMode = searchMode;
-        this.attachmentMode = config.file.agent.uploadAttachmentMode;
-        this.maxInlineBytes = config.file.agent.maxInlineAttachmentSizeBytes;
-        this.globalModelTimeoutMs = config.file.globalModelTimeoutMs;
+        this.searchMode = config.file.agent.nodes.search.mode;
         this.nodeTimeoutsMs = {
             triage: config.file.agent.nodes.triage.timeoutMs,
             general: config.file.agent.nodes.general.timeoutMs,
@@ -241,161 +221,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 };
             },
         );
-    }
-
-    /**
-     * Shared invocation core: runs the model against `keyProvider` with file refresh,
-     * inline filtering, 503/timeout fallback, and 429 rotation.
-     *
-     * - Attempt 0 uses the current key (shared cursor, no mutation).
-     * - Attempt 1+ calls nextKey(), advancing the shared cursor.
-     *
-     * @throws {@link AllFreeKeysExhaustedError} if `isPaid` is false and all keys return 429
-     * @throws {@link PaidKeyExhaustedError} if `isPaid` is true and the key returns 429
-     * @throws The original error immediately for non-429 / non-fallback failures
-     */
-    private async invokeWithKeyRotation<T extends BaseMessage>(
-        getModel: (key: GeminiApiKey) => InvokableModel<T>,
-        getFallbackModel: ((key: GeminiApiKey) => InvokableModel<T> | undefined) | undefined,
-        messages: BaseMessage[],
-        timeoutMs: number | undefined,
-        keyProvider: IRoundRobinKeyProvider,
-        isPaid: boolean,
-    ): Promise<{ result: T; usedFallback: boolean }> {
-        return Sentry.startSpan(
-            {
-                name: "Invoke model with key rotation",
-                op: "llm.invoke",
-            },
-            async (span) => {
-                let lastErr: unknown;
-
-                for (let attempt = 0; attempt < keyProvider.keyCount; attempt++) {
-                    // Capture the current key before invoking. Because multiple requests
-                    // can run concurrently, the cursor may have already been advanced by
-                    // another request between when we threw and when we check. Reading
-                    // currentKey here ensures each attempt starts with the live cursor.
-                    const key = keyProvider.currentKey;
-
-                    let filtered: BaseMessage[] = [];
-                    try {
-                        // Refresh Gemini file uploads for this specific API key before invoking
-                        // TODO: make a mandatory dependency until there's a way to make this work in inline mode
-                        // with pre-existing gemini file URLs in history
-                        const refreshed = this.geminiFileRefreshService
-                            ? await this.geminiFileRefreshService.refreshHistory(messages, key.id)
-                            : messages;
-
-                        filtered =
-                            this.attachmentMode === AttachmentMode.inline
-                                ? filterHistoryForInlineSize(refreshed, this.maxInlineBytes)
-                                : refreshed;
-
-                        const result = await getModel(key).invoke(filtered, {
-                            timeout: timeoutMs ?? this.globalModelTimeoutMs,
-                        });
-                        span.setAttributes({
-                            "llm.attempt_count": attempt + 1,
-                            "llm.api_key_id": key.id,
-                        });
-                        return { result, usedFallback: false };
-                    } catch (err) {
-                        if (is429Error(err)) {
-                            this.logger.warn(
-                                { attempt, apiKeyId: key.id },
-                                isPaid
-                                    ? "Paid API key rate-limited (429)"
-                                    : "Free API key rate-limited (429); trying next key",
-                            );
-                            lastErr = err;
-                            // Only advance the cursor if no concurrent request has already
-                            // done so. If currentKey has changed since we captured it, a
-                            // parallel invocation already rotated to the next key — we must
-                            // not skip it by calling nextKey() again.
-                            if (keyProvider.currentKey.id === key.id) {
-                                keyProvider.nextKey();
-                            }
-                            continue;
-                        }
-
-                        // On 503 or timeout: try the fallback model with the same key and timeout.
-                        // If no fallback is configured, or the fallback also fails, propagate.
-                        if (isModelFallbackError(err) && getFallbackModel) {
-                            const fallbackModel = getFallbackModel(key);
-                            if (!fallbackModel) throw err;
-                            this.logger.warn(
-                                { attempt, apiKeyId: key.id, errName: (err as Error).name },
-                                "Primary model failed with 503/timeout; trying fallback model",
-                            );
-                            try {
-                                // Reuse filtered — same key, same messages, no re-refresh needed
-                                const fallbackResult = await fallbackModel.invoke(filtered, {
-                                    timeout: timeoutMs ?? this.globalModelTimeoutMs,
-                                });
-                                span.setAttributes({
-                                    "llm.attempt_count": attempt + 1,
-                                    "llm.api_key_id": key.id,
-                                    "llm.used_fallback": true,
-                                });
-                                return { result: fallbackResult, usedFallback: true };
-                            } catch (fallbackErr) {
-                                if (is429Error(fallbackErr)) {
-                                    this.logger.warn(
-                                        { attempt, apiKeyId: key.id },
-                                        isPaid
-                                            ? "Paid API key rate-limited on fallback model (429)"
-                                            : "Free API key rate-limited on fallback model (429); trying next key",
-                                    );
-                                    lastErr = fallbackErr;
-                                    if (keyProvider.currentKey.id === key.id) {
-                                        keyProvider.nextKey();
-                                    }
-                                    continue;
-                                }
-                                throw fallbackErr;
-                            }
-                        }
-
-                        // Non-429, non-fallback error: propagate immediately without trying other keys
-                        throw err;
-                    }
-                }
-
-                throw isPaid ? new PaidKeyExhaustedError(lastErr) : new AllFreeKeysExhaustedError(lastErr);
-            },
-        );
-    }
-
-    /**
-     * Invokes a model using the shared free-key pool with round-robin 429 rotation.
-     *
-     * @throws {@link AllFreeKeysExhaustedError} if all free keys are rate-limited
-     */
-    private invokeWithFreeKeyRotation<T extends BaseMessage>(
-        getModel: (key: GeminiApiKey) => InvokableModel<T>,
-        getFallbackModel: ((key: GeminiApiKey) => InvokableModel<T> | undefined) | undefined,
-        messages: BaseMessage[],
-        timeoutMs?: number,
-    ): Promise<{ result: T; usedFallback: boolean }> {
-        return this.invokeWithKeyRotation(getModel, getFallbackModel, messages, timeoutMs, this.freeKeyProvider, false);
-    }
-
-    /**
-     * Invokes a model using the single paid API key.
-     *
-     * To switch a node to this path, replace its {@link invokeWithFreeKeyRotation} call
-     * with this method and pass the relevant provider's `get` / `getFallback` bindings.
-     *
-     * @throws {@link PaidKeyExhaustedError} if the paid key is rate-limited
-     */
-    // biome-ignore lint/correctness/noUnusedPrivateClassMembers: temporarily unused
-    private _invokeWithPaidKey<T extends BaseMessage>(
-        getModel: (key: GeminiApiKey) => InvokableModel<T>,
-        getFallbackModel: ((key: GeminiApiKey) => InvokableModel<T> | undefined) | undefined,
-        messages: BaseMessage[],
-        timeoutMs?: number,
-    ): Promise<{ result: T; usedFallback: boolean }> {
-        return this.invokeWithKeyRotation(getModel, getFallbackModel, messages, timeoutMs, this.paidKeyProvider, true);
     }
 
     /**
@@ -489,7 +314,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 ...triageWindow,
             ];
 
-            const { result: triageResponse } = await this.invokeWithFreeKeyRotation(
+            const { result: triageResponse } = await this.invoker.invokeWithFreeKeys(
                 this.triageProvider.get.bind(this.triageProvider),
                 this.triageProvider.getFallback.bind(this.triageProvider),
                 messages,
@@ -702,7 +527,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 ...state.messages,
             ];
 
-            const { result: response, usedFallback } = await this.invokeWithFreeKeyRotation(
+            const { result: response, usedFallback } = await this.invoker.invokeWithFreeKeys(
                 this.generalProvider.get.bind(this.generalProvider),
                 this.generalProvider.getFallback.bind(this.generalProvider),
                 invokeMessages,
@@ -801,7 +626,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     tavilyResultMessage,
                 ];
 
-                const { result, usedFallback } = await this.invokeWithFreeKeyRotation(
+                const { result, usedFallback } = await this.invoker.invokeWithFreeKeys(
                     this.searchProvider.get.bind(this.searchProvider),
                     this.searchProvider.getFallback.bind(this.searchProvider),
                     invokeMessages,
@@ -821,7 +646,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 new SystemMessage(buildSearchSystemPrompt(dateStr, this.searchMode)),
                 ...state.messages,
             ];
-            const { result: response, usedFallback } = await this.invokeWithFreeKeyRotation(
+            const { result: response, usedFallback } = await this.invoker.invokeWithFreeKeys(
                 this.searchProvider.get.bind(this.searchProvider),
                 this.searchProvider.getFallback.bind(this.searchProvider),
                 messages,
