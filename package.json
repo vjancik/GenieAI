@@ -22,7 +22,7 @@
         "db:test:down": "docker compose -f docker-compose.test.yml down",
         "db:test:migrate": "cross-env DATABASE_URL=postgresql://genie_test:genie_test@localhost:5433/genie_test drizzle-kit migrate",
         "commands:register": "bun scripts/discord/registerCommands.ts",
-        "prepare": "husky"
+        "prepack": "husky"
     },
     "lint-staged": {
         "*": "bun codecheck:fix"
