@@ -1,32 +1,18 @@
 /**
- * Regression test: does ChatGoogle respect the RunnableConfig `timeout` option?
+ * Regression test: ChatGoogle must respect RunnableConfig.timeout on the
+ * non-streaming invoke() path.
  *
- * ## Finding (@langchain/google@0.1.6 upstream bug)
+ * Fixed in @langchain/google@0.1.8 — the non-streaming `_generate` code path
+ * previously dropped the AbortSignal produced by `RunnableConfig.timeout`,
+ * causing stalled API calls to hang forever.
  *
- * The non-streaming `_generate` code path (used by `.invoke()`) creates the
- * fetch Request **without** the `signal` that `RunnableConfig.timeout` produces:
- *
- *   // base.js ~line 190 — signal is MISSING:
- *   const response = await this.apiClient.fetch(new Request(url, {
- *       method: "POST",
- *       headers: { "Content-Type": "application/json" },
- *       body: JSON.stringify(body),
- *       // ← no signal
- *   }));
- *
- * The streaming path (`_streamResponseChunks`) does include `signal: options.signal`,
- * so streaming invocations are unaffected. Non-streaming invocations hang forever
- * regardless of any configured timeout.
- *
- * These tests document the broken behaviour so that a library upgrade that fixes
- * it will cause the "bug present" test to fail and the "should work" test to pass.
+ * @see docs/upstream_bugs/langchain-google-non-streaming-invoke-ignores-timeout.md
  *
  * ## Proxy design
  *
  * The fetch proxy only intercepts `generateContent` URLs and honours the
- * `signal` from the caller's `init` so that an abort propagates immediately
- * (no lingering hanging promise after the test completes). All other URLs
- * (e.g. LangSmith health checks) pass through to the real fetch.
+ * `signal` from the caller's RequestInit so that an abort propagates
+ * immediately. All other URLs (e.g. LangSmith health checks) pass through.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -56,9 +42,8 @@ function installHangingFetchProxy(): () => void {
 
         if (url.includes("generateContent")) {
             // Pull signal from either the RequestInit or the Request object.
-            // This is the critical pass-through: if the caller wired the timeout
-            // AbortSignal into the request, we must honour it so the test doesn't
-            // hang after the timeout fires.
+            // This is the critical pass-through: the library must wire the timeout
+            // AbortSignal into the request so the proxy can honour it.
             const signal: AbortSignal | null | undefined =
                 init?.signal ?? (input instanceof Request ? input.signal : undefined);
 
@@ -83,26 +68,21 @@ function installHangingFetchProxy(): () => void {
 }
 
 const TIMEOUT_MS = 500;
-// Generous buffer above the configured timeout — the call should reject well before this.
 const GRACE_MS = 300;
 
-describe("ChatGoogle — RunnableConfig.timeout (upstream @langchain/google bug)", () => {
+describe("ChatGoogle — RunnableConfig.timeout", () => {
     /**
-     * Asserts the broken behaviour: `_generate` (non-streaming path) drops the
-     * AbortSignal, so a stalled API call is never cancelled and invoke() hangs.
+     * invoke() must reject with a timeout-like error within the configured
+     * deadline when the API stalls. The AbortSignal must be forwarded into
+     * the fetch call so the proxy can honour it.
      *
-     * The test runs with a tight wall-clock deadline (TIMEOUT_MS + GRACE_MS).
-     * While the bug is present, invoke() never rejects, caughtError stays
-     * undefined, and the elapsed time exceeds TIMEOUT_MS — both asserted below.
-     *
-     * When @langchain/google fixes this, invoke() will reject before the deadline
-     * and caughtError will be defined — causing this test to fail and alerting
-     * us to update it.
+     * If this test starts failing (invoke hangs again), the upstream bug has
+     * regressed — check @langchain/google's _generate non-streaming branch.
      *
      * @see docs/upstream_bugs/langchain-google-non-streaming-invoke-ignores-timeout.md
      */
     test(
-        "BUG: invoke() hangs instead of rejecting when timeout fires on a stalled API call",
+        "invoke() rejects within deadline when the API stalls",
         async () => {
             const restore = installHangingFetchProxy();
 
@@ -113,28 +93,28 @@ describe("ChatGoogle — RunnableConfig.timeout (upstream @langchain/google bug)
 
             const started = Date.now();
             let caughtError: unknown;
-            // Race the invoke against a sentinel that resolves after TIMEOUT_MS + GRACE_MS.
-            // This ensures the test always completes within the deadline regardless of
-            // whether the bug is present (invoke hangs) or fixed (invoke rejects).
-            const sentinel = Symbol("timed-out");
-            const result = await Promise.race([
-                model.invoke([new HumanMessage("Hello")], { timeout: TIMEOUT_MS }).then(
-                    () => undefined,
-                    (err: unknown) => {
-                        caughtError = err;
-                    },
-                ),
-                new Promise<typeof sentinel>((res) => setTimeout(() => res(sentinel), TIMEOUT_MS + GRACE_MS - 50)),
-            ]).finally(restore);
+
+            try {
+                await model.invoke([new HumanMessage("Hello")], { timeout: TIMEOUT_MS });
+            } catch (err) {
+                caughtError = err;
+            } finally {
+                restore();
+            }
 
             const elapsed = Date.now() - started;
-            const hungForever = result === sentinel;
 
-            // BUG: should have thrown — flip these when the upstream fix lands
-            expect(hungForever).toBe(true);
-            expect(caughtError).toBeUndefined();
-            expect(elapsed).toBeGreaterThanOrEqual(TIMEOUT_MS);
+            expect(caughtError).toBeDefined();
+            expect(elapsed).toBeLessThan(TIMEOUT_MS + GRACE_MS);
+
+            const err = caughtError as { name?: string; message?: string };
+            const isTimeoutLike =
+                err.name === "TimeoutError" ||
+                err.name === "AbortError" ||
+                (typeof err.message === "string" && /timeout|abort/i.test(err.message));
+
+            expect(isTimeoutLike).toBe(true);
         },
-        TIMEOUT_MS + GRACE_MS,
+        TIMEOUT_MS + GRACE_MS + 100,
     );
 });
