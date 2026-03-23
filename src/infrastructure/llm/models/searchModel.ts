@@ -4,7 +4,7 @@ import { SearchMode } from "../../../application/config/AppConfig.ts";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
 import { BASE_USER_FACING_PROMPT, SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
-import { blockHighSafetySettings } from "./sharedGeminiSettings.ts";
+import { blockHighSafetySettings, neverTool } from "./sharedGeminiSettings.ts";
 
 /**
  * Builds the system prompt for the search agent.
@@ -71,7 +71,8 @@ function createSearchModel(
     });
 
     if (options.searchMode !== SearchMode.google) {
-        return llm.bindTools([], { tool_choice: "none" });
+        // Workaround for https://github.com/langchain-ai/langchainjs/issues/10432 — tool_choice: "none" is ignored on empty arrays
+        return llm.bindTools([neverTool], { tool_choice: "none" });
     } else {
         // Bind the native Google Search grounding tool — this uses Gemini's built-in
         // search capability rather than a custom web search implementation.

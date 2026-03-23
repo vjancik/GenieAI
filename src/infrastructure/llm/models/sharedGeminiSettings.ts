@@ -1,3 +1,15 @@
+import { tool } from "@langchain/core/tools";
+
+/**
+ * A placeholder tool passed to `bindTools` to work around a LangChain bug where
+ * `tool_choice: "none"` is ignored when the tools array is empty.
+ * See: https://github.com/langchain-ai/langchainjs/issues/10432
+ */
+export const neverTool = tool(() => "", {
+    name: "never_call_this",
+    description: "You must never call this tool",
+});
+
 /**
  * Safety settings that only block high-confidence harmful content across every Gemini harm category.
  * Apply these as a sensible default that reduces egregious outputs while minimising false-positive blocks.

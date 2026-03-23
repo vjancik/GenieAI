@@ -3,7 +3,7 @@ import * as Sentry from "@sentry/bun";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
 import { BASE_USER_FACING_PROMPT, SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
-import { blockHighSafetySettings } from "./sharedGeminiSettings.ts";
+import { blockHighSafetySettings, neverTool } from "./sharedGeminiSettings.ts";
 
 // TODO: rebuild only once a day, return cached otherwise
 /**
@@ -68,7 +68,8 @@ function createGeneralModel(
         callbacks: sentryCallback,
     });
 
-    return llm.bindTools([], { tool_choice: "none" });
+    // Workaround for https://github.com/langchain-ai/langchainjs/issues/10432 — tool_choice: "none" is ignored on empty arrays
+    return llm.bindTools([neverTool], { tool_choice: "none" });
 }
 
 export type GeneralModel = ReturnType<typeof createGeneralModel>;
