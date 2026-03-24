@@ -454,14 +454,14 @@ export class DiscordGateway {
             ? new ButtonBuilder().setCustomId(RENDER_BUTTON_ID).setLabel("Render").setStyle(ButtonStyle.Secondary)
             : undefined;
 
-        if (discordResponse.length > MESSAGE_LENGTH_LIMIT) {
+        // Space reserved on the first page for replyPrefix (+ trailing space) and fallbackFooter.
+        const page1Overhead = (replyPrefix ? replyPrefix.length + 1 : 0) + fallbackFooter.length;
+
+        if (discordResponse.length + page1Overhead > MESSAGE_LENGTH_LIMIT) {
             // --- PAGINATED PATH ---
             // Split on discordResponse (without footer) so the newOffset stored in the DB
             // is always relative to discordResponse. The footer is appended to page1Content
             // after the split so it appears at the bottom of the first page and is never cut off.
-            // Reserve space for replyPrefix (+ trailing space) and fallbackFooter so the
-            // assembled first-page message never exceeds Discord's 2000-character limit.
-            const page1Overhead = (replyPrefix ? replyPrefix.length + 1 : 0) + fallbackFooter.length;
             const {
                 content: page1Content,
                 newOffset,

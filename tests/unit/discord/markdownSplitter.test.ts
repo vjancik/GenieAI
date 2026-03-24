@@ -20,6 +20,14 @@ describe("splitMarkdown — regression: production over-limit page", () => {
         expect(result.content.length).toBeLessThanOrEqual(2000);
     });
 
+    it("page 1 content length plus footer must be 2000 characters or fewer", () => {
+        // Simulate the gateway: limit = MESSAGE_LENGTH_LIMIT - fallbackFooter.length
+        const FALLBACK_FOOTER =
+            "\n*This response was generated using a fallback model. If it's unsatisfactory you can try to Retry later to see if the primary model is available again.*";
+        const result = splitMarkdown(PROD_CONTENT, 0, 2000 - FALLBACK_FOOTER.length, { pageCount: true });
+        expect(result.content.length + FALLBACK_FOOTER.length).toBeLessThanOrEqual(2000);
+    });
+
     it("splitMarkdown produces at least 2 pages for the production payload", () => {
         const result = splitMarkdown(PROD_CONTENT, 0, 2000, { pageCount: true });
         expect(result.pageCount).toBeGreaterThanOrEqual(2);
@@ -73,6 +81,40 @@ describe("splitMarkdown — regression: production over-limit page", () => {
             "pageCount": 2,
           }
         `);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Regression test: real payload from production error 2026-03-24
+// The assembled first page (discordResponse split + fallbackFooter) exceeded
+// 2000 chars because the splitter limit didn't account for the footer length.
+// ---------------------------------------------------------------------------
+describe("splitMarkdown — regression: fallback footer overhead (2026-03-24)", () => {
+    const FALLBACK_FOOTER =
+        "\n*This response was generated using a fallback model. If it's unsatisfactory you can try to Retry later to see if the primary model is available again.*";
+
+    let content: string;
+
+    beforeAll(async () => {
+        content = await file(new URL("data/markdownSplitterTest-message2.md", import.meta.url)).text();
+    });
+
+    it("fixture content plus footer exceeds 2000 characters (confirms the bug is reproducible)", () => {
+        expect(content.length + FALLBACK_FOOTER.length).toBeGreaterThan(2000);
+    });
+
+    it("page 1 content plus fallback footer must be 2000 characters or fewer", () => {
+        // The gateway only enters the paginated path when content+footer > 2000,
+        // so we mirror that condition here to use the same limit.
+        const limit = 2000 - FALLBACK_FOOTER.length;
+        const result = splitMarkdown(content, 0, limit, { pageCount: true });
+        expect(result.content.length + FALLBACK_FOOTER.length).toBeLessThanOrEqual(2000);
+    });
+
+    it("splits into exactly 2 pages when footer overhead is accounted for", () => {
+        const limit = 2000 - FALLBACK_FOOTER.length;
+        const result = splitMarkdown(content, 0, limit, { pageCount: true });
+        expect(result.pageCount).toBe(2);
     });
 });
 
