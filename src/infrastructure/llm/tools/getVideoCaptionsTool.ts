@@ -334,7 +334,12 @@ async function extractCaptions(
             }
 
             if (response.status !== 429) break;
-            logger.debug({ captionUrl, attempt, proxyRetries }, "Caption fetch 429, retrying with rotated proxy IP");
+            if (attempt < proxyRetries) {
+                logger.debug(
+                    { captionUrl, attempt: attempt + 1, proxyRetries },
+                    "Caption fetch 429, retrying with rotated proxy IP",
+                );
+            }
         }
 
         if (!response?.ok) {
