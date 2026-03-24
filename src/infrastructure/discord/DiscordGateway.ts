@@ -1052,7 +1052,8 @@ export class DiscordGateway {
             interactionAuthorDiscordId: interaction.user.id,
             reuseHumanMessage,
             fetchHistory: false,
-            ephemeralInstructionMessage: "Summarize this:",
+            // TODO: add a language preference to config
+            ephemeralInstructionMessage: "Summarize this in English",
         });
     }
 
