@@ -7,9 +7,7 @@ import {
     ButtonStyle,
     ComponentType,
     Events,
-    type Message,
     MessageFlags,
-    type TextBasedChannel,
     type TopLevelComponent,
 } from "discord.js";
 import { type FileConfig, SearchMode } from "../../application/config/AppConfig.ts";
@@ -21,6 +19,7 @@ import { hasExtendedMarkdown } from "../../application/helpers/hasExtendedMarkdo
 import { COMMAND_PREFIX_REGEX, parseMessageIntent } from "../../application/helpers/parseMessageIntent.ts";
 import type { IChatClientBot } from "../../application/ports/chat/IChatClientBot.ts";
 import type { IChatClientButtonInteraction } from "../../application/ports/chat/IChatClientButtonInteraction.ts";
+import type { IChatClientChannel } from "../../application/ports/chat/IChatClientChannel.ts";
 import type { IChatClientContextMenuInteraction } from "../../application/ports/chat/IChatClientContextMenuInteraction.ts";
 import type { IChatClientMessage } from "../../application/ports/chat/IChatClientMessage.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
@@ -68,21 +67,6 @@ const NEXT_PAGE_BUTTON_ID = "next_page";
 const RENDER_BUTTON_ID = "render_image";
 
 /**
- * Determines whether the bot was explicitly @mentioned in a Discord message,
- * as opposed to a mention-by-reply (where Discord auto-includes the replied-to user).
- *
- * Uses discord.js `mentions.has()` with `ignoreRepliedUser: true` to exclude
- * the implicit mention Discord adds when a user replies to one of the bot's messages.
- * Only responds when the user intentionally typed "@BotName" in the message content.
- *
- * @param message - The Discord message to check
- * @param botUserId - The bot's Discord user ID
- */
-export function isExplicitMention(message: Message, botUserId: string): boolean {
-    return message.mentions.has(botUserId, { ignoreRepliedUser: true });
-}
-
-/**
  * Strips bot @mention tokens, the bot's managed role mention token, and any leading
  * command prefix (e.g. `!ai`, `!aisearch`) from the message content in a single pass.
  *
@@ -96,14 +80,14 @@ export function isExplicitMention(message: Message, botUserId: string): boolean 
  * The command prefix is only stripped when it appears at the start of the content,
  * followed by at least one whitespace character.
  *
- * @param message - The Discord message
+ * @param content - The raw message content string
  * @param botUserId - The bot's Discord user ID
  * @param botRoleId - The bot's managed role ID in this guild, or null for DMs
  * @returns Trimmed message content without the bot's user/role mention tokens or command prefix
  */
-export function extractUserContent(message: Message, botUserId: string, botRoleId: string | null): string {
+export function extractUserContent(content: string, botUserId: string, botRoleId: string | null): string {
     // Strip command prefix first — it always appears at the message start before any mention tokens
-    const stripped = message.content.replace(COMMAND_PREFIX_REGEX, "");
+    const stripped = content.replace(COMMAND_PREFIX_REGEX, "");
     // Strip bot user mention (<@userId> / <@!userId>) and optionally the bot's role mention (<@&roleId>)
     const mentionPattern = botRoleId
         ? new RegExp(`<@!?${botUserId}>|<@&${botRoleId}>`, "g")
@@ -117,9 +101,15 @@ export function extractUserContent(message: Message, botUserId: string, botRoleI
  * any co-located Retry button intact (and vice versa).
  * Passing the result to `message.edit({ components })` replaces the row in-place.
  */
-function withoutButton(message: Message, removeId: string): (TopLevelComponent | ActionRowBuilder<ButtonBuilder>)[] {
+function withoutButton(
+    message: IChatClientMessage,
+    removeId: string,
+): (TopLevelComponent | ActionRowBuilder<ButtonBuilder>)[] {
+    // TYPE COERCION: components is a discord.js-specific property not on IChatClientMessage;
+    // all callers pass a DiscordClientMessage so the escape hatch is always safe here.
+    const discordMessage = (message as DiscordClientMessage).discordMessage;
     const result: (TopLevelComponent | ActionRowBuilder<ButtonBuilder>)[] = [];
-    for (const row of message.components) {
+    for (const row of discordMessage.components) {
         if (row.type !== ComponentType.ActionRow) {
             result.push(row);
             continue;
@@ -530,20 +520,20 @@ export class DiscordGateway {
      * @param guildId - Guild ID for DB deletion
      */
     private deleteDanglingSourcesMessageOptimistically(
-        channel: TextBasedChannel,
+        channel: IChatClientChannel,
         deletedMessageId: string,
         channelId: string,
         guildId: string,
     ): void {
         const botId = this.bot.userId;
 
-        channel.messages
-            .fetch({ after: deletedMessageId, limit: 10 })
+        channel
+            .fetchMessagesAfter(deletedMessageId, 10)
             .then((fetched) => {
                 const sourcesMsg = fetched.find(
                     (msg) =>
-                        msg.author.id === botId &&
-                        msg.reference?.messageId === deletedMessageId &&
+                        msg.authorId === botId &&
+                        msg.referencedMessageId === deletedMessageId &&
                         // NOTE this might drift from sources message formatting
                         msg.content.startsWith("*Sources: "),
                 );
@@ -610,15 +600,13 @@ export class DiscordGateway {
      * In both scenarios, the old failed bot reply is deleted before sending a new response.
      */
     private async handleRetryButton(interaction: IChatClientButtonInteraction): Promise<void> {
-        // Use escape hatch: referencedMessageId and channel fetching require discord.js types
-        const discordInteraction = (interaction as DiscordClientButtonInteraction).discordInteraction;
-        const originalMessageId = discordInteraction.message.reference?.messageId;
-        const channel = discordInteraction.channel;
+        const originalMessageId = interaction.message.referencedMessageId;
+        const channel = interaction.channel;
 
-        let originalMessage: Message | undefined;
-        if (originalMessageId && channel?.isTextBased()) {
+        let originalMessage: IChatClientMessage | undefined;
+        if (originalMessageId && channel) {
             try {
-                originalMessage = await channel.messages.fetch(originalMessageId);
+                originalMessage = await channel.fetchMessage(originalMessageId);
             } catch {
                 // fetch failed — original message was deleted
             }
@@ -632,7 +620,7 @@ export class DiscordGateway {
                     flags: MessageFlags.Ephemeral,
                 }),
                 interaction.message.edit({
-                    components: withoutButton(discordInteraction.message, RETRY_BUTTON_ID),
+                    components: withoutButton(interaction.message, RETRY_BUTTON_ID),
                 }),
             ]);
             return;
@@ -720,10 +708,9 @@ export class DiscordGateway {
                     });
 
                     // If the deleted message had a sources follow-up, clean it up too.
-                    // Use escape hatch: deleteDanglingSourcesMessageOptimistically requires TextBasedChannel.
-                    if (discordInteraction.channel) {
+                    if (channel) {
                         this.deleteDanglingSourcesMessageOptimistically(
-                            discordInteraction.channel,
+                            channel,
                             interaction.message.id,
                             originalMessage.channelId,
                             guildId,
@@ -749,7 +736,7 @@ export class DiscordGateway {
                         span.setAttribute("discord.retry_scenario", "A");
                         const botUserId = this.bot.userId;
                         await this.invokeAgentWithMessage({
-                            message: new DiscordClientMessage(originalMessage),
+                            message: originalMessage,
                             botUserId,
                             userContent: null,
                             attachments: null,
@@ -765,7 +752,7 @@ export class DiscordGateway {
                     } else {
                         // --- Scenario B: human message not in DB, run full pipeline ---
                         span.setAttribute("discord.retry_scenario", "B");
-                        await this.handleMessageCreate(new DiscordClientMessage(originalMessage), retriesLeft);
+                        await this.handleMessageCreate(originalMessage, retriesLeft);
                     }
                 } finally {
                     this.interactionLock.clearLock(interaction.message.id, interaction.customId);
@@ -802,10 +789,6 @@ export class DiscordGateway {
                     attributes: { "discord.message_id": currentBotMessageId },
                 },
                 async (span) => {
-                    // withoutButton requires the raw discord.js Message to read its components
-                    const discordBotMessage = (interaction as DiscordClientButtonInteraction).discordInteraction
-                        .message;
-
                     // Step 1: Compute next page content via use case
                     let result: Awaited<ReturnType<GetNextPageUseCase["execute"]>>;
                     try {
@@ -819,7 +802,7 @@ export class DiscordGateway {
                         this.logger.error({ err, currentBotMessageId }, "Failed to compute next page");
                         Sentry.captureException(err);
                         await interaction.message
-                            .edit({ components: withoutButton(discordBotMessage, NEXT_PAGE_BUTTON_ID) })
+                            .edit({ components: withoutButton(interaction.message, NEXT_PAGE_BUTTON_ID) })
                             .catch(() => {});
                         return;
                     }
@@ -827,7 +810,7 @@ export class DiscordGateway {
                     if (!result) {
                         // No pending page state — stale button click
                         await interaction.message
-                            .edit({ components: withoutButton(discordBotMessage, NEXT_PAGE_BUTTON_ID) })
+                            .edit({ components: withoutButton(interaction.message, NEXT_PAGE_BUTTON_ID) })
                             .catch((err) => {
                                 this.logger.warn(
                                     { err, currentBotMessageId },
@@ -904,7 +887,7 @@ export class DiscordGateway {
                         // Remove only the Next Page button from the OLD bot message,
                         // preserving any Retry button that may also be present.
                         interaction.message
-                            .edit({ components: withoutButton(discordBotMessage, NEXT_PAGE_BUTTON_ID) })
+                            .edit({ components: withoutButton(interaction.message, NEXT_PAGE_BUTTON_ID) })
                             .catch((err) => {
                                 this.logger.warn(
                                     { err, currentBotMessageId },
@@ -945,7 +928,7 @@ export class DiscordGateway {
         const rawTargetMessage = (targetMessage as DiscordClientMessage).discordMessage;
         const attachments = extractAttachments(rawTargetMessage);
         const embeds = extractEmbeds(rawTargetMessage);
-        const userContent = extractUserContent(rawTargetMessage, botUserId, targetMessage.botRoleId);
+        const userContent = extractUserContent(targetMessage.content, botUserId, targetMessage.botRoleId);
 
         // ACK the interaction with a visible ephemeral reply so Discord doesn't show
         // "interaction failed". Deleted after 5 seconds — the thinking placeholder on
@@ -1073,9 +1056,7 @@ export class DiscordGateway {
             });
 
             // Remove the Render button from the original message now that it's been rendered.
-            // Use escape hatch: withoutButton requires the raw discord.js Message for its components.
-            const discordBotMessage = (interaction as DiscordClientButtonInteraction).discordInteraction.message;
-            await botMessage.edit({ components: withoutButton(discordBotMessage, RENDER_BUTTON_ID) });
+            await botMessage.edit({ components: withoutButton(botMessage, RENDER_BUTTON_ID) });
         } finally {
             this.interactionLock.clearLock(botMessage.id, RENDER_BUTTON_ID);
         }
@@ -1162,10 +1143,9 @@ export class DiscordGateway {
             return;
         }
 
-        // Use escape hatch for extractUserContent / extractAttachments — these take the raw
-        // discord.js Message and are infrastructure-internal extraction utilities.
+        // Use escape hatch for extractAttachments — takes the raw discord.js Message.
         const rawMessage = (message as DiscordClientMessage).discordMessage;
-        const userContent = extractUserContent(rawMessage, botUserId, message.botRoleId);
+        const userContent = extractUserContent(message.content, botUserId, message.botRoleId);
         const attachments: DiscordAttachmentInfo[] = extractAttachments(rawMessage);
 
         // No usable content after stripping mentions/commands, no attachments, and no reply

@@ -1,3 +1,4 @@
+import type { IChatClientChannel } from "./IChatClientChannel.ts";
 import type { IChatClientMessage } from "./IChatClientMessage.ts";
 
 /** Options for an ephemeral follow-up on a button interaction. */
@@ -21,6 +22,12 @@ export interface ButtonReplyOptions {
 export interface IChatClientButtonInteraction {
     /** The message the button is attached to. */
     readonly message: IChatClientMessage;
+
+    /**
+     * The channel the interaction occurred in.
+     * `null` when the channel is not accessible (e.g. ephemeral-only contexts).
+     */
+    readonly channel: IChatClientChannel | null;
 
     /** The custom ID of the button that was clicked. */
     readonly customId: string;

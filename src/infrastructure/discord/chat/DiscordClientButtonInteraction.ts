@@ -4,29 +4,39 @@ import type {
     ButtonReplyOptions,
     IChatClientButtonInteraction,
 } from "../../../application/ports/chat/IChatClientButtonInteraction.ts";
+import type { IChatClientChannel } from "../../../application/ports/chat/IChatClientChannel.ts";
 import type { IChatClientMessage } from "../../../application/ports/chat/IChatClientMessage.ts";
+import { DiscordClientChannel } from "./DiscordClientChannel.ts";
 import { DiscordClientMessage } from "./DiscordClientMessage.ts";
 
 /**
  * Adapts a discord.js `ButtonInteraction` to the `IChatClientButtonInteraction` interface.
  *
- * The `message` getter wraps the interaction's attached message as an `IChatClientMessage`.
- * The inner discord.js object is exposed via `discordInteraction` as an escape hatch for
- * infrastructure code that still needs direct access (e.g. channel fetching, lock keys).
+ * The `message` and `channel` getters wrap the interaction's attached objects as
+ * platform-agnostic interfaces, cached on construction. The inner discord.js object
+ * is exposed via `discordInteraction` as an escape hatch for infrastructure code
+ * that still needs direct access (e.g. component manipulation).
  */
 export class DiscordClientButtonInteraction implements IChatClientButtonInteraction {
     /** Cached wrapper — message identity is stable for the lifetime of this interaction. */
     private readonly _message: IChatClientMessage;
+    /** Cached wrapper — channel identity is stable for the lifetime of this interaction. */
+    private readonly _channel: IChatClientChannel | null;
 
     constructor(
         /** Escape hatch — direct access to the underlying discord.js ButtonInteraction. */
         public readonly discordInteraction: ButtonInteraction,
     ) {
         this._message = new DiscordClientMessage(discordInteraction.message);
+        this._channel = discordInteraction.channel ? new DiscordClientChannel(discordInteraction.channel) : null;
     }
 
     get message(): IChatClientMessage {
         return this._message;
+    }
+
+    get channel(): IChatClientChannel | null {
+        return this._channel;
     }
 
     get customId(): string {
