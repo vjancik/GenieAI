@@ -834,4 +834,91 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
         }
         expect(thrown).toBeInstanceOf(AllFreeKeysExhaustedError);
     });
+
+    test("rotates to next key when fallback model returns 429 after primary 503", async () => {
+        const make503Error = () => new Error("HTTP 503 Service Unavailable");
+        const provider = makeMultiKeyProvider(2);
+        let generalCallCount = 0;
+        // Primary always 503s, so fallback is tried. Fallback 429s on first key, succeeds on second.
+        const fallbackInvoke = mock(async () => {
+            if (generalCallCount === 1) throw make429Error();
+            return new AIMessage("success from fallback on second key");
+        });
+        const generalModel = {
+            invoke: mock(async () => {
+                generalCallCount++;
+                throw make503Error();
+            }),
+        };
+        const generalProvider = {
+            modelName: "gemini-test",
+            get(_key: unknown) {
+                return generalModel;
+            },
+            getFallback(_key: unknown) {
+                return { invoke: fallbackInvoke };
+            },
+        };
+
+        const orchestrator = new AgentOrchestrator(
+            asProvider(makeTriageWithNoToolCall()) as never,
+            generalProvider as never,
+            asProvider(makeModel("search")) as never,
+            provider as never,
+            testPaidKeyProvider,
+            makeTool("w") as never,
+            makeTool("v") as never,
+            testLogger,
+            testConfig,
+        );
+
+        const result = await orchestrator.process([new HumanMessage("hello")], MessageIntent.UNKNOWN);
+
+        expect(result.content).toBe("success from fallback on second key");
+        // nextKey() called once: fallback on key-0 returned 429, rotate to key-1
+        expect(provider.nextKey).toHaveBeenCalledTimes(1);
+        expect(fallbackInvoke).toHaveBeenCalledTimes(2);
+    });
+
+    test("throws AllFreeKeysExhaustedError when all fallback model invocations return 429", async () => {
+        const make503Error = () => new Error("HTTP 503 Service Unavailable");
+        const provider = makeMultiKeyProvider(2);
+        const fallbackInvoke = mock(async () => {
+            throw make429Error();
+        });
+        const generalModel = {
+            invoke: mock(async () => {
+                throw make503Error();
+            }),
+        };
+        const generalProvider = {
+            modelName: "gemini-test",
+            get(_key: unknown) {
+                return generalModel;
+            },
+            getFallback(_key: unknown) {
+                return { invoke: fallbackInvoke };
+            },
+        };
+
+        const orchestrator = new AgentOrchestrator(
+            asProvider(makeTriageWithNoToolCall()) as never,
+            generalProvider as never,
+            asProvider(makeModel("search")) as never,
+            provider as never,
+            testPaidKeyProvider,
+            makeTool("w") as never,
+            makeTool("v") as never,
+            testLogger,
+            testConfig,
+        );
+
+        let thrown: unknown;
+        try {
+            await orchestrator.process([new HumanMessage("hello")], MessageIntent.UNKNOWN);
+        } catch (err) {
+            thrown = err;
+        }
+        expect(thrown).toBeInstanceOf(AllFreeKeysExhaustedError);
+    });
 });

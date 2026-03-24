@@ -343,16 +343,33 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                                 { attempt, apiKeyId: key.id, errName: (err as Error).name },
                                 "Primary model failed with 503/timeout; trying fallback model",
                             );
-                            // Reuse filtered — same key, same messages, no re-refresh needed
-                            const fallbackResult = await fallbackModel.invoke(filtered, {
-                                timeout: timeoutMs ?? this.globalModelTimeoutMs,
-                            });
-                            span.setAttributes({
-                                "llm.attempt_count": attempt + 1,
-                                "llm.api_key_id": key.id,
-                                "llm.used_fallback": true,
-                            });
-                            return { result: fallbackResult, usedFallback: true };
+                            try {
+                                // Reuse filtered — same key, same messages, no re-refresh needed
+                                const fallbackResult = await fallbackModel.invoke(filtered, {
+                                    timeout: timeoutMs ?? this.globalModelTimeoutMs,
+                                });
+                                span.setAttributes({
+                                    "llm.attempt_count": attempt + 1,
+                                    "llm.api_key_id": key.id,
+                                    "llm.used_fallback": true,
+                                });
+                                return { result: fallbackResult, usedFallback: true };
+                            } catch (fallbackErr) {
+                                if (is429Error(fallbackErr)) {
+                                    this.logger.warn(
+                                        { attempt, apiKeyId: key.id },
+                                        isPaid
+                                            ? "Paid API key rate-limited on fallback model (429)"
+                                            : "Free API key rate-limited on fallback model (429); trying next key",
+                                    );
+                                    lastErr = fallbackErr;
+                                    if (keyProvider.currentKey.id === key.id) {
+                                        keyProvider.nextKey();
+                                    }
+                                    continue;
+                                }
+                                throw fallbackErr;
+                            }
                         }
 
                         // Non-429, non-fallback error: propagate immediately without trying other keys
