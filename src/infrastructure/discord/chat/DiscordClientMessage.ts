@@ -1,4 +1,4 @@
-import type { Message } from "discord.js";
+import { type Message, MessageFlags } from "discord.js";
 import type {
     ChatEditOptions,
     ChatReplyOptions,
@@ -61,11 +61,15 @@ export class DiscordClientMessage implements IChatClientMessage {
     }
 
     async reply(options: ChatReplyOptions): Promise<IChatClientMessage> {
-        // TYPE COERCION: ChatReplyOptions.components is typed as unknown[] to keep the
-        // interface platform-agnostic; the concrete discord.js reply call expects the
-        // actual ActionRowBuilder / MessageComponent types, which are passed through here
-        // unchanged by callers in the infrastructure layer.
-        const sent = await this.discordMessage.reply(options as Parameters<Message["reply"]>[0]);
+        const { isEphemeral, ...rest } = options;
+        // TYPE COERCION: components is typed as unknown[] for platform independence;
+        // callers in the infrastructure layer pass the actual discord.js component types.
+        // flags is coerced because MessageReplyOptions restricts it to non-ephemeral flags,
+        // but the interface allows isEphemeral for consistency with other reply surfaces.
+        const sent = await this.discordMessage.reply({
+            ...rest,
+            ...(isEphemeral && { flags: MessageFlags.Ephemeral }),
+        } as Parameters<Message["reply"]>[0]);
         return new DiscordClientMessage(sent);
     }
 

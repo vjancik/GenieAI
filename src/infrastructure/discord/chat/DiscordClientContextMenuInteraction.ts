@@ -1,4 +1,4 @@
-import type { MessageContextMenuCommandInteraction } from "discord.js";
+import { type MessageContextMenuCommandInteraction, MessageFlags } from "discord.js";
 import type {
     ContextMenuDeferReplyOptions,
     ContextMenuEditReplyOptions,
@@ -36,16 +36,16 @@ export class DiscordClientContextMenuInteraction implements IChatClientContextMe
     }
 
     async reply(options: ContextMenuReplyOptions): Promise<void> {
-        // TYPE COERCION: flags is a plain number for platform independence;
-        // discord.js expects its own MessageFlags enum values, which are numerically identical.
-        await this.discordInteraction.reply(options as Parameters<MessageContextMenuCommandInteraction["reply"]>[0]);
+        await this.discordInteraction.reply({
+            content: options.content,
+            ...(options.isEphemeral && { flags: MessageFlags.Ephemeral }),
+        });
     }
 
     async deferReply(options?: ContextMenuDeferReplyOptions): Promise<void> {
-        // TYPE COERCION: Same rationale as reply().
-        await this.discordInteraction.deferReply(
-            options as Parameters<MessageContextMenuCommandInteraction["deferReply"]>[0],
-        );
+        await this.discordInteraction.deferReply({
+            ...(options?.isEphemeral && { flags: MessageFlags.Ephemeral }),
+        });
     }
 
     async editReply(options: ContextMenuEditReplyOptions): Promise<void> {

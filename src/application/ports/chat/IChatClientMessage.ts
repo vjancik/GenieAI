@@ -17,8 +17,7 @@ export interface ChatReplyOptions {
         repliedUser: boolean;
         users?: string[];
     };
-    /** Platform-specific flags (e.g. ephemeral). */
-    flags?: number;
+    isEphemeral?: boolean;
 }
 
 /** Options for editing a message in-place. */

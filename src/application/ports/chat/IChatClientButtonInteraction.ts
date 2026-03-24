@@ -4,15 +4,13 @@ import type { IChatClientMessage } from "./IChatClientMessage.ts";
 /** Options for an ephemeral follow-up on a button interaction. */
 export interface ButtonFollowUpOptions {
     content: string;
-    /** Platform-specific flags (e.g. ephemeral). */
-    flags?: number;
+    isEphemeral?: boolean;
 }
 
 /** Options for an ephemeral reply on a button interaction. */
 export interface ButtonReplyOptions {
     content: string;
-    /** Platform-specific flags (e.g. ephemeral). */
-    flags?: number;
+    isEphemeral?: boolean;
 }
 
 /**

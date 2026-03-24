@@ -617,7 +617,7 @@ export class DiscordGateway {
             await Promise.allSettled([
                 interaction.reply({
                     content: "Original message is missing, retry is no longer possible.",
-                    flags: MessageFlags.Ephemeral,
+                    isEphemeral: true,
                 }),
                 interaction.message.edit({
                     components: withoutButton(interaction.message, RETRY_BUTTON_ID),
@@ -687,7 +687,7 @@ export class DiscordGateway {
                     if (interaction.userId !== originalAuthorId) {
                         await interaction.followUp({
                             content: "*This message was generated for someone else and can only be retried by them.*",
-                            flags: MessageFlags.Ephemeral,
+                            isEphemeral: true,
                         });
                         return;
                     }
@@ -933,7 +933,7 @@ export class DiscordGateway {
         // ACK the interaction with a visible ephemeral reply so Discord doesn't show
         // "interaction failed". Deleted after 5 seconds — the thinking placeholder on
         // the target message is the real visual feedback.
-        await interaction.reply({ content: "*Generating summary...*", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "*Generating summary...*", isEphemeral: true });
         setTimeout(() => void interaction.deleteReply().catch(() => {}), 5_000);
 
         // When the invoker is also the message author, replying to their own message already
@@ -977,11 +977,11 @@ export class DiscordGateway {
 
         // Only allow exporting messages authored by this bot or the previous bot
         if (target.authorId !== botUserId && target.authorId !== this.previousBotId) {
-            await interaction.reply({ content: "*You can only export bot messages.*", flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: "*You can only export bot messages.*", isEphemeral: true });
             return;
         }
 
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        await interaction.deferReply({ isEphemeral: true });
 
         const markdown = await this.resolveExportContent(target);
         const html = this.markdownToHtml.render(markdown);
@@ -1000,11 +1000,11 @@ export class DiscordGateway {
 
         // Only allow exporting messages authored by this bot or the previous bot
         if (target.authorId !== botUserId && target.authorId !== this.previousBotId) {
-            await interaction.reply({ content: "*You can only export bot messages.*", flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: "*You can only export bot messages.*", isEphemeral: true });
             return;
         }
 
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        await interaction.deferReply({ isEphemeral: true });
 
         const markdown = await this.resolveExportContent(target);
         const html = this.markdownToHtml.render(markdown);
@@ -1021,7 +1021,7 @@ export class DiscordGateway {
         const botMessage = interaction.message;
 
         if (this.interactionLock.isLocked(botMessage.id, RENDER_BUTTON_ID)) {
-            await interaction.reply({ content: "*Already rendering, please wait.*", flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: "*Already rendering, please wait.*", isEphemeral: true });
             return;
         }
 

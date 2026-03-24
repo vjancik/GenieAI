@@ -1,4 +1,4 @@
-import type { ButtonInteraction } from "discord.js";
+import { type ButtonInteraction, MessageFlags } from "discord.js";
 import type {
     ButtonFollowUpOptions,
     ButtonReplyOptions,
@@ -52,13 +52,16 @@ export class DiscordClientButtonInteraction implements IChatClientButtonInteract
     }
 
     async reply(options: ButtonReplyOptions): Promise<void> {
-        // TYPE COERCION: ButtonReplyOptions.flags is a plain number for platform independence;
-        // discord.js expects its own MessageFlags enum values, which are numerically identical.
-        await this.discordInteraction.reply(options as Parameters<ButtonInteraction["reply"]>[0]);
+        await this.discordInteraction.reply({
+            content: options.content,
+            ...(options.isEphemeral && { flags: MessageFlags.Ephemeral }),
+        });
     }
 
     async followUp(options: ButtonFollowUpOptions): Promise<void> {
-        // TYPE COERCION: Same rationale as reply() — flags are numerically identical to MessageFlags.
-        await this.discordInteraction.followUp(options as Parameters<ButtonInteraction["followUp"]>[0]);
+        await this.discordInteraction.followUp({
+            content: options.content,
+            ...(options.isEphemeral && { flags: MessageFlags.Ephemeral }),
+        });
     }
 }

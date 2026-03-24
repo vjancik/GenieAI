@@ -9,14 +9,12 @@ export interface InteractionFileAttachment {
 /** Options for an ephemeral reply on a context menu interaction. */
 export interface ContextMenuReplyOptions {
     content: string;
-    /** Platform-specific flags (e.g. ephemeral). */
-    flags?: number;
+    isEphemeral?: boolean;
 }
 
 /** Options for deferring a context menu interaction reply. */
 export interface ContextMenuDeferReplyOptions {
-    /** Platform-specific flags (e.g. ephemeral). */
-    flags?: number;
+    isEphemeral?: boolean;
 }
 
 /** Options for editing a deferred context menu reply. */
