@@ -1,15 +1,7 @@
 import { AIMessage, type BaseMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import type { Span } from "@sentry/core";
-import {
-    ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle,
-    ComponentType,
-    Events,
-    MessageFlags,
-    type TopLevelComponent,
-} from "discord.js";
+import { Events, MessageFlags } from "discord.js";
 import { type FileConfig, SearchMode } from "../../application/config/AppConfig.ts";
 import { agentStatusLabel } from "../../application/formatters/agentStatus.ts";
 import { extractWebGroundingChunks, formatGroundingSources } from "../../application/formatters/groundingSources.ts";
@@ -21,7 +13,7 @@ import type { IChatClientBot } from "../../application/ports/chat/IChatClientBot
 import type { IChatClientButtonInteraction } from "../../application/ports/chat/IChatClientButtonInteraction.ts";
 import type { IChatClientChannel } from "../../application/ports/chat/IChatClientChannel.ts";
 import type { IChatClientContextMenuInteraction } from "../../application/ports/chat/IChatClientContextMenuInteraction.ts";
-import type { IChatClientMessage } from "../../application/ports/chat/IChatClientMessage.ts";
+import type { IChatClientMessage, IChatClientMessageButton } from "../../application/ports/chat/IChatClientMessage.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { DiscordEmbedInfo } from "../../application/ports/IChatMessageService.ts";
 import type { OnStatusUpdate } from "../../application/types/AgentStatus.ts";
@@ -96,37 +88,13 @@ export function extractUserContent(content: string, botUserId: string, botRoleId
 }
 
 /**
- * Returns a components array with the button matching `removeId` filtered out.
+ * Returns the button array for `message` with the button matching `removeId` filtered out.
  * Preserves all other buttons so, e.g., removing the Next Page button leaves
  * any co-located Retry button intact (and vice versa).
- * Passing the result to `message.edit({ components })` replaces the row in-place.
+ * Passing the result to `message.edit({ buttons })` replaces the row in-place.
  */
-function withoutButton(
-    message: IChatClientMessage,
-    removeId: string,
-): (TopLevelComponent | ActionRowBuilder<ButtonBuilder>)[] {
-    // TYPE COERCION: components is a discord.js-specific property not on IChatClientMessage;
-    // all callers pass a DiscordClientMessage so the escape hatch is always safe here.
-    const discordMessage = (message as DiscordClientMessage).discordMessage;
-    const result: (TopLevelComponent | ActionRowBuilder<ButtonBuilder>)[] = [];
-    for (const row of discordMessage.components) {
-        if (row.type !== ComponentType.ActionRow) {
-            result.push(row);
-            continue;
-        }
-        // Components from message.components are raw API objects; only buttons are ever
-        // added by this bot, so filter to buttons only and wrap in ButtonBuilder so
-        // ActionRowBuilder can serialize them correctly (label/emoji accessible).
-        const remaining = row.components.filter(
-            (c): c is (typeof row.components)[number] & { type: ComponentType.Button } =>
-                c.type === ComponentType.Button && c.customId !== removeId,
-        );
-        if (remaining.length === 0) continue;
-        result.push(
-            new ActionRowBuilder<ButtonBuilder>({ components: remaining.map((c) => ButtonBuilder.from(c.toJSON())) }),
-        );
-    }
-    return result;
+function withoutButton(message: IChatClientMessage, removeId: string): IChatClientMessageButton[] {
+    return message.buttons.filter((b) => b.customId !== removeId);
 }
 
 /**
@@ -348,22 +316,19 @@ export class DiscordGateway {
         // retriesLeft=undefined means this is a fresh response — use defaultRetriesLeft.
         // retriesLeft=0 means all retries exhausted — suppress the button.
         const effectiveRetriesLeft = retriesLeft ?? this.defaultRetriesLeft;
-        const retryRow =
+        const retryButton: IChatClientMessageButton | undefined =
             isRetryable && effectiveRetriesLeft > 0
-                ? new ActionRowBuilder<ButtonBuilder>().addComponents(
-                      new ButtonBuilder()
-                          .setCustomId(RETRY_BUTTON_ID)
-                          .setLabel(
-                              `Retry · ${effectiveRetriesLeft} ${effectiveRetriesLeft === 1 ? "Retry" : "Retries"} Left`,
-                          )
-                          .setStyle(isFailure ? ButtonStyle.Primary : ButtonStyle.Secondary),
-                  )
+                ? {
+                      customId: RETRY_BUTTON_ID,
+                      label: `Retry · ${effectiveRetriesLeft} ${effectiveRetriesLeft === 1 ? "Retry" : "Retries"} Left`,
+                      style: isFailure ? "primary" : "secondary",
+                  }
                 : undefined;
 
         // Attach a Render button when the full response contains extended markdown features
         // (LaTeX equations or tables) that benefit from rich rendering.
-        const renderButton = hasExtendedMarkdown(response)
-            ? new ButtonBuilder().setCustomId(RENDER_BUTTON_ID).setLabel("Render").setStyle(ButtonStyle.Secondary)
+        const renderButton: IChatClientMessageButton | undefined = hasExtendedMarkdown(response)
+            ? { customId: RENDER_BUTTON_ID, label: "Render", style: "secondary" }
             : undefined;
 
         // Space reserved on the first page for replyPrefix (+ trailing space) and fallbackFooter.
@@ -391,20 +356,15 @@ export class DiscordGateway {
 
             // When both a Next Page and Retry button are present, combine them into
             // a single row so they render side by side (Next Page first).
-            const firstPageRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-                new ButtonBuilder()
-                    .setCustomId(NEXT_PAGE_BUTTON_ID)
-                    .setLabel(`Next Page · Page 1 of ${totalPages}`)
-                    .setStyle(ButtonStyle.Primary),
-                ...(retryRow ? retryRow.components : []),
+            const firstPageButtons: IChatClientMessageButton[] = [
+                { customId: NEXT_PAGE_BUTTON_ID, label: `Next Page · Page 1 of ${totalPages}`, style: "primary" },
+                ...(retryButton ? [retryButton] : []),
                 ...(renderButton ? [renderButton] : []),
-            );
-
-            const components: ActionRowBuilder<ButtonBuilder>[] = [firstPageRow];
+            ];
 
             const botReply = await replyTarget.reply({
                 content: (replyPrefix ? `${replyPrefix} ` : "") + page1Content + fallbackFooter,
-                components,
+                buttons: firstPageButtons,
                 // repliedUser: false suppresses the reply ping but also causes Discord to
                 // ignore all content mentions unless explicitly listed in users[].
                 // Include the invoker so the <@id> prefix still triggers a notification.
@@ -459,14 +419,14 @@ export class DiscordGateway {
                     ? `${responseWithFooter}\n${sourcesLine}`
                     : null;
 
-            const singleRow = new ActionRowBuilder<ButtonBuilder>();
-            if (retryRow) singleRow.addComponents(...retryRow.components);
-            if (renderButton) singleRow.addComponents(renderButton);
-            const nonPaginatedComponents = singleRow.components.length > 0 ? [singleRow] : [];
+            const nonPaginatedButtons: IChatClientMessageButton[] = [
+                ...(retryButton ? [retryButton] : []),
+                ...(renderButton ? [renderButton] : []),
+            ];
 
             const botReply = await replyTarget.reply({
                 content: (replyPrefix ? `${replyPrefix} ` : "") + (combined ?? responseWithFooter),
-                ...(nonPaginatedComponents.length > 0 && { components: nonPaginatedComponents }),
+                ...(nonPaginatedButtons.length > 0 && { buttons: nonPaginatedButtons }),
                 ...(!pingUser && {
                     allowedMentions: {
                         repliedUser: false,
@@ -620,7 +580,7 @@ export class DiscordGateway {
                     isEphemeral: true,
                 }),
                 interaction.message.edit({
-                    components: withoutButton(interaction.message, RETRY_BUTTON_ID),
+                    buttons: withoutButton(interaction.message, RETRY_BUTTON_ID),
                 }),
             ]);
             return;
@@ -802,7 +762,7 @@ export class DiscordGateway {
                         this.logger.error({ err, currentBotMessageId }, "Failed to compute next page");
                         Sentry.captureException(err);
                         await interaction.message
-                            .edit({ components: withoutButton(interaction.message, NEXT_PAGE_BUTTON_ID) })
+                            .edit({ buttons: withoutButton(interaction.message, NEXT_PAGE_BUTTON_ID) })
                             .catch(() => {});
                         return;
                     }
@@ -810,7 +770,7 @@ export class DiscordGateway {
                     if (!result) {
                         // No pending page state — stale button click
                         await interaction.message
-                            .edit({ components: withoutButton(interaction.message, NEXT_PAGE_BUTTON_ID) })
+                            .edit({ buttons: withoutButton(interaction.message, NEXT_PAGE_BUTTON_ID) })
                             .catch((err) => {
                                 this.logger.warn(
                                     { err, currentBotMessageId },
@@ -826,22 +786,21 @@ export class DiscordGateway {
                         "discord.is_last_page": result.isLast,
                     });
 
-                    // Step 2: Build component row for next message (omit button on last page)
-                    const nextPageRow = result.isLast
+                    // Step 2: Build buttons for next message (omit on last page)
+                    const nextPageButton: IChatClientMessageButton | undefined = result.isLast
                         ? undefined
-                        : new ActionRowBuilder<ButtonBuilder>().addComponents(
-                              new ButtonBuilder()
-                                  .setCustomId(NEXT_PAGE_BUTTON_ID)
-                                  .setLabel(`Next Page · Page ${result.currentPage} of ${result.totalPages}`)
-                                  .setStyle(ButtonStyle.Primary),
-                          );
+                        : {
+                              customId: NEXT_PAGE_BUTTON_ID,
+                              label: `Next Page · Page ${result.currentPage} of ${result.totalPages}`,
+                              style: "primary",
+                          };
 
                     // Step 3: Send the next page as a reply to the current bot message
                     let newBotMessage: IChatClientMessage;
                     try {
                         newBotMessage = await interaction.message.reply({
                             content: result.content,
-                            ...(nextPageRow && { components: [nextPageRow] }),
+                            ...(nextPageButton && { buttons: [nextPageButton] }),
                         });
                     } catch (err) {
                         this.logger.error({ err, currentBotMessageId }, "Failed to send next page reply");
@@ -887,7 +846,7 @@ export class DiscordGateway {
                         // Remove only the Next Page button from the OLD bot message,
                         // preserving any Retry button that may also be present.
                         interaction.message
-                            .edit({ components: withoutButton(interaction.message, NEXT_PAGE_BUTTON_ID) })
+                            .edit({ buttons: withoutButton(interaction.message, NEXT_PAGE_BUTTON_ID) })
                             .catch((err) => {
                                 this.logger.warn(
                                     { err, currentBotMessageId },
@@ -1056,7 +1015,7 @@ export class DiscordGateway {
             });
 
             // Remove the Render button from the original message now that it's been rendered.
-            await botMessage.edit({ components: withoutButton(botMessage, RENDER_BUTTON_ID) });
+            await botMessage.edit({ buttons: withoutButton(botMessage, RENDER_BUTTON_ID) });
         } finally {
             this.interactionLock.clearLock(botMessage.id, RENDER_BUTTON_ID);
         }

@@ -8,10 +8,20 @@
  * Callables that take parameters remain methods.
  */
 
+/** A platform-agnostic interactive button attached to a message. */
+export interface IChatClientMessageButton {
+    /** Unique identifier used to route interaction events. */
+    customId: string;
+    /** Display label shown on the button. */
+    label: string;
+    /** Visual style of the button. */
+    style: "primary" | "secondary";
+}
+
 /** Options for replying to a message. */
 export interface ChatReplyOptions {
     content?: string;
-    components?: unknown[];
+    buttons?: IChatClientMessageButton[];
     files?: ChatFileAttachment[];
     allowedMentions?: {
         repliedUser: boolean;
@@ -23,7 +33,7 @@ export interface ChatReplyOptions {
 /** Options for editing a message in-place. */
 export interface ChatEditOptions {
     content?: string;
-    components?: unknown[];
+    buttons?: IChatClientMessageButton[];
 }
 
 /** A file to attach when replying. */
@@ -53,6 +63,12 @@ export interface IChatClientMessage {
 
     /** Raw text content of the message. */
     readonly content: string;
+
+    /**
+     * Interactive buttons attached to this message.
+     * Empty array when the message has no buttons.
+     */
+    readonly buttons: IChatClientMessageButton[];
 
     /**
      * Message content with mention snowflakes resolved to human-readable display names.
