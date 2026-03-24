@@ -12,6 +12,8 @@ export interface GetNextPageUseCaseParams {
     channelId: string;
     /** Discord guild snowflake, or `"@me"` for DMs. */
     guildId: string;
+    /** Maximum character length of a single page (platform-dependent). */
+    messageLengthLimit: number;
 }
 
 /** Result of a successful {@link GetNextPageUseCase.execute} call. */
@@ -102,7 +104,7 @@ export class GetNextPageUseCase {
      * @returns The next page result, or null if the page state is missing/stale
      */
     async execute(params: GetNextPageUseCaseParams): Promise<GetNextPageResult | null> {
-        const { discordMessageId, channelId, guildId } = params;
+        const { discordMessageId, channelId, guildId, messageLengthLimit } = params;
 
         // Fetch page state + first-page LangChain content in one query
         const data = await this.getNextPageQuery.execute({ discordMessageId, channelId, guildId });
@@ -134,7 +136,7 @@ export class GetNextPageUseCase {
             newOffset,
             endedInCodeBlock: nextEndedInCodeBlock,
             codeBlockType: nextCodeBlockType,
-        } = splitMarkdown(fullDiscordText, endOffset, 2000, { continuationCodeBlock });
+        } = splitMarkdown(fullDiscordText, endOffset, messageLengthLimit, { continuationCodeBlock });
 
         this.logger.debug({ discordMessageId, page: nextPage, totalPages, isLast }, "Computed next page content");
 

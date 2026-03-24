@@ -45,6 +45,9 @@ import { buildSnapshot, extractAttachments, extractEmbeds } from "./messageExtra
 import { RateLimiter } from "./RateLimiter.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
 
+/** Discord's maximum message length in characters. */
+const MESSAGE_LENGTH_LIMIT = 2000;
+
 /** Sentinel value stored as guild_id for DM messages, which have no guild. */
 const DM_GUILD_TOKEN = "@me";
 
@@ -451,18 +454,21 @@ export class DiscordGateway {
             ? new ButtonBuilder().setCustomId(RENDER_BUTTON_ID).setLabel("Render").setStyle(ButtonStyle.Secondary)
             : undefined;
 
-        if (discordResponse.length > 2000) {
+        if (discordResponse.length > MESSAGE_LENGTH_LIMIT) {
             // --- PAGINATED PATH ---
             // Split on discordResponse (without footer) so the newOffset stored in the DB
             // is always relative to discordResponse. The footer is appended to page1Content
             // after the split so it appears at the bottom of the first page and is never cut off.
+            // Reserve space for replyPrefix (+ trailing space) and fallbackFooter so the
+            // assembled first-page message never exceeds Discord's 2000-character limit.
+            const page1Overhead = (replyPrefix ? replyPrefix.length + 1 : 0) + fallbackFooter.length;
             const {
                 content: page1Content,
                 newOffset,
                 pageCount: totalPages,
                 endedInCodeBlock: page1EndedInCodeBlock,
                 codeBlockType: page1CodeBlockType,
-            } = splitMarkdown(discordResponse, 0, 2000, { pageCount: true });
+            } = splitMarkdown(discordResponse, 0, MESSAGE_LENGTH_LIMIT - page1Overhead, { pageCount: true });
 
             if (!totalPages) {
                 throw new Error("splitMarkdown did not return pageCount for paginated content");
@@ -534,7 +540,7 @@ export class DiscordGateway {
             // Attempt to combine response + footer + sources into a single message
             const responseWithFooter = discordResponse + fallbackFooter;
             const combined =
-                sourcesLine && responseWithFooter.length + 1 + sourcesLine.length <= 2000
+                sourcesLine && responseWithFooter.length + 1 + sourcesLine.length <= MESSAGE_LENGTH_LIMIT
                     ? `${responseWithFooter}\n${sourcesLine}`
                     : null;
 
@@ -876,6 +882,7 @@ export class DiscordGateway {
                             discordMessageId: currentBotMessageId,
                             channelId: interaction.message.channelId,
                             guildId: interaction.message.guildId ?? DM_GUILD_TOKEN,
+                            messageLengthLimit: MESSAGE_LENGTH_LIMIT,
                         });
                     } catch (err) {
                         this.logger.error({ err, currentBotMessageId }, "Failed to compute next page");
