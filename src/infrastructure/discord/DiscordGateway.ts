@@ -468,7 +468,10 @@ export class DiscordGateway {
                 pageCount: totalPages,
                 endedInCodeBlock: page1EndedInCodeBlock,
                 codeBlockType: page1CodeBlockType,
-            } = splitMarkdown(discordResponse, 0, MESSAGE_LENGTH_LIMIT - page1Overhead, { pageCount: true });
+            } = splitMarkdown(discordResponse, 0, MESSAGE_LENGTH_LIMIT, {
+                pageCount: true,
+                firstPageLimit: MESSAGE_LENGTH_LIMIT - page1Overhead,
+            });
 
             if (!totalPages) {
                 throw new Error("splitMarkdown did not return pageCount for paginated content");

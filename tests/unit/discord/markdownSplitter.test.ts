@@ -104,17 +104,42 @@ describe("splitMarkdown — regression: fallback footer overhead (2026-03-24)", 
     });
 
     it("page 1 content plus fallback footer must be 2000 characters or fewer", () => {
-        // The gateway only enters the paginated path when content+footer > 2000,
-        // so we mirror that condition here to use the same limit.
-        const limit = 2000 - FALLBACK_FOOTER.length;
-        const result = splitMarkdown(content, 0, limit, { pageCount: true });
+        const result = splitMarkdown(content, 0, 2000, {
+            pageCount: true,
+            firstPageLimit: 2000 - FALLBACK_FOOTER.length,
+        });
         expect(result.content.length + FALLBACK_FOOTER.length).toBeLessThanOrEqual(2000);
     });
 
-    it("splits into exactly 2 pages when footer overhead is accounted for", () => {
-        const limit = 2000 - FALLBACK_FOOTER.length;
-        const result = splitMarkdown(content, 0, limit, { pageCount: true });
+    it("splits into exactly 2 pages when footer overhead is accounted for via firstPageLimit", () => {
+        const result = splitMarkdown(content, 0, 2000, {
+            pageCount: true,
+            firstPageLimit: 2000 - FALLBACK_FOOTER.length,
+        });
         expect(result.pageCount).toBe(2);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// firstPageLimit: unit tests
+// ---------------------------------------------------------------------------
+describe("splitMarkdown — firstPageLimit", () => {
+    it("page 1 content respects firstPageLimit, not the full limit", () => {
+        // 5 lines of 400 chars = 2000 chars total; full limit would fit all on one page,
+        // but firstPageLimit=800 forces a split after line 2.
+        const text = Array.from({ length: 5 }, () => "x".repeat(400)).join("\n");
+        const result = splitMarkdown(text, 0, 2000, { pageCount: true, firstPageLimit: 800 });
+        expect(result.content.length).toBeLessThanOrEqual(800);
+    });
+
+    it("pageCount reflects the reduced first-page capacity", () => {
+        // 3 lines of 400 chars = 1202 chars total — fits in one page at limit=2000,
+        // but firstPageLimit=800 forces a split so pageCount should be 2.
+        const text = Array.from({ length: 3 }, () => "x".repeat(400)).join("\n");
+        const withFirstLimit = splitMarkdown(text, 0, 2000, { pageCount: true, firstPageLimit: 800 });
+        const withoutFirstLimit = splitMarkdown(text, 0, 2000, { pageCount: true });
+        expect(withoutFirstLimit.pageCount).toBe(1);
+        expect(withFirstLimit.pageCount).toBe(2);
     });
 });
 

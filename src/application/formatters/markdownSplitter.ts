@@ -29,6 +29,13 @@ export interface SplitMarkdownOptions {
      * Must be `null` or omitted when the previous page did not end in a code block.
      */
     continuationCodeBlock?: string | null;
+    /**
+     * Override the character limit for page 1 only (e.g. when the first page carries
+     * a header/footer overhead that subsequent pages do not). Only meaningful when
+     * `pageCount` is true — the full scan uses this limit for page 0 so the total
+     * page count correctly reflects the reduced first-page capacity.
+     */
+    firstPageLimit?: number;
 }
 
 /** Result of a {@link splitMarkdown} call. */
@@ -349,8 +356,15 @@ function extractPage(
  * Paginates the full text from offset 0, returning every page as an extractPage result.
  * Always returns at least one entry (empty page for empty text).
  * Threads `endedInCodeBlock`/`codeBlockType` from each page to the next as a continuation header.
+ *
+ * @param firstPageLimit - Optional override limit for page 0 only (e.g. when page 1 carries
+ *                         overhead that subsequent pages do not). Defaults to `limit`.
  */
-function extractAllPages(text: string, limit: number): Array<Omit<SplitMarkdownResult, "pageCount">> {
+function extractAllPages(
+    text: string,
+    limit: number,
+    firstPageLimit?: number,
+): Array<Omit<SplitMarkdownResult, "pageCount">> {
     if (text.length === 0) {
         return [{ content: "", newOffset: 0, endedInCodeBlock: false, codeBlockType: null }];
     }
@@ -360,7 +374,8 @@ function extractAllPages(text: string, limit: number): Array<Omit<SplitMarkdownR
     let continuationCodeBlock: string | null = null;
 
     while (offset < text.length) {
-        const page = extractPage(text, offset, limit, continuationCodeBlock);
+        const pageLimit = pages.length === 0 ? (firstPageLimit ?? limit) : limit;
+        const page = extractPage(text, offset, pageLimit, continuationCodeBlock);
         pages.push(page);
         // Guard against infinite loop if extractPage makes no progress
         if (page.newOffset <= offset) break;
@@ -415,7 +430,7 @@ export function splitMarkdown(
     }
 
     // pageCount requested: paginate the full text once, find the page at `offset`
-    const allPages = extractAllPages(text, limit);
+    const allPages = extractAllPages(text, limit, options?.firstPageLimit);
     const page = allPages.find((p) => p.newOffset > offset || p.newOffset === text.length);
     // only to satisfy typechecker, should never throw
     if (!page) throw new Error(`splitMarkdown: no page found for offset ${offset} in text of length ${text.length}`);
