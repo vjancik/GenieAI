@@ -45,7 +45,7 @@ describe("createGetWebsiteTool", () => {
         await tool.invoke({ urls: ["https://example.com"] });
 
         const callHeaders = (mockFetch.mock.calls[0] as [string, RequestInit])[1]?.headers as Record<string, string>;
-        expect(callHeaders?.["User-Agent"]).toContain("Chrome");
+        expect(callHeaders?.["user-agent"]).toContain("Chrome");
     });
 
     test("deduplicates URLs before fetching", async () => {

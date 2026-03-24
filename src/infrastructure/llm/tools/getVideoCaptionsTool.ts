@@ -108,6 +108,8 @@ export function selectCaptionUrls(info: YtDlpInfoJson): string[] {
             for (const entry of entries) {
                 // Skip HLS/DASH streaming protocols — not directly fetchable
                 if (entry.protocol && entry.protocol !== "https" && entry.protocol !== "http") continue;
+                // Skip auto-translated tracks (tlang param) — YouTube rate-limits these aggressively
+                if (new URL(entry.url).searchParams.has("tlang")) continue;
                 candidates.push({ url: entry.url, isAuto, lang, ext: entry.ext });
             }
         }
