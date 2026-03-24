@@ -848,7 +848,6 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
             }),
         };
         const generalProvider = {
-            modelName: "gemini-test",
             get(_key: unknown) {
                 return generalModel;
             },
@@ -861,8 +860,7 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
             asProvider(makeTriageWithNoToolCall()) as never,
             generalProvider as never,
             asProvider(makeModel("search")) as never,
-            provider as never,
-            testPaidKeyProvider,
+            makeInvoker(provider),
             makeTool("w") as never,
             makeTool("v") as never,
             testLogger,
@@ -889,7 +887,6 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
             }),
         };
         const generalProvider = {
-            modelName: "gemini-test",
             get(_key: unknown) {
                 return generalModel;
             },
@@ -902,8 +899,7 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
             asProvider(makeTriageWithNoToolCall()) as never,
             generalProvider as never,
             asProvider(makeModel("search")) as never,
-            provider as never,
-            testPaidKeyProvider,
+            makeInvoker(provider),
             makeTool("w") as never,
             makeTool("v") as never,
             testLogger,
