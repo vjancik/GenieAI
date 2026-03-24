@@ -1,10 +1,26 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType, type Message, MessageFlags } from "discord.js";
+import {
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    ComponentType,
+    type Message,
+    MessageFlags,
+    MessageReferenceType,
+} from "discord.js";
 import type {
     ChatEditOptions,
     ChatReplyOptions,
     IChatClientMessage,
+    IChatClientMessageAttachment,
     IChatClientMessageButton,
+    IChatClientMessageEmbed,
+    IChatClientMessageSnapshot,
 } from "../../../application/ports/chat/IChatClientMessage.ts";
+import {
+    DiscordClientMessageAttachment,
+    DiscordClientMessageEmbed,
+    DiscordClientMessageSnapshot,
+} from "./DiscordClientMessageMedia.ts";
 
 /** Translates a platform-agnostic button style to the discord.js ButtonStyle enum. */
 function toDiscordButtonStyle(style: IChatClientMessageButton["style"]): ButtonStyle {
@@ -42,21 +58,24 @@ function parseButtons(message: Message): IChatClientMessageButton[] {
  * Adapts a discord.js `Message` to the `IChatClientMessage` interface.
  *
  * All data accessors are getters that delegate directly to the underlying
- * `Message` — no fields are copied on construction, except `buttons` which
- * is parsed and cached once since component data is stable for the message lifetime.
- * The inner discord.js object is intentionally exposed via `discordMessage` as an
- * escape hatch for the parts of the gateway that still operate directly on discord.js
- * types (buildSnapshot, etc.).
+ * `Message` — no fields are copied on construction, except `buttons`, `attachments`,
+ * and `embeds` which are wrapped and cached once since their data is stable for the
+ * message lifetime.
  */
 export class DiscordClientMessage implements IChatClientMessage {
     /** Cached — button data is stable for the lifetime of a received message. */
     readonly buttons: IChatClientMessageButton[];
+    /** Cached — attachment wrappers are stable for the lifetime of a received message. */
+    readonly attachments: IChatClientMessageAttachment[];
+    /** Cached — embed wrappers are stable for the lifetime of a received message. */
+    readonly embeds: IChatClientMessageEmbed[];
 
-    constructor(
-        /** Escape hatch — direct access to the underlying discord.js Message. */
-        public readonly discordMessage: Message,
-    ) {
+    constructor(private readonly discordMessage: Message) {
         this.buttons = parseButtons(discordMessage);
+        this.attachments = [...(discordMessage.attachments ?? []).values()].map(
+            (a) => new DiscordClientMessageAttachment(a),
+        );
+        this.embeds = (discordMessage.embeds ?? []).map((e) => new DiscordClientMessageEmbed(e));
     }
 
     get id(): string {
@@ -75,8 +94,21 @@ export class DiscordClientMessage implements IChatClientMessage {
         return this.discordMessage.author.id;
     }
 
+    get authorUsername(): string {
+        return this.discordMessage.author.username;
+    }
+
+    get authorDisplayName(): string {
+        // Guild-aware display name: nickname > globalName > username (discord.js computed)
+        return this.discordMessage.member?.displayName ?? this.discordMessage.author.displayName;
+    }
+
     get isAuthorBot(): boolean {
         return this.discordMessage.author.bot;
+    }
+
+    get createdAt(): Date {
+        return this.discordMessage.createdAt;
     }
 
     get content(): string {
@@ -88,7 +120,23 @@ export class DiscordClientMessage implements IChatClientMessage {
     }
 
     get referencedMessageId(): string | null {
+        // Forwards terminate chain traversal — return null so they are treated as chain roots
+        if (this.discordMessage.reference?.type === MessageReferenceType.Forward) return null;
         return this.discordMessage.reference?.messageId ?? null;
+    }
+
+    get isForwarded(): boolean {
+        return this.discordMessage.reference?.type === MessageReferenceType.Forward;
+    }
+
+    get forwardedSnapshot(): IChatClientMessageSnapshot | null {
+        if (!this.isForwarded) return null;
+        const refMessageId = this.discordMessage.reference?.messageId;
+        const snapshot =
+            refMessageId !== undefined ? this.discordMessage.messageSnapshots.get(refMessageId) : undefined;
+        if (!snapshot) return null;
+        const channelId = this.discordMessage.reference?.channelId ?? this.discordMessage.channelId;
+        return new DiscordClientMessageSnapshot(snapshot, refMessageId ?? "", channelId);
     }
 
     get botRoleId(): string | null {

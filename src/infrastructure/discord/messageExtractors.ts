@@ -7,26 +7,24 @@
  * Nothing in this module is intended for use outside the `discord` infrastructure folder.
  */
 
-import { type Embed, type Message, MessageReferenceType, type MessageSnapshot } from "discord.js";
+import type { IChatClientMessage } from "../../application/ports/chat/IChatClientMessage.ts";
+import type {
+    IChatClientMessageAttachment,
+    IChatClientMessageEmbed,
+} from "../../application/ports/chat/IChatClientMessageMedia.ts";
 import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
 import type { DiscordEmbedInfo, DiscordMessageSnapshot } from "../../application/ports/IChatMessageService.ts";
 
-/** Shape covering both `Message` and `MessageSnapshot` for attachment extraction. */
-type AttachmentSource = Pick<Message, "attachments">;
-
-/** Shape covering both `Message` and `MessageSnapshot` for embed extraction. */
-type EmbedSource = Pick<Message, "embeds">;
-
 /**
- * Extracts file attachments from a Discord message or message snapshot into the
- * application-layer {@link DiscordAttachmentInfo} type.
+ * Maps an array of platform-agnostic attachments into the application-layer
+ * {@link DiscordAttachmentInfo} type consumed by use cases.
  */
-export function extractAttachments(source: AttachmentSource): DiscordAttachmentInfo[] {
-    return [...source.attachments.values()].map((a) => ({
+export function extractAttachments(attachments: IChatClientMessageAttachment[]): DiscordAttachmentInfo[] {
+    return attachments.map((a) => ({
         id: a.id,
         url: a.url,
         proxyURL: a.proxyURL,
-        name: a.name ?? "attachment",
+        name: a.name,
         size: a.size,
         contentType: a.contentType,
     }));
@@ -48,18 +46,15 @@ function formatUtcTimestamp(d: Date): string {
 }
 
 /**
- * Extracts embed metadata from a Discord message or message snapshot into the
- * application-layer {@link DiscordEmbedInfo} type.
+ * Maps an array of platform-agnostic embeds into the application-layer
+ * {@link DiscordEmbedInfo} type consumed by use cases.
  *
  * URL-only fields (video, image, thumbnail) are captured but intentionally
  * excluded from LLM text rendering — reserved for future media handling.
  */
-export function extractEmbeds(source: EmbedSource): DiscordEmbedInfo[] {
-    return source.embeds.map((embed: Embed): DiscordEmbedInfo => {
-        const info: DiscordEmbedInfo = {
-            // `Embed` has no `.type` getter — access the raw API data field
-            type: embed.data.type ?? "rich",
-        };
+export function extractEmbeds(embeds: IChatClientMessageEmbed[]): DiscordEmbedInfo[] {
+    return embeds.map((embed): DiscordEmbedInfo => {
+        const info: DiscordEmbedInfo = { type: embed.type };
 
         if (embed.title) info.title = embed.title;
         if (embed.description) info.description = embed.description;
@@ -72,11 +67,10 @@ export function extractEmbeds(source: EmbedSource): DiscordEmbedInfo[] {
 
         if (embed.footer?.text) info.footer = { text: embed.footer.text };
 
-        const fields = embed.fields.filter((f) => f.name || f.value);
-        if (fields.length > 0) info.fields = fields.map((f) => ({ name: f.name, value: f.value }));
+        if (embed.fields.length > 0) info.fields = embed.fields.map((f) => ({ name: f.name, value: f.value }));
 
         const vid = embed.video;
-        // APIEmbedVideo.url is optional (Discord omits it for some video types)
+        // proxyURL is optional (Discord omits it for some video types)
         if (vid?.url) info.video = { url: vid.url, ...(vid.proxyURL ? { proxyURL: vid.proxyURL } : {}) };
 
         const img = embed.image;
@@ -90,32 +84,29 @@ export function extractEmbeds(source: EmbedSource): DiscordEmbedInfo[] {
 }
 
 /**
- * Builds a {@link DiscordMessageSnapshot} from a discord.js `Message`.
+ * Builds a {@link DiscordMessageSnapshot} from a platform-agnostic {@link IChatClientMessage}.
  *
- * Handles forwarded messages (Discord `MessageReferenceType.Forward`) by
- * populating `messageSnapshots`, `isForwarded`, and setting content from the
- * forwarded `MessageSnapshot` rather than `message.content` (which is empty on
- * forwarded messages). Also sets `referencedMessageId` to `null` for forwards,
- * naturally terminating any reply-chain traversal at a forwarded message.
+ * Handles forwarded messages by reading `message.forwardedSnapshot` — when present,
+ * the snapshot's content/attachments/embeds are used and `referencedMessageId` is
+ * set to `null` to terminate reply-chain traversal.
  *
- * @param message - The discord.js Message to extract from
- * @param botUserId - The current bot's Discord user ID (for `isOwnBot` detection)
+ * @param message - The platform-agnostic message to build from
+ * @param botUserId - The current bot's user ID (for `isOwnBot` detection)
  * @param previousBotId - Optional previous bot user ID also treated as own-bot
  */
 export function buildSnapshot(
-    message: Message,
+    message: IChatClientMessage,
     botUserId: string | undefined,
     previousBotId: string | undefined,
 ): DiscordMessageSnapshot {
-    const authorId = message.author.id;
+    const authorId = message.authorId;
 
     const base: Omit<DiscordMessageSnapshot, "content" | "attachments" | "referencedMessageId"> = {
         id: message.id,
         authorId,
-        authorUsername: message.author.username,
-        // Guild-aware display name: nickname > globalName > username (discord.js computed)
-        authorDisplayName: message.member?.displayName ?? message.author.displayName,
-        isBot: message.author.bot,
+        authorUsername: message.authorUsername,
+        authorDisplayName: message.authorDisplayName,
+        isBot: message.isAuthorBot,
         isOwnBot:
             (botUserId !== undefined && authorId === botUserId) ||
             (previousBotId !== undefined && authorId === previousBotId),
@@ -125,22 +116,17 @@ export function buildSnapshot(
         createdAt: message.createdAt,
     };
 
-    const isForwarded = message.reference?.type === MessageReferenceType.Forward;
-
-    if (isForwarded) {
-        const refMessageId = message.reference?.messageId;
-        const msgSnapshot: MessageSnapshot | undefined =
-            refMessageId !== undefined ? message.messageSnapshots.get(refMessageId) : undefined;
-
-        // cleanContent resolves mention snowflakes to human-readable names;
-        // fall back to raw content if cleanContent is null on the snapshot type
-        const forwardedContent = msgSnapshot ? (msgSnapshot.cleanContent ?? msgSnapshot.content) : "";
-
-        const forwardedAttachments = msgSnapshot ? extractAttachments(msgSnapshot) : [];
-        const forwardedEmbeds = msgSnapshot ? extractEmbeds(msgSnapshot) : [];
+    if (message.isForwarded) {
+        // forwardedSnapshot is null when the snapshot map has no entry for the reference ID
+        // (e.g. the source message was deleted). Still mark as forwarded and emit an empty
+        // nested snapshot so consumers can handle the case gracefully.
+        const fwd = message.forwardedSnapshot;
+        const forwardedAttachments = fwd ? extractAttachments(fwd.attachments) : [];
+        const forwardedEmbeds = fwd ? extractEmbeds(fwd.embeds) : [];
+        const forwardedContent = fwd?.cleanContent ?? "";
 
         const nestedSnapshot: DiscordMessageSnapshot = {
-            id: refMessageId ?? "",
+            id: fwd?.id ?? "",
             content: forwardedContent,
             // Forwarded MessageSnapshot carries no author information
             authorId: "",
@@ -151,7 +137,7 @@ export function buildSnapshot(
             attachments: forwardedAttachments,
             ...(forwardedEmbeds.length > 0 ? { embeds: forwardedEmbeds } : {}),
             referencedMessageId: null,
-            channelId: message.reference?.channelId ?? message.channelId,
+            channelId: fwd?.channelId ?? message.channelId,
             guildId: message.guildId ?? "@me",
             createdAt: message.createdAt,
         };
@@ -168,13 +154,13 @@ export function buildSnapshot(
         };
     }
 
-    const embeds = extractEmbeds(message);
+    const embeds = extractEmbeds(message.embeds);
 
     return {
         ...base,
         content: message.content,
-        attachments: extractAttachments(message),
+        attachments: extractAttachments(message.attachments),
         ...(embeds.length > 0 ? { embeds } : {}),
-        referencedMessageId: message.reference?.messageId ?? null,
+        referencedMessageId: message.referencedMessageId,
     };
 }

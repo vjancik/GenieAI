@@ -8,6 +8,14 @@
  * Callables that take parameters remain methods.
  */
 
+import type {
+    IChatClientMessageAttachment,
+    IChatClientMessageEmbed,
+    IChatClientMessageSnapshot,
+} from "./IChatClientMessageMedia.ts";
+
+export type { IChatClientMessageAttachment, IChatClientMessageEmbed, IChatClientMessageSnapshot };
+
 /** A platform-agnostic interactive button attached to a message. */
 export interface IChatClientMessageButton {
     /** Unique identifier used to route interaction events. */
@@ -58,8 +66,20 @@ export interface IChatClientMessage {
     /** ID of the user who authored this message. */
     readonly authorId: string;
 
+    /** Username of the author (not their display name). */
+    readonly authorUsername: string;
+
+    /**
+     * Resolved display name of the author.
+     * Prefers guild nickname, then global display name, then username.
+     */
+    readonly authorDisplayName: string;
+
     /** Whether the author is a bot account. */
     readonly isAuthorBot: boolean;
+
+    /** When this message was created. */
+    readonly createdAt: Date;
 
     /** Raw text content of the message. */
     readonly content: string;
@@ -70,6 +90,12 @@ export interface IChatClientMessage {
      */
     readonly buttons: IChatClientMessageButton[];
 
+    /** File attachments on the message. Empty array when there are none. */
+    readonly attachments: IChatClientMessageAttachment[];
+
+    /** Embeds attached to this message. Empty array when there are none. */
+    readonly embeds: IChatClientMessageEmbed[];
+
     /**
      * Message content with mention snowflakes resolved to human-readable display names.
      * On platforms without mention syntax this may equal `content`.
@@ -78,9 +104,21 @@ export interface IChatClientMessage {
 
     /**
      * The ID of the message this message is replying to, if any.
-     * `null` when not a reply.
+     * `null` when not a reply or when this is a forward (forwards terminate chain traversal).
      */
     readonly referencedMessageId: string | null;
+
+    /**
+     * Whether this message is a Discord forward (forwarded from another channel).
+     * When true, `forwardedSnapshot` carries the source message content.
+     */
+    readonly isForwarded: boolean;
+
+    /**
+     * The forwarded source message snapshot, when `isForwarded` is true.
+     * `null` for normal messages.
+     */
+    readonly forwardedSnapshot: IChatClientMessageSnapshot | null;
 
     /**
      * The bot's managed role ID in the guild this message belongs to.

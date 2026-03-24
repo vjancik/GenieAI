@@ -13,17 +13,13 @@ import { DiscordClientMessage } from "./DiscordClientMessage.ts";
  * `IChatClientContextMenuInteraction` interface.
  *
  * The `targetMessage` getter wraps the interaction's target message as an
- * `IChatClientMessage`. The inner discord.js object is exposed via
- * `discordInteraction` as an escape hatch.
+ * `IChatClientMessage`.
  */
 export class DiscordClientContextMenuInteraction implements IChatClientContextMenuInteraction {
     /** Cached wrapper — target message identity is stable for the lifetime of this interaction. */
     private readonly _targetMessage: IChatClientMessage;
 
-    constructor(
-        /** Escape hatch — direct access to the underlying discord.js interaction. */
-        public readonly discordInteraction: MessageContextMenuCommandInteraction,
-    ) {
+    constructor(private readonly discordInteraction: MessageContextMenuCommandInteraction) {
         this._targetMessage = new DiscordClientMessage(discordInteraction.targetMessage);
     }
 

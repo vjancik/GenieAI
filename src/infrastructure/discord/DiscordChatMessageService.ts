@@ -2,6 +2,7 @@ import type { Client, Message, TextBasedChannel } from "discord.js";
 import type { FileConfig } from "../../application/config/AppConfig.ts";
 import type { DiscordMessageSnapshot, IChatMessageService } from "../../application/ports/IChatMessageService.ts";
 import type { Logger } from "../../application/types/Logger.ts";
+import { DiscordClientMessage } from "./chat/DiscordClientMessage.ts";
 import type { DiscordClient } from "./DiscordClient.ts";
 import { buildSnapshot } from "./messageExtractors.ts";
 
@@ -49,8 +50,8 @@ export class DiscordChatMessageService implements IChatMessageService {
 
         while (currentMessageId !== null && chain.length < limit) {
             try {
-                const message: Message = await channel.messages.fetch(currentMessageId);
-                const snapshot = buildSnapshot(message, botUserId, this.previousBotId);
+                const rawMessage: Message = await channel.messages.fetch(currentMessageId);
+                const snapshot = buildSnapshot(new DiscordClientMessage(rawMessage), botUserId, this.previousBotId);
 
                 // Prepend so we accumulate root-first
                 chain.unshift(snapshot);

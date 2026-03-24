@@ -32,6 +32,7 @@ import { DiscordClient } from "./infrastructure/discord/DiscordClient.ts";
 import { DiscordCommandRegistry } from "./infrastructure/discord/DiscordCommandRegistry.ts";
 import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
 import { DiscordMediaService } from "./infrastructure/discord/DiscordMediaService.ts";
+import { RateLimiter } from "./infrastructure/discord/RateLimiter.ts";
 import { StatusMessageUpdater } from "./infrastructure/discord/StatusMessageUpdater.ts";
 import { HtmlToImageRenderer } from "./infrastructure/exporters/HtmlToImageRenderer.ts";
 import { MarkdownToHtmlRenderer } from "./infrastructure/exporters/MarkdownToHtmlRenderer.ts";
@@ -188,6 +189,10 @@ const htmlToImage = new HtmlToImageRenderer();
 
 // Discord gateway
 const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
+const rateLimiter = new RateLimiter([
+    { windowMs: 3_000, limit: 3 },
+    { windowMs: 60_000, limit: 10 },
+]);
 const discordGateway = new DiscordGateway(
     discordClient,
     handleDiscordMessageUseCase,
@@ -199,6 +204,7 @@ const discordGateway = new DiscordGateway(
     config.file,
     markdownToHtml,
     htmlToImage,
+    rateLimiter,
 );
 
 // Graceful shutdown

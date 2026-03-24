@@ -40,7 +40,7 @@ import {
 } from "./DiscordCommandRegistry.ts";
 import { InteractionLock } from "./InteractionLock.ts";
 import { buildSnapshot, extractAttachments, extractEmbeds } from "./messageExtractors.ts";
-import { RateLimiter } from "./RateLimiter.ts";
+import type { RateLimiter } from "./RateLimiter.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
 
 /** Discord's maximum message length in characters. */
@@ -110,11 +110,6 @@ export class DiscordGateway {
     private readonly bot: IChatClientBot;
     private readonly defaultRetriesLeft: number;
     private readonly interactionLock = new InteractionLock();
-    // used only in CreateMessage handler for now
-    private readonly rateLimiter = new RateLimiter([
-        { windowMs: 3_000, limit: 3 },
-        { windowMs: 60_000, limit: 10 },
-    ]);
 
     private previousBotId: string | undefined;
     private readonly searchMode: SearchMode;
@@ -137,6 +132,7 @@ export class DiscordGateway {
         config: Pick<FileConfig, "discord" | "agent">,
         private readonly markdownToHtml: MarkdownToHtmlRenderer,
         private readonly htmlToImage: HtmlToImageRenderer,
+        private readonly rateLimiter: RateLimiter,
     ) {
         this.client = discordClient.client;
         this.bot = new DiscordClientBot(discordClient.client);
@@ -882,11 +878,8 @@ export class DiscordGateway {
         const botUserId = this.bot.userId;
 
         const targetMessage = interaction.targetMessage;
-        // Use escape hatch for extractAttachments/extractEmbeds/extractUserContent —
-        // these utilities require the full discord.js Message type.
-        const rawTargetMessage = (targetMessage as DiscordClientMessage).discordMessage;
-        const attachments = extractAttachments(rawTargetMessage);
-        const embeds = extractEmbeds(rawTargetMessage);
+        const attachments = extractAttachments(targetMessage.attachments);
+        const embeds = extractEmbeds(targetMessage.embeds);
         const userContent = extractUserContent(targetMessage.content, botUserId, targetMessage.botRoleId);
 
         // ACK the interaction with a visible ephemeral reply so Discord doesn't show
@@ -1102,10 +1095,8 @@ export class DiscordGateway {
             return;
         }
 
-        // Use escape hatch for extractAttachments — takes the raw discord.js Message.
-        const rawMessage = (message as DiscordClientMessage).discordMessage;
         const userContent = extractUserContent(message.content, botUserId, message.botRoleId);
-        const attachments: DiscordAttachmentInfo[] = extractAttachments(rawMessage);
+        const attachments: DiscordAttachmentInfo[] = extractAttachments(message.attachments);
 
         // No usable content after stripping mentions/commands, no attachments, and no reply
         // reference — substitute a synthetic greeting so the agent can introduce itself.
@@ -1225,15 +1216,9 @@ export class DiscordGateway {
                         });
                     };
 
-                    // Build the application-layer snapshot via the escape hatch — buildSnapshot
-                    // requires the full discord.js Message type and is infrastructure-internal.
                     // previousBotId is not relevant here — isOwnBot detection is only needed
                     // in the live chain fallback path, not for the current user message.
-                    const rawSnapshot = buildSnapshot(
-                        (message as DiscordClientMessage).discordMessage,
-                        botUserId,
-                        undefined,
-                    );
+                    const rawSnapshot = buildSnapshot(message, botUserId, undefined);
 
                     // handle() never throws — errors are caught internally and returned as a response
                     const { response, newMessages, isFailure, isRetryable, usedFallback } =

@@ -13,9 +13,7 @@ import { DiscordClientMessage } from "./DiscordClientMessage.ts";
  * Adapts a discord.js `ButtonInteraction` to the `IChatClientButtonInteraction` interface.
  *
  * The `message` and `channel` getters wrap the interaction's attached objects as
- * platform-agnostic interfaces, cached on construction. The inner discord.js object
- * is exposed via `discordInteraction` as an escape hatch for infrastructure code
- * that still needs direct access (e.g. component manipulation).
+ * platform-agnostic interfaces, cached on construction.
  */
 export class DiscordClientButtonInteraction implements IChatClientButtonInteraction {
     /** Cached wrapper — message identity is stable for the lifetime of this interaction. */
@@ -23,10 +21,7 @@ export class DiscordClientButtonInteraction implements IChatClientButtonInteract
     /** Cached wrapper — channel identity is stable for the lifetime of this interaction. */
     private readonly _channel: IChatClientChannel | null;
 
-    constructor(
-        /** Escape hatch — direct access to the underlying discord.js ButtonInteraction. */
-        public readonly discordInteraction: ButtonInteraction,
-    ) {
+    constructor(private readonly discordInteraction: ButtonInteraction) {
         this._message = new DiscordClientMessage(discordInteraction.message);
         this._channel = discordInteraction.channel ? new DiscordClientChannel(discordInteraction.channel) : null;
     }

@@ -7,15 +7,9 @@ import type { IChatClientBot } from "../../../application/ports/chat/IChatClient
  * Reads `client.user.id` lazily on each access — the client must be logged in
  * before `userId` is read (same precondition as the previous inline
  * `this.client.user?.id` accesses throughout the gateway).
- *
- * The inner discord.js Client is exposed via `discordClient` as an escape hatch
- * for infrastructure code that still needs direct access.
  */
 export class DiscordClientBot implements IChatClientBot {
-    constructor(
-        /** Escape hatch — direct access to the underlying discord.js Client. */
-        public readonly discordClient: Client,
-    ) {}
+    constructor(private readonly discordClient: Client) {}
 
     get userId(): string {
         const id = this.discordClient.user?.id;
