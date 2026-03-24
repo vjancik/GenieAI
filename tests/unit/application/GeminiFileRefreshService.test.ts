@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
-import type { IChatClientMessageAttachment } from "../../../src/application/ports/chat/IChatClientMessageMedia.ts";
+import type { IChatClientMessageAttachment } from "../../../src/application/ports/chat/IChatClient.ts";
 import type { IDiscordMediaService } from "../../../src/application/ports/IDiscordMediaService.ts";
 import type { IDiskAttachmentDownloader } from "../../../src/application/ports/IDiskAttachmentDownloader.ts";
 import type { IGeminiFileRepository } from "../../../src/application/ports/IGeminiFileRepository.ts";

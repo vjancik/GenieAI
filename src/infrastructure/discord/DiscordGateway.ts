@@ -9,15 +9,16 @@ import { splitMarkdown } from "../../application/formatters/markdownSplitter.ts"
 import { llmTextToDiscordText } from "../../application/formatters/textTransformers.ts";
 import { hasExtendedMarkdown } from "../../application/helpers/hasExtendedMarkdown.ts";
 import { COMMAND_PREFIX_REGEX, parseMessageIntent } from "../../application/helpers/parseMessageIntent.ts";
-import type { IChatClientBot } from "../../application/ports/chat/IChatClientBot.ts";
-import type { IChatClientButtonInteraction } from "../../application/ports/chat/IChatClientButtonInteraction.ts";
-import type { IChatClientChannel } from "../../application/ports/chat/IChatClientChannel.ts";
-import type { IChatClientContextMenuInteraction } from "../../application/ports/chat/IChatClientContextMenuInteraction.ts";
-import type { IChatClientMessage, IChatClientMessageButton } from "../../application/ports/chat/IChatClientMessage.ts";
 import type {
+    IChatClientBot,
+    IChatClientButtonInteraction,
+    IChatClientChannel,
+    IChatClientContextMenuInteraction,
+    IChatClientMessage,
     IChatClientMessageAttachment,
+    IChatClientMessageButton,
     IChatClientMessageEmbed,
-} from "../../application/ports/chat/IChatClientMessageMedia.ts";
+} from "../../application/ports/chat/IChatClient.ts";
 import type { OnStatusUpdate } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import type { GetNextPageUseCase } from "../../application/use-cases/GetNextPage.ts";
@@ -30,10 +31,10 @@ import type { HtmlToImageRenderer } from "../exporters/HtmlToImageRenderer.ts";
 import type { MarkdownToHtmlRenderer } from "../exporters/MarkdownToHtmlRenderer.ts";
 import { shortenRedirectUrl } from "../http/redirectUrl.ts";
 import { dbMessagesToLangchain, extractContent } from "../llm/utils/messageTransformers.ts";
-import { DiscordClientBot } from "./chat/DiscordClientBot.ts";
-import { DiscordClientButtonInteraction } from "./chat/DiscordClientButtonInteraction.ts";
-import { DiscordClientContextMenuInteraction } from "./chat/DiscordClientContextMenuInteraction.ts";
-import { DiscordClientMessage } from "./chat/DiscordClientMessage.ts";
+import { DiscordClientBot } from "./adapters/DiscordClientBot.ts";
+import { DiscordClientButtonInteraction } from "./adapters/DiscordClientButtonInteraction.ts";
+import { DiscordClientContextMenuInteraction } from "./adapters/DiscordClientContextMenuInteraction.ts";
+import { DiscordClientMessage } from "./adapters/DiscordClientMessage.ts";
 import type { DiscordClient } from "./DiscordClient.ts";
 import {
     EXPORT_HTML_COMMAND_NAME,

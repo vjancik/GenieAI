@@ -1,13 +1,13 @@
 import { describe, expect, it, mock, spyOn } from "bun:test";
 import type { BaseMessage } from "@langchain/core/messages";
 import pino from "pino";
-import type { IChatClientButtonInteraction } from "../../../src/application/ports/chat/IChatClientButtonInteraction.ts";
-import type { IChatClientChannel } from "../../../src/application/ports/chat/IChatClientChannel.ts";
-import type { IChatClientContextMenuInteraction } from "../../../src/application/ports/chat/IChatClientContextMenuInteraction.ts";
 import type {
+    IChatClientButtonInteraction,
+    IChatClientChannel,
+    IChatClientContextMenuInteraction,
     IChatClientMessage,
     IChatClientMessageAttachment,
-} from "../../../src/application/ports/chat/IChatClientMessage.ts";
+} from "../../../src/application/ports/chat/IChatClient.ts";
 import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
 import type { GetNextPageResult, GetNextPageUseCase } from "../../../src/application/use-cases/GetNextPage.ts";
 import type { HandleDiscordMessageUseCase } from "../../../src/application/use-cases/HandleDiscordMessage.ts";

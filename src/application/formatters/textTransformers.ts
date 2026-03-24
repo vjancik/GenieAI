@@ -5,8 +5,11 @@
  * `discordMessageToLlmText` — enriches a Discord message with sender context for LLM input
  */
 
-import type { IChatClientMessage } from "../ports/chat/IChatClientMessage.ts";
-import type { IChatClientMessageEmbed, IChatClientMessageSnapshot } from "../ports/chat/IChatClientMessageMedia.ts";
+import type {
+    IChatClientMessage,
+    IChatClientMessageEmbed,
+    IChatClientMessageSnapshot,
+} from "../ports/chat/IChatClient.ts";
 
 /**
  * Regex that matches one or more blank-ish lines — any sequence of lines that

@@ -5,7 +5,7 @@ import type {
     IChatClientMessageEmbedField,
     IChatClientMessageEmbedMedia,
     IChatClientMessageSnapshot,
-} from "../../../application/ports/chat/IChatClientMessageMedia.ts";
+} from "../../../application/ports/chat/IChatClient.ts";
 
 /**
  * Lazy wrapper over a discord.js `Attachment`.

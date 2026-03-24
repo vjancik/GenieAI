@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { AIMessage, type BaseMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
-import type { IChatClientMessage } from "../../../src/application/ports/chat/IChatClientMessage.ts";
+import type { IChatClientMessage } from "../../../src/application/ports/chat/IChatClient.ts";
 import type { IAgentOrchestrator } from "../../../src/application/ports/IAgentOrchestrator.ts";
 import type { IAttachmentDownloader } from "../../../src/application/ports/IAttachmentDownloader.ts";
 import type { IChatMessageService } from "../../../src/application/ports/IChatMessageService.ts";

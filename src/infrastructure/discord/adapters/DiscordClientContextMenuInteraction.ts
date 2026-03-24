@@ -4,8 +4,8 @@ import type {
     ContextMenuEditReplyOptions,
     ContextMenuReplyOptions,
     IChatClientContextMenuInteraction,
-} from "../../../application/ports/chat/IChatClientContextMenuInteraction.ts";
-import type { IChatClientMessage } from "../../../application/ports/chat/IChatClientMessage.ts";
+    IChatClientMessage,
+} from "../../../application/ports/chat/IChatClient.ts";
 import { DiscordClientMessage } from "./DiscordClientMessage.ts";
 
 /**

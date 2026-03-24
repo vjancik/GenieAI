@@ -1,6 +1,5 @@
 import type { TextBasedChannel } from "discord.js";
-import type { IChatClientChannel } from "../../../application/ports/chat/IChatClientChannel.ts";
-import type { IChatClientMessage } from "../../../application/ports/chat/IChatClientMessage.ts";
+import type { IChatClientChannel, IChatClientMessage } from "../../../application/ports/chat/IChatClient.ts";
 import { DiscordClientMessage } from "./DiscordClientMessage.ts";
 
 /**

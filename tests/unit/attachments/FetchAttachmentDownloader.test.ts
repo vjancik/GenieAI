@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 import pino from "pino";
 import type { AppConfig } from "../../../src/application/config/AppConfig.ts";
-import type { IChatClientMessageAttachment } from "../../../src/application/ports/chat/IChatClientMessageMedia.ts";
+import type { IChatClientMessageAttachment } from "../../../src/application/ports/chat/IChatClient.ts";
 import { AppError } from "../../../src/domain/errors/AppError.ts";
 import { FetchAttachmentDownloader } from "../../../src/infrastructure/attachments/FetchAttachmentDownloader.ts";
 

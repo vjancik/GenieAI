@@ -1,5 +1,5 @@
 import type { Client } from "discord.js";
-import type { IChatClientBot } from "../../../application/ports/chat/IChatClientBot.ts";
+import type { IChatClientBot } from "../../../application/ports/chat/IChatClient.ts";
 
 /**
  * Adapts the discord.js `Client` to the `IChatClientBot` interface.

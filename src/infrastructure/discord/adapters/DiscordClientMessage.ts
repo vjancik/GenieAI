@@ -13,7 +13,7 @@ import type {
     IChatClientMessageAttachment,
     IChatClientMessageButton,
     IChatClientMessageEmbed,
-} from "../../../application/ports/chat/IChatClientMessage.ts";
+} from "../../../application/ports/chat/IChatClient.ts";
 import {
     DiscordClientMessageAttachment,
     DiscordClientMessageEmbed,

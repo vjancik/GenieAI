@@ -1,9 +1,9 @@
 import type { Client, Message, TextBasedChannel } from "discord.js";
 import type { FileConfig } from "../../application/config/AppConfig.ts";
-import type { IChatClientMessage } from "../../application/ports/chat/IChatClientMessage.ts";
+import type { IChatClientMessage } from "../../application/ports/chat/IChatClient.ts";
 import type { IChatMessageService } from "../../application/ports/IChatMessageService.ts";
 import type { Logger } from "../../application/types/Logger.ts";
-import { DiscordClientMessage } from "./chat/DiscordClientMessage.ts";
+import { DiscordClientMessage } from "./adapters/DiscordClientMessage.ts";
 import type { DiscordClient } from "./DiscordClient.ts";
 
 /**

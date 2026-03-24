@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { discordMessageToLlmText, llmTextToDiscordText } from "../../../src/application/formatters/textTransformers.ts";
-import type { IChatClientMessage } from "../../../src/application/ports/chat/IChatClientMessage.ts";
 import type {
+    IChatClientMessage,
     IChatClientMessageEmbed,
     IChatClientMessageSnapshot,
-} from "../../../src/application/ports/chat/IChatClientMessageMedia.ts";
+} from "../../../src/application/ports/chat/IChatClient.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers

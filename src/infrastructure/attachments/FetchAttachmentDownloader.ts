@@ -1,6 +1,6 @@
 import * as Sentry from "@sentry/bun";
 import type { AppConfig } from "../../application/config/AppConfig.ts";
-import type { IChatClientMessageAttachment } from "../../application/ports/chat/IChatClientMessageMedia.ts";
+import type { IChatClientMessageAttachment } from "../../application/ports/chat/IChatClient.ts";
 import type { DownloadedAttachment, IAttachmentDownloader } from "../../application/ports/IAttachmentDownloader.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import { AppError } from "../../domain/errors/AppError.ts";

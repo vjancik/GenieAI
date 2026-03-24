@@ -10,8 +10,11 @@ import type { DiscordMessage } from "../../domain/message/Message.ts";
 import type { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import { type AppConfig, AttachmentMode } from "../config/AppConfig.ts";
 import { discordMessageToLlmText } from "../formatters/textTransformers.ts";
-import type { IChatClientMessage } from "../ports/chat/IChatClientMessage.ts";
-import type { IChatClientMessageAttachment, IChatClientMessageEmbed } from "../ports/chat/IChatClientMessageMedia.ts";
+import type {
+    IChatClientMessage,
+    IChatClientMessageAttachment,
+    IChatClientMessageEmbed,
+} from "../ports/chat/IChatClient.ts";
 import type { IAgentOrchestrator } from "../ports/IAgentOrchestrator.ts";
 import type { IAttachmentDownloader } from "../ports/IAttachmentDownloader.ts";
 import type { IChatMessageService } from "../ports/IChatMessageService.ts";

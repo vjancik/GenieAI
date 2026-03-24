@@ -3,9 +3,9 @@ import type {
     ButtonFollowUpOptions,
     ButtonReplyOptions,
     IChatClientButtonInteraction,
-} from "../../../application/ports/chat/IChatClientButtonInteraction.ts";
-import type { IChatClientChannel } from "../../../application/ports/chat/IChatClientChannel.ts";
-import type { IChatClientMessage } from "../../../application/ports/chat/IChatClientMessage.ts";
+    IChatClientChannel,
+    IChatClientMessage,
+} from "../../../application/ports/chat/IChatClient.ts";
 import { DiscordClientChannel } from "./DiscordClientChannel.ts";
 import { DiscordClientMessage } from "./DiscordClientMessage.ts";
 
