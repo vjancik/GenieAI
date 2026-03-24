@@ -444,7 +444,7 @@ export class DiscordGateway {
                           .setLabel(
                               `Retry · ${effectiveRetriesLeft} ${effectiveRetriesLeft === 1 ? "Retry" : "Retries"} Left`,
                           )
-                          .setStyle(ButtonStyle.Primary),
+                          .setStyle(isFailure ? ButtonStyle.Primary : ButtonStyle.Secondary),
                   )
                 : undefined;
 
