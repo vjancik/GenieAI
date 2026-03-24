@@ -25,7 +25,8 @@ export function buildGeneralSystemPrompt(
         "\n" +
         `You should assume the current date is ${dateStr} and your base knowledge is outdated by more than a year. Do not mention the date unless the user asks about it.\n` +
         (includeVideoCaptionHints
-            ? "If video captions are available, you should use timestamps to refer to specific parts of the video. The timestamps should be in the format (MM:SS) without leading zeroes. The answer should be in the language of the user, not the language of the captions.\n"
+            ? "If video captions are available, you should use timestamps to refer to specific parts of the video. The timestamps should be in the format (MM:SS) without leading zeroes.\n" +
+              "Your reply should be in the language of the user, not the language of the captions.\n"
             : "") +
         (hasToolResult
             ? "If previous tool calls all failed, you should inform the user of the failure and carefully decide whether you have sufficient context and information to answer user's request regardless. If not, telling the user about the tool failure is sufficient.\n"
