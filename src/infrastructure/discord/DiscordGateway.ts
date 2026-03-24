@@ -14,8 +14,10 @@ import type { IChatClientButtonInteraction } from "../../application/ports/chat/
 import type { IChatClientChannel } from "../../application/ports/chat/IChatClientChannel.ts";
 import type { IChatClientContextMenuInteraction } from "../../application/ports/chat/IChatClientContextMenuInteraction.ts";
 import type { IChatClientMessage, IChatClientMessageButton } from "../../application/ports/chat/IChatClientMessage.ts";
-import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
-import type { DiscordEmbedInfo } from "../../application/ports/IChatMessageService.ts";
+import type {
+    IChatClientMessageAttachment,
+    IChatClientMessageEmbed,
+} from "../../application/ports/chat/IChatClientMessageMedia.ts";
 import type { OnStatusUpdate } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import type { GetNextPageUseCase } from "../../application/use-cases/GetNextPage.ts";
@@ -39,7 +41,6 @@ import {
     SUMMARIZE_COMMAND_NAME,
 } from "./DiscordCommandRegistry.ts";
 import { InteractionLock } from "./InteractionLock.ts";
-import { buildSnapshot, extractAttachments, extractEmbeds } from "./messageExtractors.ts";
 import type { RateLimiter } from "./RateLimiter.ts";
 import type { StatusMessageUpdater } from "./StatusMessageUpdater.ts";
 
@@ -878,8 +879,8 @@ export class DiscordGateway {
         const botUserId = this.bot.userId;
 
         const targetMessage = interaction.targetMessage;
-        const attachments = extractAttachments(targetMessage.attachments);
-        const embeds = extractEmbeds(targetMessage.embeds);
+        const attachments = targetMessage.attachments;
+        const embeds = targetMessage.embeds;
         const userContent = extractUserContent(targetMessage.content, botUserId, targetMessage.botRoleId);
 
         // ACK the interaction with a visible ephemeral reply so Discord doesn't show
@@ -1096,7 +1097,7 @@ export class DiscordGateway {
         }
 
         const userContent = extractUserContent(message.content, botUserId, message.botRoleId);
-        const attachments: DiscordAttachmentInfo[] = extractAttachments(message.attachments);
+        const attachments = message.attachments;
 
         // No usable content after stripping mentions/commands, no attachments, and no reply
         // reference — substitute a synthetic greeting so the agent can introduce itself.
@@ -1137,8 +1138,8 @@ export class DiscordGateway {
         message: IChatClientMessage;
         botUserId: string;
         userContent: string | null;
-        attachments: DiscordAttachmentInfo[] | null;
-        embeds?: DiscordEmbedInfo[];
+        attachments: IChatClientMessageAttachment[] | null;
+        embeds?: IChatClientMessageEmbed[];
         intent: MessageIntent;
         retriesLeft?: number | null;
         /** Whether to ping the author of message in the bot reply. Defaults to true. */
@@ -1216,10 +1217,6 @@ export class DiscordGateway {
                         });
                     };
 
-                    // previousBotId is not relevant here — isOwnBot detection is only needed
-                    // in the live chain fallback path, not for the current user message.
-                    const rawSnapshot = buildSnapshot(message, botUserId, undefined);
-
                     // handle() never throws — errors are caught internally and returned as a response
                     const { response, newMessages, isFailure, isRetryable, usedFallback } =
                         await this.handleDiscordMessageUseCase.execute({
@@ -1228,12 +1225,12 @@ export class DiscordGateway {
                             channelId: message.channelId,
                             guildId: message.guildId ?? DM_GUILD_TOKEN,
                             discordAuthorId: message.authorId,
-                            // Merge stripped content into snapshot; null when reuseHumanMessage is true.
-                            snapshot: userContent !== null ? { ...rawSnapshot, content: userContent } : null,
+                            botUserId,
+                            previousBotId: this.previousBotId,
+                            message: userContent !== null ? message : null,
+                            strippedContent: userContent,
                             attachments: attachments ?? [],
-                            // Prefer caller-provided embeds; fall back to those on the snapshot
-                            // (rawSnapshot is always built from the same message so they match).
-                            embeds: embeds ?? rawSnapshot.embeds,
+                            embeds: embeds ?? message.embeds,
                             intent,
                             onStatusUpdate,
                             reuseHumanMessage,

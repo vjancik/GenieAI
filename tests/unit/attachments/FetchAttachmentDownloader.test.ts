@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 import pino from "pino";
 import type { AppConfig } from "../../../src/application/config/AppConfig.ts";
-import type { DiscordAttachmentInfo } from "../../../src/application/ports/IAttachmentDownloader.ts";
+import type { IChatClientMessageAttachment } from "../../../src/application/ports/chat/IChatClientMessageMedia.ts";
 import { AppError } from "../../../src/domain/errors/AppError.ts";
 import { FetchAttachmentDownloader } from "../../../src/infrastructure/attachments/FetchAttachmentDownloader.ts";
 
@@ -13,7 +13,7 @@ function makeConfig(timeoutMs: number, maxSizeMB = 100): Pick<AppConfig, "file">
 
 const testLogger = pino({ level: "silent" });
 
-const testAttachment: DiscordAttachmentInfo = {
+const testAttachment: IChatClientMessageAttachment = {
     id: "att-123",
     url: "https://cdn.discordapp.com/attachments/test/image.jpg",
     proxyURL: "https://media.discordapp.net/attachments/test/image.jpg",

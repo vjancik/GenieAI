@@ -21,7 +21,7 @@ export const geminiFileSourceTypeEnum = pgEnum("gemini_file_source_type", ["atta
 
 /**
  * The property on a Discord embed that contains the media to upload.
- * Matches the keys on {@link DiscordEmbedInfo} that carry media URLs.
+ * Matches the keys on {@link IChatClientMessageEmbed} that carry media URLs.
  */
 export const embedMediaKeyEnum = pgEnum("embed_media_key", ["image", "video", "thumbnail"]);
 

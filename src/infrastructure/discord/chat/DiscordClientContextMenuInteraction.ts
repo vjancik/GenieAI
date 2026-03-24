@@ -23,36 +23,36 @@ export class DiscordClientContextMenuInteraction implements IChatClientContextMe
         this._targetMessage = new DiscordClientMessage(discordInteraction.targetMessage);
     }
 
-    get targetMessage(): IChatClientMessage {
+    get targetMessage() {
         return this._targetMessage;
     }
 
-    get userId(): string {
+    get userId() {
         return this.discordInteraction.user.id;
     }
 
-    async reply(options: ContextMenuReplyOptions): Promise<void> {
-        await this.discordInteraction.reply({
+    async reply(options: ContextMenuReplyOptions) {
+        void (await this.discordInteraction.reply({
             content: options.content,
             ...(options.isEphemeral && { flags: MessageFlags.Ephemeral }),
-        });
+        }));
     }
 
-    async deferReply(options?: ContextMenuDeferReplyOptions): Promise<void> {
-        await this.discordInteraction.deferReply({
+    async deferReply(options?: ContextMenuDeferReplyOptions) {
+        void (await this.discordInteraction.deferReply({
             ...(options?.isEphemeral && { flags: MessageFlags.Ephemeral }),
-        });
+        }));
     }
 
-    async editReply(options: ContextMenuEditReplyOptions): Promise<void> {
+    async editReply(options: ContextMenuEditReplyOptions) {
         // TYPE COERCION: editReply accepts a superset of our interface options;
         // the files array shape is compatible at runtime.
-        await this.discordInteraction.editReply(
+        void (await this.discordInteraction.editReply(
             options as Parameters<MessageContextMenuCommandInteraction["editReply"]>[0],
-        );
+        ));
     }
 
-    async deleteReply(): Promise<void> {
-        await this.discordInteraction.deleteReply();
+    async deleteReply() {
+        void (await this.discordInteraction.deleteReply());
     }
 }

@@ -39,87 +39,84 @@ export class DiscordClientMessageAttachment implements IChatClientMessageAttachm
     }
 }
 
-/**
- * Lazy wrapper over a discord.js `Embed`.
- * All properties are getters that delegate directly to the underlying object.
- * `type` reads `embed.data.type` — discord.js `Embed` has no `.type` getter.
- */
-export class DiscordClientMessageEmbed implements IChatClientMessageEmbed {
-    constructor(private readonly embed: Embed) {}
+/** Wraps a discord.js embed media object (video/image/thumbnail). */
+class DiscordClientMessageEmbedMedia implements IChatClientMessageEmbedMedia {
+    constructor(private readonly media: { url: string; proxyURL?: string | null }) {}
 
-    get type(): string {
-        return this.embed.data.type ?? "rich";
+    get url(): string {
+        return this.media.url;
     }
 
-    get title(): string | null {
-        return this.embed.title;
-    }
-
-    get description(): string | null {
-        return this.embed.description;
-    }
-
-    get author(): { name: string } | null {
-        return this.embed.author ? { name: this.embed.author.name } : null;
-    }
-
-    get provider(): { name: string } | null {
-        return this.embed.provider?.name ? { name: this.embed.provider.name } : null;
-    }
-
-    get timestamp(): string | null {
-        return this.embed.timestamp;
-    }
-
-    get footer(): { text: string } | null {
-        return this.embed.footer?.text ? { text: this.embed.footer.text } : null;
-    }
-
-    get fields(): IChatClientMessageEmbedField[] {
-        return this.embed.fields.filter((f) => f.name || f.value);
-    }
-
-    get video(): IChatClientMessageEmbedMedia | null {
-        const vid = this.embed.video;
-        return vid?.url ? { url: vid.url, proxyURL: vid.proxyURL } : null;
-    }
-
-    get image(): IChatClientMessageEmbedMedia | null {
-        const img = this.embed.image;
-        return img?.url ? { url: img.url, proxyURL: img.proxyURL } : null;
-    }
-
-    get thumbnail(): IChatClientMessageEmbedMedia | null {
-        const thumb = this.embed.thumbnail;
-        return thumb?.url ? { url: thumb.url, proxyURL: thumb.proxyURL } : null;
+    get proxyURL(): string | null {
+        return this.media.proxyURL ?? null;
     }
 }
 
 /**
- * Lazy wrapper over a discord.js `MessageSnapshot` (forwarded message source).
- * All properties are getters that delegate directly to the underlying object.
+ * Lazy wrapper over a discord.js `Embed`.
+ * Single-property sub-objects are flattened to scalar getters.
+ * Multi-property media sub-objects are wrapped and cached on construction.
+ * `type` reads `embed.data.type` — discord.js `Embed` has no `.type` getter.
  */
+export class DiscordClientMessageEmbed implements IChatClientMessageEmbed {
+    readonly video: IChatClientMessageEmbedMedia | null;
+    readonly image: IChatClientMessageEmbedMedia | null;
+    readonly thumbnail: IChatClientMessageEmbedMedia | null;
+
+    constructor(private readonly embed: Embed) {
+        this.video = embed.video?.url ? new DiscordClientMessageEmbedMedia(embed.video) : null;
+        this.image = embed.image?.url ? new DiscordClientMessageEmbedMedia(embed.image) : null;
+        this.thumbnail = embed.thumbnail?.url ? new DiscordClientMessageEmbedMedia(embed.thumbnail) : null;
+    }
+
+    get type() {
+        return this.embed.data.type ?? null;
+    }
+
+    get title() {
+        return this.embed.title;
+    }
+
+    get description() {
+        return this.embed.description;
+    }
+
+    get authorName() {
+        return this.embed.author?.name ?? null;
+    }
+
+    get providerName() {
+        return this.embed.provider?.name ?? null;
+    }
+
+    get timestamp() {
+        return this.embed.timestamp;
+    }
+
+    get footerText() {
+        return this.embed.footer?.text ?? null;
+    }
+
+    get fields(): IChatClientMessageEmbedField[] {
+        return this.embed.fields;
+    }
+}
+
+/** Wraps a discord.js `MessageSnapshot` exposing only the content needed for LLM formatting and attachment upload. */
 export class DiscordClientMessageSnapshot implements IChatClientMessageSnapshot {
     readonly attachments: IChatClientMessageAttachment[];
     readonly embeds: IChatClientMessageEmbed[];
 
-    constructor(
-        private readonly snapshot: MessageSnapshot,
-        /** The forwarded message's ID — comes from the message reference, not the snapshot itself. */
-        readonly id: string,
-        /** The channel ID from the message reference — MessageSnapshot does not carry it itself. */
-        readonly channelId: string,
-    ) {
-        this.attachments = [...(snapshot.attachments ?? []).values()].map((a) => new DiscordClientMessageAttachment(a));
-        this.embeds = (snapshot.embeds ?? []).map((e) => new DiscordClientMessageEmbed(e));
+    constructor(private readonly snapshot: MessageSnapshot) {
+        this.attachments = [...snapshot.attachments.values()].map((a) => new DiscordClientMessageAttachment(a));
+        this.embeds = snapshot.embeds.map((e) => new DiscordClientMessageEmbed(e));
+    }
+
+    get cleanContent() {
+        return this.snapshot.cleanContent;
     }
 
     get content(): string {
         return this.snapshot.content;
-    }
-
-    get cleanContent(): string {
-        // MessageSnapshot.cleanContent may be null — fall back to raw content
-        return this.snapshot.cleanContent ?? this.snapshot.content;
     }
 }

@@ -35,7 +35,6 @@ export interface ChatReplyOptions {
         repliedUser: boolean;
         users?: string[];
     };
-    isEphemeral?: boolean;
 }
 
 /** Options for editing a message in-place. */

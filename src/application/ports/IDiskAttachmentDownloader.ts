@@ -1,4 +1,4 @@
-import type { DiscordAttachmentInfo } from "./IAttachmentDownloader.ts";
+import type { IChatClientMessageAttachment } from "./chat/IChatClientMessageMedia.ts";
 
 /**
  * Port interface for streaming a Discord attachment to a file on disk.
@@ -29,5 +29,5 @@ export interface IDiskAttachmentDownloader {
      * @throws {@link AppError} with code `UNEXPECTED_CONTENT_TYPE` if the response MIME type
      *   does not match `acceptTypes`
      */
-    downloadToFile(attachment: DiscordAttachmentInfo, destPath: string, acceptTypes?: string): Promise<string>;
+    downloadToFile(attachment: IChatClientMessageAttachment, destPath: string, acceptTypes?: string): Promise<string>;
 }

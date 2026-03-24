@@ -1,70 +1,4 @@
-import type { DiscordAttachmentInfo } from "./IAttachmentDownloader.ts";
-
-/**
- * Metadata from a Discord embed, extracted for LLM context.
- * URL fields (video, image, thumbnail) are captured but not rendered as LLM text —
- * reserved for future media handling.
- */
-export interface DiscordEmbedInfo {
-    /** Embed type — e.g. "rich", "image", "video", "gifv", "article", "link". */
-    type: string;
-    title?: string;
-    description?: string;
-    author?: { name: string };
-    provider?: { name: string };
-    /** ISO 8601 timestamp string, pre-converted to a human-readable local date/time. */
-    timestamp?: string;
-    footer?: { text: string };
-    fields?: Array<{ name: string; value: string }>;
-    video?: { url: string; proxyURL?: string };
-    image?: { url: string; proxyURL?: string };
-    thumbnail?: { url: string; proxyURL?: string };
-}
-
-/**
- * A type-safe subset of a Discord message, containing only the fields needed
- * by the application layer. Prevents discord.js types from leaking into use cases.
- */
-export interface DiscordMessageSnapshot {
-    /** Discord snowflake ID of the message. */
-    id: string;
-    /** Raw message text content. */
-    content: string;
-    /** Discord user ID of the author. */
-    authorId: string;
-    /** Author's username (not display name). */
-    authorUsername: string;
-    /** Author's resolved display name: server nickname > global display name > username. */
-    authorDisplayName: string;
-    /** Whether the author is any bot user. */
-    isBot: boolean;
-    /**
-     * Whether the author is this bot or a recognized previous bot version.
-     * When true, the message is treated as role "assistant" when reconstructing history.
-     * Includes messages from the optional PREVIOUS_BOT_ID config value to support
-     * migrations from earlier bot applications.
-     */
-    isOwnBot: boolean;
-    /** File attachments on the message. */
-    attachments: DiscordAttachmentInfo[];
-    /** Embeds attached to this message. */
-    embeds?: DiscordEmbedInfo[];
-    /**
-     * Content of the forwarded source message(s), when this message is a Discord "forward".
-     * The nested snapshots have no author info — Discord's MessageSnapshot type does not carry it.
-     */
-    messageSnapshots?: DiscordMessageSnapshot[];
-    /** True when this message is a Discord forward (MessageReferenceType.Forward). */
-    isForwarded?: boolean;
-    /** Discord snowflake ID of the message this is replying to, or null for chain roots. */
-    referencedMessageId: string | null;
-    /** Discord channel snowflake. */
-    channelId: string;
-    /** Discord guild snowflake, or `"@me"` for DMs. */
-    guildId: string;
-    /** When the message was created. */
-    createdAt: Date;
-}
+import type { IChatClientMessage } from "./chat/IChatClientMessage.ts";
 
 /**
  * Port for fetching live Discord message chains.
@@ -93,5 +27,5 @@ export interface IChatMessageService {
         channelId: string;
         guildId: string;
         limit?: number;
-    }): Promise<DiscordMessageSnapshot[]>;
+    }): Promise<IChatClientMessage[]>;
 }

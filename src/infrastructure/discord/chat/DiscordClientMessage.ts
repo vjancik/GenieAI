@@ -4,7 +4,6 @@ import {
     ButtonStyle,
     ComponentType,
     type Message,
-    MessageFlags,
     MessageReferenceType,
 } from "discord.js";
 import type {
@@ -14,7 +13,6 @@ import type {
     IChatClientMessageAttachment,
     IChatClientMessageButton,
     IChatClientMessageEmbed,
-    IChatClientMessageSnapshot,
 } from "../../../application/ports/chat/IChatClientMessage.ts";
 import {
     DiscordClientMessageAttachment,
@@ -39,7 +37,7 @@ function buildButtonRow(buttons: IChatClientMessageButton[]): ActionRowBuilder<B
 /** Parses the buttons on a discord.js Message into platform-agnostic IChatClientMessageButton objects. */
 function parseButtons(message: Message): IChatClientMessageButton[] {
     const buttons: IChatClientMessageButton[] = [];
-    for (const row of message.components ?? []) {
+    for (const row of message.components) {
         if (row.type !== ComponentType.ActionRow) continue;
         for (const component of row.components) {
             if (component.type !== ComponentType.Button) continue;
@@ -72,88 +70,82 @@ export class DiscordClientMessage implements IChatClientMessage {
 
     constructor(private readonly discordMessage: Message) {
         this.buttons = parseButtons(discordMessage);
-        this.attachments = [...(discordMessage.attachments ?? []).values()].map(
-            (a) => new DiscordClientMessageAttachment(a),
-        );
-        this.embeds = (discordMessage.embeds ?? []).map((e) => new DiscordClientMessageEmbed(e));
+        this.attachments = [...discordMessage.attachments.values()].map((a) => new DiscordClientMessageAttachment(a));
+        this.embeds = discordMessage.embeds.map((e) => new DiscordClientMessageEmbed(e));
     }
 
-    get id(): string {
+    get id() {
         return this.discordMessage.id;
     }
 
-    get channelId(): string {
+    get channelId() {
         return this.discordMessage.channelId;
     }
 
-    get guildId(): string | null {
+    get guildId() {
         return this.discordMessage.guildId;
     }
 
-    get authorId(): string {
+    get authorId() {
         return this.discordMessage.author.id;
     }
 
-    get authorUsername(): string {
+    get authorUsername() {
         return this.discordMessage.author.username;
     }
 
-    get authorDisplayName(): string {
+    get authorDisplayName() {
         // Guild-aware display name: nickname > globalName > username (discord.js computed)
         return this.discordMessage.member?.displayName ?? this.discordMessage.author.displayName;
     }
 
-    get isAuthorBot(): boolean {
+    get isAuthorBot() {
         return this.discordMessage.author.bot;
     }
 
-    get createdAt(): Date {
+    get createdAt() {
         return this.discordMessage.createdAt;
     }
 
-    get content(): string {
+    get content() {
         return this.discordMessage.content;
     }
 
-    get cleanContent(): string {
+    get cleanContent() {
         return this.discordMessage.cleanContent;
     }
 
-    get referencedMessageId(): string | null {
-        // Forwards terminate chain traversal — return null so they are treated as chain roots
-        if (this.discordMessage.reference?.type === MessageReferenceType.Forward) return null;
+    get referencedMessageId() {
         return this.discordMessage.reference?.messageId ?? null;
     }
 
-    get isForwarded(): boolean {
+    get isForwarded() {
         return this.discordMessage.reference?.type === MessageReferenceType.Forward;
     }
 
-    get forwardedSnapshot(): IChatClientMessageSnapshot | null {
+    get forwardedSnapshot() {
         if (!this.isForwarded) return null;
         const refMessageId = this.discordMessage.reference?.messageId;
         const snapshot =
             refMessageId !== undefined ? this.discordMessage.messageSnapshots.get(refMessageId) : undefined;
         if (!snapshot) return null;
-        const channelId = this.discordMessage.reference?.channelId ?? this.discordMessage.channelId;
-        return new DiscordClientMessageSnapshot(snapshot, refMessageId ?? "", channelId);
+        return new DiscordClientMessageSnapshot(snapshot);
     }
 
-    get botRoleId(): string | null {
+    get botRoleId() {
         return this.discordMessage.guild?.members.me?.roles.botRole?.id ?? null;
     }
 
-    hasExplicitMention(botUserId: string): boolean {
+    hasExplicitMention(botUserId: string) {
         return this.discordMessage.mentions.has(botUserId, { ignoreRepliedUser: true });
     }
 
-    async reply(options: ChatReplyOptions): Promise<IChatClientMessage> {
-        const { isEphemeral, buttons, ...rest } = options;
+    async reply(options: ChatReplyOptions) {
+        const { buttons, ...rest } = options;
         const sent = await this.discordMessage.reply({
             ...rest,
             ...(buttons && buttons.length > 0 && { components: [buildButtonRow(buttons)] }),
-            ...(isEphemeral && { flags: MessageFlags.Ephemeral }),
-        } as Parameters<Message["reply"]>[0]);
+        });
         return new DiscordClientMessage(sent);
     }
 
@@ -170,7 +162,7 @@ export class DiscordClientMessage implements IChatClientMessage {
         return new DiscordClientMessage(updated);
     }
 
-    async delete(): Promise<void> {
-        await this.discordMessage.delete();
+    async delete() {
+        void (await this.discordMessage.delete());
     }
 }

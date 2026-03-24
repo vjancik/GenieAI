@@ -346,8 +346,8 @@ describe("handleMessageCreate", () => {
         await gateway.handleMessageCreate(msg);
 
         const callArg = (useCase.execute as ReturnType<typeof mock>).mock.calls[0]?.[0] as Record<string, unknown>;
-        expect(callArg?.snapshot).toBeTruthy();
-        expect((callArg?.snapshot as { content: string }).content).toContain("introduce yourself");
+        expect(callArg?.message).toBeTruthy();
+        expect(callArg?.strippedContent as string).toContain("introduce yourself");
     });
 
     // 15 + 16
@@ -369,7 +369,7 @@ describe("handleMessageCreate", () => {
         expect(attachments).toHaveLength(1);
         expect((attachments[0] as { id: string }).id).toBe("att-1");
         // Greeting should NOT be injected because there is an attachment
-        expect((callArg?.snapshot as { content: string }).content).not.toContain("introduce yourself");
+        expect(callArg?.strippedContent as string | null).not.toContain("introduce yourself");
     });
 });
 
@@ -485,9 +485,9 @@ describe("handleRetryButton", () => {
         await gateway.handleRetryButton(interaction);
 
         expect(useCase.execute).toHaveBeenCalled();
-        // reuseHumanMessage=true means snapshot is null
+        // reuseHumanMessage=true means message is null
         const callArg = (useCase.execute as ReturnType<typeof mock>).mock.calls[0]?.[0] as Record<string, unknown>;
-        expect(callArg?.snapshot).toBeNull();
+        expect(callArg?.message).toBeNull();
     });
 
     // 21 — Scenario B: human message NOT in DB → handleMessageCreate
@@ -528,9 +528,9 @@ describe("handleRetryButton", () => {
         await gateway.handleRetryButton(interaction);
 
         expect(useCase.execute).toHaveBeenCalled();
-        // Scenario B calls handleMessageCreate which builds a fresh snapshot
+        // Scenario B calls handleMessageCreate which passes the live message
         const callArg = (useCase.execute as ReturnType<typeof mock>).mock.calls[0]?.[0] as Record<string, unknown>;
-        expect(callArg?.snapshot).not.toBeNull();
+        expect(callArg?.message).not.toBeNull();
     });
 
     // 22
@@ -890,7 +890,7 @@ describe("handleSummarizeContextMenu", () => {
         await gateway.handleSummarizeContextMenu(interaction);
 
         const callArg = (useCase.execute as ReturnType<typeof mock>).mock.calls[0]?.[0] as Record<string, unknown>;
-        expect(callArg?.snapshot).toBeTruthy();
+        expect(callArg?.message).toBeTruthy();
         // replyPrefix should be absent (undefined) — no explicit mention needed
         expect(callArg?.ephemeralInstructionMessage).toBe("Summarize this in English");
     });

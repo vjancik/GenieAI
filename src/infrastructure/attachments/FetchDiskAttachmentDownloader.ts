@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import * as Sentry from "@sentry/bun";
 import { file as bunFile } from "bun";
 import type { AppConfig } from "../../application/config/AppConfig.ts";
-import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
+import type { IChatClientMessageAttachment } from "../../application/ports/chat/IChatClientMessageMedia.ts";
 import type { IDiskAttachmentDownloader } from "../../application/ports/IDiskAttachmentDownloader.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import { AppError } from "../../domain/errors/AppError.ts";
@@ -29,7 +29,11 @@ export class FetchDiskAttachmentDownloader implements IDiskAttachmentDownloader 
         this.maxSizeBytes = config.file.attachmentDownloader.disk.maxSizeMB * 1024 * 1024;
     }
 
-    async downloadToFile(attachment: DiscordAttachmentInfo, destPath: string, acceptTypes?: string): Promise<string> {
+    async downloadToFile(
+        attachment: IChatClientMessageAttachment,
+        destPath: string,
+        acceptTypes?: string,
+    ): Promise<string> {
         return Sentry.startSpan(
             {
                 name: "Download Discord attachment to disk",

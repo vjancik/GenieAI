@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
-import type { DiscordAttachmentInfo } from "../../../src/application/ports/IAttachmentDownloader.ts";
+import type { IChatClientMessageAttachment } from "../../../src/application/ports/chat/IChatClientMessageMedia.ts";
 import type { IDiscordMediaService } from "../../../src/application/ports/IDiscordMediaService.ts";
 import type { IDiskAttachmentDownloader } from "../../../src/application/ports/IDiskAttachmentDownloader.ts";
 import type { IGeminiFileRepository } from "../../../src/application/ports/IGeminiFileRepository.ts";
@@ -139,7 +139,7 @@ function makeDiskDownloader(): IDiskAttachmentDownloader {
     };
 }
 
-const freshDiscordAttachment: DiscordAttachmentInfo = {
+const freshDiscordAttachment: IChatClientMessageAttachment = {
     id: "att-001",
     url: "https://cdn.discord.com/img.png",
     proxyURL: "https://proxy/img.png",
@@ -149,7 +149,7 @@ const freshDiscordAttachment: DiscordAttachmentInfo = {
 };
 
 function makeAttachmentFetcher(
-    attachment: DiscordAttachmentInfo | null = freshDiscordAttachment,
+    attachment: IChatClientMessageAttachment | null = freshDiscordAttachment,
 ): IDiscordMediaService {
     return {
         fetchAttachment: mock(async () => attachment),

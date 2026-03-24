@@ -160,7 +160,6 @@ const primaryUploader = uploaderRegistry.get(freeKeyProvider.currentKey.id);
 // Live Discord chain fetch service — used as fallback when DB reply chain is empty
 const discordChatMessageService = new DiscordChatMessageService(
     discordClient,
-    config.file.discord.previousBotId,
     logger.child({ module: "discord-chat" }),
     config.file,
 );

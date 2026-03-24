@@ -38,6 +38,9 @@ function makeMessage(opts: {
         },
         type: opts.type ?? MessageType.Default,
         content: opts.content ?? "",
+        attachments: { values: () => [].values() },
+        embeds: [],
+        components: [],
     } as unknown as Message;
 }
 

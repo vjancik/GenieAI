@@ -1,5 +1,5 @@
 import type { EmbedMediaKey } from "../../domain/message/GeminiFile.ts";
-import type { DiscordAttachmentInfo } from "./IAttachmentDownloader.ts";
+import type { IChatClientMessageAttachment } from "./chat/IChatClientMessageMedia.ts";
 
 /**
  * Port interface for fetching Discord media (attachments and embed media) by
@@ -25,7 +25,7 @@ export interface IDiscordMediaService {
         channelId: string,
         messageDiscordId: string,
         attachmentId: string,
-    ): Promise<DiscordAttachmentInfo | null>;
+    ): Promise<IChatClientMessageAttachment | null>;
 
     /**
      * Fetches a specific embed media item (image, video, or thumbnail) from a
@@ -43,5 +43,5 @@ export interface IDiscordMediaService {
         messageDiscordId: string,
         embedIndex: number,
         embedMediaKey: EmbedMediaKey,
-    ): Promise<DiscordAttachmentInfo | null>;
+    ): Promise<IChatClientMessageAttachment | null>;
 }

@@ -91,6 +91,7 @@ function makeMessage(overrides: {
         reference,
         attachments: attachmentsCollection,
         embeds: overrides.embeds ?? [],
+        components: [],
         messageSnapshots: overrides.messageSnapshots ?? new Map(),
     } as unknown as Message;
 }
@@ -136,12 +137,7 @@ function makeFailingDiscordClient(): DiscordClient {
 
 describe("DiscordChatMessageService.fetchChain", () => {
     test("returns empty array when channel fetch fails", async () => {
-        const service = new DiscordChatMessageService(
-            makeFailingDiscordClient(),
-            undefined,
-            testLogger,
-            testFileConfig,
-        );
+        const service = new DiscordChatMessageService(makeFailingDiscordClient(), testLogger, testFileConfig);
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
             channelId: CHANNEL_ID,
@@ -160,7 +156,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
             },
         } as unknown as DiscordClient;
 
-        const service = new DiscordChatMessageService(discordClient, undefined, testLogger, testFileConfig);
+        const service = new DiscordChatMessageService(discordClient, testLogger, testFileConfig);
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
             channelId: CHANNEL_ID,
@@ -172,7 +168,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
     test("returns single snapshot for a root message (no reference)", async () => {
         const msg = makeMessage({ id: "msg-1", content: "Root message" });
         const client = makeDiscordClient(new Map([["msg-1", msg]]));
-        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
+        const service = new DiscordChatMessageService(client, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -195,7 +191,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
                 ["msg-2", child],
             ]),
         );
-        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
+        const service = new DiscordChatMessageService(client, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-2",
@@ -219,7 +215,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
                 ["msg-3", msg3],
             ]),
         );
-        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
+        const service = new DiscordChatMessageService(client, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-3",
@@ -234,10 +230,10 @@ describe("DiscordChatMessageService.fetchChain", () => {
         expect(result[1]?.id).toBe("msg-3");
     });
 
-    test("isOwnBot is true when authorId matches discordClient.userId", async () => {
+    test("exposes authorId and isAuthorBot for bot messages", async () => {
         const msg = makeMessage({ id: "msg-1", authorId: BOT_USER_ID, isBot: true });
         const client = makeDiscordClient(new Map([["msg-1", msg]]), BOT_USER_ID);
-        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
+        const service = new DiscordChatMessageService(client, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -245,14 +241,14 @@ describe("DiscordChatMessageService.fetchChain", () => {
             guildId: "guild-1",
         });
 
-        expect(result[0]?.isOwnBot).toBe(true);
-        expect(result[0]?.isBot).toBe(true);
+        expect(result[0]?.authorId).toBe(BOT_USER_ID);
+        expect(result[0]?.isAuthorBot).toBe(true);
     });
 
-    test("isOwnBot is true when authorId matches previousBotId", async () => {
+    test("exposes authorId for previous bot messages", async () => {
         const msg = makeMessage({ id: "msg-1", authorId: PREVIOUS_BOT_ID, isBot: true });
         const client = makeDiscordClient(new Map([["msg-1", msg]]), BOT_USER_ID);
-        const service = new DiscordChatMessageService(client, PREVIOUS_BOT_ID, testLogger, testFileConfig);
+        const service = new DiscordChatMessageService(client, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -260,13 +256,13 @@ describe("DiscordChatMessageService.fetchChain", () => {
             guildId: "guild-1",
         });
 
-        expect(result[0]?.isOwnBot).toBe(true);
+        expect(result[0]?.authorId).toBe(PREVIOUS_BOT_ID);
     });
 
-    test("isOwnBot is false for regular user messages", async () => {
+    test("exposes authorId for regular user messages", async () => {
         const msg = makeMessage({ id: "msg-1", authorId: "some-user", isBot: false });
         const client = makeDiscordClient(new Map([["msg-1", msg]]), BOT_USER_ID);
-        const service = new DiscordChatMessageService(client, PREVIOUS_BOT_ID, testLogger, testFileConfig);
+        const service = new DiscordChatMessageService(client, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -274,13 +270,13 @@ describe("DiscordChatMessageService.fetchChain", () => {
             guildId: "guild-1",
         });
 
-        expect(result[0]?.isOwnBot).toBe(false);
+        expect(result[0]?.authorId).toBe("some-user");
     });
 
-    test("maps null guildId to '@me' for DMs", async () => {
+    test("preserves null guildId for DMs (remapping to '@me' is the use case's responsibility)", async () => {
         const msg = makeMessage({ id: "msg-1", guildId: null });
         const client = makeDiscordClient(new Map([["msg-1", msg]]));
-        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
+        const service = new DiscordChatMessageService(client, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -288,14 +284,14 @@ describe("DiscordChatMessageService.fetchChain", () => {
             guildId: "@me",
         });
 
-        expect(result[0]?.guildId).toBe("@me");
+        expect(result[0]?.guildId).toBeNull();
     });
 
     test("returns partial chain when mid-chain fetch fails", async () => {
         const msg2 = makeMessage({ id: "msg-2", content: "Child", referenceMessageId: "msg-1" });
         // Only msg-2 is in the map; fetching msg-1 will throw
         const client = makeDiscordClient(new Map([["msg-2", msg2]]));
-        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
+        const service = new DiscordChatMessageService(client, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-2",
@@ -323,7 +319,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
             ],
         });
         const client = makeDiscordClient(new Map([["msg-1", msg]]));
-        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
+        const service = new DiscordChatMessageService(client, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -336,7 +332,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
         expect(result[0]?.attachments[0]?.contentType).toBe("image/png");
     });
 
-    test("maps embeds to DiscordEmbedInfo", async () => {
+    test("maps embeds to IChatClientMessageEmbed", async () => {
         const msg = makeMessage({
             id: "msg-1",
             embeds: [
@@ -356,7 +352,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
             ],
         });
         const client = makeDiscordClient(new Map([["msg-1", msg]]));
-        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
+        const service = new DiscordChatMessageService(client, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -368,14 +364,14 @@ describe("DiscordChatMessageService.fetchChain", () => {
         expect(result[0]?.embeds?.[0]?.type).toBe("rich");
         expect(result[0]?.embeds?.[0]?.title).toBe("Embed Title");
         expect(result[0]?.embeds?.[0]?.description).toBe("Embed Description");
-        expect(result[0]?.embeds?.[0]?.author?.name).toBe("Embed Author");
-        expect(result[0]?.embeds?.[0]?.provider?.name).toBe("Embed Provider");
+        expect(result[0]?.embeds?.[0]?.authorName).toBe("Embed Author");
+        expect(result[0]?.embeds?.[0]?.providerName).toBe("Embed Provider");
     });
 
     test("omits embeds field when message has no embeds", async () => {
         const msg = makeMessage({ id: "msg-1" });
         const client = makeDiscordClient(new Map([["msg-1", msg]]));
-        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
+        const service = new DiscordChatMessageService(client, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -383,10 +379,10 @@ describe("DiscordChatMessageService.fetchChain", () => {
             guildId: "guild-1",
         });
 
-        expect(result[0]?.embeds).toBeUndefined();
+        expect(result[0]?.embeds).toEqual([]);
     });
 
-    test("forwarded message: sets isForwarded, uses snapshot content, referencedMessageId is null", async () => {
+    test("forwarded message: sets isForwarded, uses snapshot content, referencedMessageId is the source id", async () => {
         const fwdSnapshot: MockMessageSnapshot = {
             content: "Original forwarded text",
             cleanContent: "Original forwarded text",
@@ -402,7 +398,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
             messageSnapshots: new Map([["original-msg-id", fwdSnapshot]]),
         });
         const client = makeDiscordClient(new Map([["msg-1", msg]]));
-        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
+        const service = new DiscordChatMessageService(client, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -412,8 +408,8 @@ describe("DiscordChatMessageService.fetchChain", () => {
 
         expect(result).toHaveLength(1);
         expect(result[0]?.isForwarded).toBe(true);
-        expect(result[0]?.referencedMessageId).toBeNull();
-        expect(result[0]?.messageSnapshots?.[0]?.content).toBe("Original forwarded text");
+        expect(result[0]?.referencedMessageId).toBe("original-msg-id");
+        expect(result[0]?.forwardedSnapshot?.cleanContent).toBe("Original forwarded text");
     });
 
     test("forwarded message terminates chain traversal", async () => {
@@ -438,7 +434,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
                 ["msg-2", fwd],
             ]),
         );
-        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
+        const service = new DiscordChatMessageService(client, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-2",
@@ -462,7 +458,7 @@ describe("DiscordChatMessageService.fetchChain", () => {
             messageSnapshots: new Map(),
         });
         const client = makeDiscordClient(new Map([["msg-1", msg]]));
-        const service = new DiscordChatMessageService(client, undefined, testLogger, testFileConfig);
+        const service = new DiscordChatMessageService(client, testLogger, testFileConfig);
 
         const result = await service.fetchChain({
             startDiscordMessageId: "msg-1",
@@ -472,6 +468,6 @@ describe("DiscordChatMessageService.fetchChain", () => {
 
         expect(result).toHaveLength(1);
         expect(result[0]?.isForwarded).toBe(true);
-        expect(result[0]?.messageSnapshots?.[0]?.content).toBe("");
+        expect(result[0]?.forwardedSnapshot?.cleanContent ?? "").toBe("");
     });
 });
