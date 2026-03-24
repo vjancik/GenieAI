@@ -559,7 +559,7 @@ export class DiscordGateway {
      *
      * In both scenarios, the old failed bot reply is deleted before sending a new response.
      */
-    private async handleRetryButton(interaction: IChatClientButtonInteraction): Promise<void> {
+    async handleRetryButton(interaction: IChatClientButtonInteraction): Promise<void> {
         const originalMessageId = interaction.message.referencedMessageId;
         const channel = interaction.channel;
 
@@ -730,7 +730,7 @@ export class DiscordGateway {
      *
      * If the page state is missing (e.g. stale button), removes the button and returns.
      */
-    private async handleNextPageButton(interaction: IChatClientButtonInteraction): Promise<void> {
+    async handleNextPageButton(interaction: IChatClientButtonInteraction): Promise<void> {
         if (this.interactionLock.isLocked(interaction.message.id, interaction.customId)) {
             await interaction.deferUpdate();
             return;
@@ -878,7 +878,7 @@ export class DiscordGateway {
      * invokes the agent with SUMMARY intent. The bot reply is sent as a reply to the
      * target message and prefixed with a mention of the invoker.
      */
-    private async handleSummarizeContextMenu(interaction: IChatClientContextMenuInteraction): Promise<void> {
+    async handleSummarizeContextMenu(interaction: IChatClientContextMenuInteraction): Promise<void> {
         const botUserId = this.bot.userId;
 
         const targetMessage = interaction.targetMessage;
@@ -929,7 +929,7 @@ export class DiscordGateway {
     }
 
     /** Handles the "Export as HTML" message context menu command. */
-    private async handleExportHtmlContextMenu(interaction: IChatClientContextMenuInteraction): Promise<void> {
+    async handleExportHtmlContextMenu(interaction: IChatClientContextMenuInteraction): Promise<void> {
         const botUserId = this.bot.userId;
 
         const target = interaction.targetMessage;
@@ -952,7 +952,7 @@ export class DiscordGateway {
     }
 
     /** Handles the "Export as Image" message context menu command. */
-    private async handleExportImageContextMenu(interaction: IChatClientContextMenuInteraction): Promise<void> {
+    async handleExportImageContextMenu(interaction: IChatClientContextMenuInteraction): Promise<void> {
         const botUserId = this.bot.userId;
 
         const target = interaction.targetMessage;
@@ -976,7 +976,7 @@ export class DiscordGateway {
     }
 
     /** Handles the "Render" button attached to bot replies containing extended markdown. */
-    private async handleRenderButton(interaction: IChatClientButtonInteraction): Promise<void> {
+    async handleRenderButton(interaction: IChatClientButtonInteraction): Promise<void> {
         const botMessage = interaction.message;
 
         if (this.interactionLock.isLocked(botMessage.id, RENDER_BUTTON_ID)) {
@@ -1052,7 +1052,7 @@ export class DiscordGateway {
         return target.cleanContent;
     }
 
-    private async handleMessageCreate(message: IChatClientMessage, retriesLeft?: number | null): Promise<void> {
+    async handleMessageCreate(message: IChatClientMessage, retriesLeft?: number | null): Promise<void> {
         // Ignore all bot messages (including our own) to prevent feedback loops
         if (message.isAuthorBot) return;
 
