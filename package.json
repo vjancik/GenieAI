@@ -25,7 +25,7 @@
         "prepack": "husky"
     },
     "lint-staged": {
-        "*": "bun codecheck:fix"
+        "*.ts": "bun codecheck:fix"
     },
     "devDependencies": {
         "@biomejs/biome": "2.4.5",
