@@ -52,15 +52,10 @@ const LOCAL_CONFIG_PATH = "./config.local.yaml";
 
 const fileConfigDefaults = {
     attachmentDownloader: {
-        // TODO: default should be extended based on platform (e.g. %TEMP% on Windows)
-        /** Temp directory for streaming attachments to disk before Gemini upload. */
-        tempDir: "/var/tmp/genie-attachments",
         /** Timeout in ms for receiving the initial HTTP response when downloading Discord attachments. */
         timeoutMs: 10_000,
         /** Per-download size limit for the in-memory (base64) downloader. */
         memory: { maxSizeMB: 100 },
-        /** Per-download size limit for the disk-streaming downloader. */
-        disk: { maxSizeMB: 1_000 },
     },
     /**
      * Global fallback timeout for all model invocations (ms).
@@ -151,7 +146,6 @@ const triageModelSchema = agentModelSchema.extend({
 const fileConfigSchema = z.object({
     attachmentDownloader: z
         .object({
-            tempDir: z.string().optional().prefault(fileConfigDefaults.attachmentDownloader.tempDir),
             timeoutMs: z
                 .number()
                 .int()
@@ -169,17 +163,6 @@ const fileConfigSchema = z.object({
                 })
                 .optional()
                 .prefault(fileConfigDefaults.attachmentDownloader.memory),
-            disk: z
-                .object({
-                    maxSizeMB: z
-                        .number()
-                        .int()
-                        .positive()
-                        .optional()
-                        .prefault(fileConfigDefaults.attachmentDownloader.disk.maxSizeMB),
-                })
-                .optional()
-                .prefault(fileConfigDefaults.attachmentDownloader.disk),
         })
         .optional()
         .prefault(fileConfigDefaults.attachmentDownloader),

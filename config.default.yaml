@@ -7,16 +7,11 @@
 globalModelTimeoutMs: 600000 # <optional>
 
 attachmentDownloader:
-  # Temp directory for streaming attachments to disk before Gemini upload.
-  tempDir: "/var/tmp/genie-attachments"  # <optional>
-  # Timeout in ms for receiving the initial HTTP response (applies to both memory and disk downloaders).
+  # Timeout in ms for receiving the initial HTTP response headers.
   timeoutMs: 10000          # <optional>
   # Per-download size limit for the in-memory (base64 inline) downloader.
   memory:
     maxSizeMB: 100          # <optional>
-  # Per-download size limit for the disk-streaming downloader.
-  disk:
-    maxSizeMB: 1000         # <optional>
 
 geminiModels:
   # Whether to include thought tokens in model responses. Useful for debugging.

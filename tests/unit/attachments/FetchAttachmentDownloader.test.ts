@@ -7,7 +7,7 @@ import { FetchAttachmentDownloader } from "../../../src/infrastructure/attachmen
 
 function makeConfig(timeoutMs: number, maxSizeMB = 100): Pick<AppConfig, "file"> {
     return {
-        file: { attachmentDownloader: { timeoutMs, memory: { maxSizeMB }, disk: { maxSizeMB: 1_000 } } },
+        file: { attachmentDownloader: { timeoutMs, memory: { maxSizeMB } } },
     } as Pick<AppConfig, "file">;
 }
 

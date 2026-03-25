@@ -24,10 +24,8 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
         tavilyApiKey: null,
         file: {
             attachmentDownloader: {
-                tempDir: "/tmp",
                 timeoutMs: 10_000,
                 memory: { maxSizeMB: 100 },
-                disk: { maxSizeMB: 1_000 },
             },
             globalModelTimeoutMs: 600_000,
             geminiFileApi: {

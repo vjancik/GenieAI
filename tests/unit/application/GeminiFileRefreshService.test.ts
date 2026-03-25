@@ -26,10 +26,8 @@ const TEST_API_KEY_ID = "test-key-uuid";
 const testConfig = {
     file: {
         attachmentDownloader: {
-            tempDir: "/var/tmp/genie-attachments",
             timeoutMs: 10_000,
             memory: { maxSizeMB: 100 },
-            disk: { maxSizeMB: 1_000 },
         },
         globalModelTimeoutMs: 600_000,
         geminiFileApi: {
