@@ -49,24 +49,21 @@ const ROUTE_TO_SEARCH_DESCRIPTION =
     "niche topics where web search would significantly improve accuracy. " +
     "The input query should be a one sentence natural language query that can span multiple topics.";
 
-export const tool = new TavilySearch({
-    name: ROUTE_TO_SEARCH_NAME,
-    description: ROUTE_TO_SEARCH_DESCRIPTION,
-    maxResults: 10,
-    includeUsage: true,
-    responseFormat: "content",
-    searchDepth: "advanced",
-    chunksPerSource: 3,
-    includeAnswer: false,
-    includeFavicon: false,
-    includeImages: false,
-    includeImageDescriptions: false,
-    // TODO: debug env var
-    verbose: false,
-    // You can set other constructor parameters here, e.g.:
-    // topic: "general",
-    // includeAnswer: false,
-    // includeRawContent: false,
-    // includeImages: false,
-    // searchDepth: "basic",
-});
+/** Creates a TavilySearch tool instance. Must only be called when TAVILY_API_KEY is set. */
+export function createTavilyTool() {
+    return new TavilySearch({
+        name: ROUTE_TO_SEARCH_NAME,
+        description: ROUTE_TO_SEARCH_DESCRIPTION,
+        maxResults: 10,
+        includeUsage: true,
+        responseFormat: "content",
+        searchDepth: "advanced",
+        chunksPerSource: 3,
+        includeAnswer: false,
+        includeFavicon: false,
+        includeImages: false,
+        includeImageDescriptions: false,
+        // TODO: debug env var
+        verbose: false,
+    });
+}

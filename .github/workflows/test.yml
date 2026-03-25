@@ -41,5 +41,3 @@ jobs:
         run: bun run test
         env:
           DATABASE_URL: postgresql://genie_test:genie_test@localhost:5433/genie_test
-          # TODO: remove once TAVILY_API_KEY is no longer required at startup (should be optional)
-          TAVILY_API_KEY: dummy

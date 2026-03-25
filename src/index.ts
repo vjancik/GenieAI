@@ -51,7 +51,7 @@ import { RoundRobinFreeKeyProvider } from "./infrastructure/llm/RoundRobinFreeKe
 import { SinglePaidKeyProvider } from "./infrastructure/llm/SinglePaidKeyProvider.ts";
 import { createGetVideoCaptionsTool } from "./infrastructure/llm/tools/getVideoCaptionsTool.ts";
 import { createGetWebsiteTool } from "./infrastructure/llm/tools/getWebsiteTool.ts";
-import { tool as tavilyTool } from "./infrastructure/llm/tools/tavilySearchTool.ts";
+import { createTavilyTool } from "./infrastructure/llm/tools/tavilySearchTool.ts";
 import { createLogger } from "./infrastructure/logging/logger.ts";
 
 const logger = createLogger(
@@ -91,6 +91,7 @@ const getVideoCaptionsTool = await createGetVideoCaptionsTool(
     config.file.ytDlp?.httpProxy,
     config.file.ytDlp?.retries,
 );
+const tavilyTool = config.file.agent.nodes.search.mode === "tavily" ? createTavilyTool() : undefined;
 
 // Lazy model providers — one ChatGoogle client per (provider, apiKey) pair
 const freeKeyProvider = new RoundRobinFreeKeyProvider(freeKeys);
@@ -103,6 +104,7 @@ const triageProvider = new TriageModelProvider({
     searchMode: config.file.agent.nodes.search.mode,
     getWebsiteTool,
     getVideoCaptionsTool,
+    tavilyTool,
 });
 const generalProvider = new GeneralModelProvider({
     modelName: config.file.agent.nodes.general.model,
@@ -156,7 +158,7 @@ const agentOrchestrator = new AgentOrchestrator(
     getVideoCaptionsTool,
     logger.child({ module: "agent-orchestrator" }),
     config,
-    config.file.agent.nodes.search.mode === "tavily" ? tavilyTool : undefined,
+    tavilyTool,
 );
 
 // Live Discord chain fetch service — used as fallback when DB reply chain is empty

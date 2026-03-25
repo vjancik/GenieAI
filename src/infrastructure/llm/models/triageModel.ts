@@ -3,11 +3,11 @@ import { ChatGoogle } from "@langchain/google/node";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
 import { SearchMode } from "../../../application/config/AppConfig.ts";
+import type { IModelTool } from "../../../application/ports/IModelTool.ts";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
 import type { GetVideoCaptionsTool } from "../tools/getVideoCaptionsTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
-import { tool as tavilySearchTool } from "../tools/tavilySearchTool.ts";
 import { blockNoneSafetySettings } from "./sharedGeminiSettings.ts";
 
 /**
@@ -78,6 +78,8 @@ interface TriageModelOptions {
     searchMode: SearchMode;
     getWebsiteTool: GetWebsiteTool;
     getVideoCaptionsTool: GetVideoCaptionsTool;
+    /** Required when searchMode is tavily — the pre-constructed TavilySearch tool instance. */
+    tavilyTool?: IModelTool<{ query: string }>;
 }
 
 /**
@@ -111,7 +113,10 @@ function createTriageModel(
         callbacks: sentryCallback,
     });
 
-    const searchTool = options.searchMode === SearchMode.tavily ? tavilySearchTool : routeToGoogleSearchTool;
+    const searchTool =
+        options.searchMode === SearchMode.tavily
+            ? (options.tavilyTool ?? routeToGoogleSearchTool)
+            : routeToGoogleSearchTool;
 
     const tools = [options.getWebsiteTool, options.getVideoCaptionsTool, searchTool, routeToGeneralTool];
     return llm.bindTools(tools, { tool_choice: "any" });
