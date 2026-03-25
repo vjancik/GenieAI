@@ -45,7 +45,7 @@ export interface IMessageRepository {
      * @param params.retriesLeft - Remaining retries to store on the row; only set for retryable responses
      * @returns The DB-assigned UUID of the inserted row
      */
-    saveAssistantMessage(params: {
+    saveBotMessage(params: {
         discordMessageId: string;
         repliesToDiscordId: string;
         channelId: string;

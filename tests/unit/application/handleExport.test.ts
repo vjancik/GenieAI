@@ -121,7 +121,7 @@ function makeMessageRepo(overrides: Partial<IMessageRepository> = {}): IMessageR
     return {
         save: mock(async () => ({ id: "row-uuid-1" })),
         fetchChain: mock(async () => []),
-        saveAssistantMessage: mock(async () => ({ id: "row-uuid-1" })),
+        saveBotMessage: mock(async () => ({ id: "row-uuid-1" })),
         findById: mock(async () => null),
         findByDiscordMessageId: mock(async () => null),
         findExistingDiscordIds: mock(async () => []),
@@ -346,7 +346,7 @@ describe("HandleExportUseCase.handleRender", () => {
         // Render button removed from original message
         expect(interaction.message.edit).toHaveBeenCalled();
         // DB row saved
-        expect(messageRepo.saveAssistantMessage).toHaveBeenCalled();
+        expect(messageRepo.saveBotMessage).toHaveBeenCalled();
     });
 
     // 44

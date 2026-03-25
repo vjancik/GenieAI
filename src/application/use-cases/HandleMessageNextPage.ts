@@ -212,7 +212,7 @@ export class HandleNextPageUseCase {
 
                     // Step 4: Persist the messages row first — messagePageRepo.save has a FK on it,
                     // so if this throws the remaining cleanup is skipped entirely.
-                    const savedNextBotMsg = await this.messageRepo.saveAssistantMessage({
+                    const savedNextBotMsg = await this.messageRepo.saveBotMessage({
                         discordMessageId: newBotMessage.id,
                         repliesToDiscordId: currentBotMessageId,
                         channelId: newBotMessage.channelId,

@@ -104,7 +104,7 @@ function makeMessageRepo(overrides: Partial<IMessageRepository> = {}): IMessageR
     return {
         save: mock(async () => ({ id: "row-uuid-1" })),
         fetchChain: mock(async () => []),
-        saveAssistantMessage: mock(async () => ({ id: "row-uuid-1" })),
+        saveBotMessage: mock(async () => ({ id: "row-uuid-1" })),
         findById: mock(async () => null),
         findByDiscordMessageId: mock(async () => null),
         findExistingDiscordIds: mock(async () => []),

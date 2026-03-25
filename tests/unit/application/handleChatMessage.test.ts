@@ -63,7 +63,7 @@ function makeBot(userId = BOT_USER_ID): IChatClientBot {
 function makeMessageRepo(overrides: Partial<IMessageRepository> = {}): IMessageRepository {
     return {
         save: mock(async () => ({ id: "row-1" })),
-        saveAssistantMessage: mock(async () => ({ id: "row-1" })),
+        saveBotMessage: mock(async () => ({ id: "row-1" })),
         fetchChain: mock(async () => []),
         findExistingDiscordIds: mock(async () => []),
         ...overrides,
@@ -189,7 +189,7 @@ describe("HandleChatMessageUseCase.execute", () => {
 
         await useCase.execute({ message: msg, shutdownPending: true, isRateLimited: false });
 
-        expect(messageRepo.saveAssistantMessage).toHaveBeenCalled();
+        expect(messageRepo.saveBotMessage).toHaveBeenCalled();
         expect(msg.reply).toHaveBeenCalledWith(
             expect.objectContaining({ content: expect.stringContaining("restart") }),
         );
@@ -203,7 +203,7 @@ describe("HandleChatMessageUseCase.execute", () => {
         await useCase.execute({ message: msg, shutdownPending: false, isRateLimited: true });
 
         expect(msg.reply).toHaveBeenCalled();
-        expect(messageRepo.saveAssistantMessage).toHaveBeenCalled();
+        expect(messageRepo.saveBotMessage).toHaveBeenCalled();
     });
 
     it("injects synthetic greeting when content is empty, no attachments, and no reply reference", async () => {
@@ -399,8 +399,8 @@ describe("HandleChatMessageUseCase — sendSourcesReply", () => {
 
         // saveAssistantMessage should have been called twice:
         // once for the main bot reply, once for the sources follow-up
-        expect(messageRepo.saveAssistantMessage).toHaveBeenCalledTimes(2);
-        const calls = (messageRepo.saveAssistantMessage as ReturnType<typeof mock>).mock.calls;
+        expect(messageRepo.saveBotMessage).toHaveBeenCalledTimes(2);
+        const calls = (messageRepo.saveBotMessage as ReturnType<typeof mock>).mock.calls;
         const sourcesSaveCall = calls.find(
             (c) => (c[0] as Record<string, unknown>).discordMessageId === "sources-reply-1",
         );

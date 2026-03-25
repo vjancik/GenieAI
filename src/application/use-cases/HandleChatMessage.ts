@@ -125,7 +125,7 @@ export class HandleChatMessageUseCase {
             async (span) => {
                 if (shutdownPending) {
                     const reply = await message.reply({ content: "*A restart is pending, try again later.*" });
-                    await this.messageRepo.saveAssistantMessage({
+                    await this.messageRepo.saveBotMessage({
                         discordMessageId: reply.id,
                         repliesToDiscordId: message.id,
                         channelId: reply.channelId,
@@ -145,7 +145,7 @@ export class HandleChatMessageUseCase {
                         content:
                             "Hi! It seems you have sent too many messages at once recently. Please wait a while before sending more.",
                     });
-                    await this.messageRepo.saveAssistantMessage({
+                    await this.messageRepo.saveBotMessage({
                         discordMessageId: rateLimitReply.id,
                         repliesToDiscordId: message.id,
                         channelId: rateLimitReply.channelId,
@@ -301,7 +301,7 @@ export class HandleChatMessageUseCase {
                         content: "Sorry, I encountered an error processing your request.",
                     });
                     // Persist the error message so it participates in the reply chain.
-                    await this.messageRepo.saveAssistantMessage({
+                    await this.messageRepo.saveBotMessage({
                         discordMessageId: errorReply.id,
                         repliesToDiscordId: message.id,
                         channelId: errorReply.channelId,
@@ -739,7 +739,7 @@ export class HandleChatMessageUseCase {
             });
 
             // messages row must exist before messagePageRepo.save (FK constraint)
-            const savedBotMsg = await this.messageRepo.saveAssistantMessage({
+            const savedBotMsg = await this.messageRepo.saveBotMessage({
                 discordMessageId: botReply.id,
                 repliesToDiscordId: replyTarget.id,
                 channelId: botReply.channelId,
@@ -793,7 +793,7 @@ export class HandleChatMessageUseCase {
 
             span.setAttributes({ "chat.paginated": false });
 
-            await this.messageRepo.saveAssistantMessage({
+            await this.messageRepo.saveBotMessage({
                 discordMessageId: botReply.id,
                 repliesToDiscordId: replyTarget.id,
                 channelId: botReply.channelId,
@@ -821,7 +821,7 @@ export class HandleChatMessageUseCase {
     private async sendSourcesReply(replyTo: IChatClientMessage, sourcesLine: string): Promise<void> {
         try {
             const sourcesReply = await replyTo.reply({ content: sourcesLine });
-            await this.messageRepo.saveAssistantMessage({
+            await this.messageRepo.saveBotMessage({
                 discordMessageId: sourcesReply.id,
                 repliesToDiscordId: replyTo.id,
                 channelId: sourcesReply.channelId,

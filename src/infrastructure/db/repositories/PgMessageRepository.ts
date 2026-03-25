@@ -192,7 +192,7 @@ export class PgMessageRepository implements IMessageRepository {
         );
     }
 
-    async saveAssistantMessage(params: {
+    async saveBotMessage(params: {
         discordMessageId: string;
         repliesToDiscordId: string;
         channelId: string;

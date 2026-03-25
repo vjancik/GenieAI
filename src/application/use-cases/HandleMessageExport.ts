@@ -125,7 +125,7 @@ export class HandleExportUseCase {
             });
 
             // Persist so the render reply participates in the DB reply chain
-            await this.messageRepo.saveAssistantMessage({
+            await this.messageRepo.saveBotMessage({
                 discordMessageId: renderReply.id,
                 repliesToDiscordId: botMessage.id,
                 channelId: renderReply.channelId,
