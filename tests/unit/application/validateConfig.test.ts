@@ -4,7 +4,7 @@ import type { AppConfig } from "../../../src/application/config/AppConfig.ts";
 import { AttachmentMode, SearchMode, validateConfig } from "../../../src/application/config/AppConfig.ts";
 import type { Logger } from "../../../src/application/types/Logger.ts";
 
-const testLogger = pino({ level: "silent" });
+const _testLogger = pino({ level: "silent" });
 
 function makeLogger(): { logger: Logger; warnMock: ReturnType<typeof mock> } {
     const warnMock = mock(() => {});

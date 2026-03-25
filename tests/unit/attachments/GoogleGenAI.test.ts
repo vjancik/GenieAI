@@ -20,6 +20,7 @@ function makeStream(...chunks: Uint8Array[]): ReadableStream<Uint8Array> {
     return new ReadableStream({
         pull(controller) {
             if (i < chunks.length) {
+                // biome-ignore lint/style/noNonNullAssertion: bounds-checked by the if condition above
                 controller.enqueue(chunks[i++]!);
             } else {
                 controller.close();
@@ -94,11 +95,11 @@ describe("initiateResumableUpload", () => {
 
         await initiateResumableUpload("my-api-key", { ...BASE_CONFIG, byteLength: 512 });
 
-        expect(calls[0]!.url).toBe("https://generativelanguage.googleapis.com/upload/v1beta/files?key=my-api-key");
-        expect(calls[0]!.headers["x-goog-upload-protocol"]).toBe("resumable");
-        expect(calls[0]!.headers["x-goog-upload-command"]).toBe("start");
-        expect(calls[0]!.headers["x-goog-upload-header-content-length"]).toBe("512");
-        expect(calls[0]!.headers["x-goog-upload-header-content-type"]).toBe("image/png");
+        expect(calls[0]?.url).toBe("https://generativelanguage.googleapis.com/upload/v1beta/files?key=my-api-key");
+        expect(calls[0]?.headers["x-goog-upload-protocol"]).toBe("resumable");
+        expect(calls[0]?.headers["x-goog-upload-command"]).toBe("start");
+        expect(calls[0]?.headers["x-goog-upload-header-content-length"]).toBe("512");
+        expect(calls[0]?.headers["x-goog-upload-header-content-type"]).toBe("image/png");
     });
 
     test("returns the upload URL from x-goog-upload-url header", async () => {
@@ -114,7 +115,7 @@ describe("initiateResumableUpload", () => {
 
         await initiateResumableUpload("key", { ...BASE_CONFIG, name: "my-uuid", byteLength: 10 });
 
-        const body = JSON.parse(calls[0]!.rawBody as string) as { file: { name: string } };
+        const body = JSON.parse(calls[0]?.rawBody as string) as { file: { name: string } };
         expect(body.file.name).toBe("files/my-uuid");
     });
 
@@ -157,9 +158,9 @@ describe("uploadStreamChunked", () => {
 
             expect(result).toEqual(FILE_RESOURCE);
             expect(calls).toHaveLength(1);
-            expect(calls[0]!.headers["x-goog-upload-command"]).toBe("upload, finalize");
-            expect(calls[0]!.headers["x-goog-upload-offset"]).toBe("0");
-            expect(calls[0]!.headers["content-length"]).toBe("1024");
+            expect(calls[0]?.headers["x-goog-upload-command"]).toBe("upload, finalize");
+            expect(calls[0]?.headers["x-goog-upload-offset"]).toBe("0");
+            expect(calls[0]?.headers["content-length"]).toBe("1024");
         });
 
         test("sends correct byte content", async () => {
@@ -168,7 +169,7 @@ describe("uploadStreamChunked", () => {
             const data = bytes(50, 0xff);
             await uploadStreamChunked(makeStream(data), UPLOAD_SESSION_URL);
 
-            expect(calls[0]!.body).toEqual(data);
+            expect(calls[0]?.body).toEqual(data);
         });
     });
 
@@ -179,12 +180,12 @@ describe("uploadStreamChunked", () => {
             await uploadStreamChunked(makeStream(bytes(CHUNK_SIZE, 0x01), bytes(512, 0x02)), UPLOAD_SESSION_URL);
 
             expect(calls).toHaveLength(2);
-            expect(calls[0]!.headers["x-goog-upload-command"]).toBe("upload");
-            expect(calls[0]!.headers["x-goog-upload-offset"]).toBe("0");
-            expect(calls[0]!.headers["content-length"]).toBe(String(CHUNK_SIZE));
-            expect(calls[1]!.headers["x-goog-upload-command"]).toBe("upload, finalize");
-            expect(calls[1]!.headers["x-goog-upload-offset"]).toBe(String(CHUNK_SIZE));
-            expect(calls[1]!.headers["content-length"]).toBe("512");
+            expect(calls[0]?.headers["x-goog-upload-command"]).toBe("upload");
+            expect(calls[0]?.headers["x-goog-upload-offset"]).toBe("0");
+            expect(calls[0]?.headers["content-length"]).toBe(String(CHUNK_SIZE));
+            expect(calls[1]?.headers["x-goog-upload-command"]).toBe("upload, finalize");
+            expect(calls[1]?.headers["x-goog-upload-offset"]).toBe(String(CHUNK_SIZE));
+            expect(calls[1]?.headers["content-length"]).toBe("512");
         });
 
         test("sends correct byte content per chunk", async () => {
@@ -194,8 +195,8 @@ describe("uploadStreamChunked", () => {
             const chunk2 = bytes(512, 0x02);
             await uploadStreamChunked(makeStream(chunk1, chunk2), UPLOAD_SESSION_URL);
 
-            expect(calls[0]!.body).toEqual(chunk1);
-            expect(calls[1]!.body).toEqual(chunk2);
+            expect(calls[0]?.body).toEqual(chunk1);
+            expect(calls[1]?.body).toEqual(chunk2);
         });
 
         test("handles a stream read that straddles the chunk boundary", async () => {
@@ -205,14 +206,14 @@ describe("uploadStreamChunked", () => {
             await uploadStreamChunked(makeStream(oversized), UPLOAD_SESSION_URL);
 
             expect(calls).toHaveLength(2);
-            expect(calls[0]!.headers["content-length"]).toBe(String(CHUNK_SIZE));
-            expect(calls[0]!.headers["x-goog-upload-command"]).toBe("upload");
-            expect(calls[0]!.body).toEqual(oversized.subarray(0, CHUNK_SIZE));
+            expect(calls[0]?.headers["content-length"]).toBe(String(CHUNK_SIZE));
+            expect(calls[0]?.headers["x-goog-upload-command"]).toBe("upload");
+            expect(calls[0]?.body).toEqual(oversized.subarray(0, CHUNK_SIZE));
 
-            expect(calls[1]!.headers["content-length"]).toBe("100");
-            expect(calls[1]!.headers["x-goog-upload-command"]).toBe("upload, finalize");
-            expect(calls[1]!.headers["x-goog-upload-offset"]).toBe(String(CHUNK_SIZE));
-            expect(calls[1]!.body).toEqual(oversized.subarray(CHUNK_SIZE));
+            expect(calls[1]?.headers["content-length"]).toBe("100");
+            expect(calls[1]?.headers["x-goog-upload-command"]).toBe("upload, finalize");
+            expect(calls[1]?.headers["x-goog-upload-offset"]).toBe(String(CHUNK_SIZE));
+            expect(calls[1]?.body).toEqual(oversized.subarray(CHUNK_SIZE));
         });
     });
 
@@ -247,7 +248,7 @@ describe("uploadStreamChunked", () => {
             await uploadStreamChunked(makeStream(new Uint8Array(0), new Uint8Array(0), data), UPLOAD_SESSION_URL);
 
             expect(calls).toHaveLength(1);
-            expect(calls[0]!.body).toEqual(data);
+            expect(calls[0]?.body).toEqual(data);
         });
     });
 
@@ -284,11 +285,11 @@ describe("uploadStreamSingleRequest", () => {
 
         await uploadStreamSingleRequest("my-api-key", makeStream(bytes(100)), { ...BASE_CONFIG, byteLength: 100 });
 
-        expect(calls[0]!.url).toBe("https://generativelanguage.googleapis.com/upload/v1beta/files?key=my-api-key");
-        expect(calls[0]!.headers["content-length"]).toBe("100");
-        expect(calls[0]!.headers["x-goog-upload-command"]).toBeUndefined();
-        expect(calls[0]!.headers["x-goog-upload-protocol"]).toBeUndefined();
-        expect(calls[0]!.headers["x-goog-upload-offset"]).toBeUndefined();
+        expect(calls[0]?.url).toBe("https://generativelanguage.googleapis.com/upload/v1beta/files?key=my-api-key");
+        expect(calls[0]?.headers["content-length"]).toBe("100");
+        expect(calls[0]?.headers["x-goog-upload-command"]).toBeUndefined();
+        expect(calls[0]?.headers["x-goog-upload-protocol"]).toBeUndefined();
+        expect(calls[0]?.headers["x-goog-upload-offset"]).toBeUndefined();
     });
 
     test("returns the file resource on success", async () => {
@@ -308,7 +309,7 @@ describe("uploadStreamSingleRequest", () => {
 
         await uploadStreamSingleRequest("key", makeStream(data), { ...BASE_CONFIG, byteLength: 64 });
 
-        expect(calls[0]!.body).toEqual(data);
+        expect(calls[0]?.body).toEqual(data);
     });
 
     test("retries on failure then succeeds", async () => {
