@@ -14,6 +14,7 @@
  */
 import * as Sentry from "@sentry/bun";
 import { ConfigProvider } from "./application/config/AppConfig.ts";
+import { AgentMessageBuilder } from "./application/services/AgentMessageBuilder.ts";
 import { GeminiApiKeySyncService } from "./application/services/GeminiApiKeySync.ts";
 import { GeminiFileRefreshService } from "./application/services/GeminiFileRefresh.ts";
 import { StatusMessageUpdater } from "./application/services/StatusMessageUpdater.ts";
@@ -158,10 +159,6 @@ const agentOrchestrator = new AgentOrchestrator(
     config.file.agent.nodes.search.mode === "tavily" ? tavilyTool : undefined,
 );
 
-// The primary uploader for new uploads in HandleDiscordMessage uses the current free key.
-// The refresh service handles uploading for other keys internally during orchestration.
-const primaryUploader = uploaderRegistry.get(freeKeyProvider.currentKey.id);
-
 // Live Discord chain fetch service — used as fallback when DB reply chain is empty
 const discordChatMessageService = new DiscordChatMessageService(
     discordClient,
@@ -179,6 +176,15 @@ const htmlToImage = new HtmlToImageRenderer();
 
 // Discord gateway
 const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
+const agentMessageBuilder = new AgentMessageBuilder(
+    attachmentDownloader,
+    logger.child({ module: "agent-message-builder" }),
+    config,
+    diskDownloader,
+    uploaderRegistry,
+    freeKeyProvider,
+    geminiFileRepository,
+);
 const handleChatMessageUseCase = new HandleChatMessageUseCase(
     agentOrchestrator,
     messageRepository,
@@ -189,11 +195,7 @@ const handleChatMessageUseCase = new HandleChatMessageUseCase(
     messagePageRepository,
     config.file.discord.defaultRetriesLeft,
     config.file.agent.nodes.search.mode,
-    attachmentDownloader,
-    config,
-    diskDownloader,
-    primaryUploader,
-    geminiFileRepository,
+    agentMessageBuilder,
     discordChatMessageService,
 );
 

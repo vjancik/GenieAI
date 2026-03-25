@@ -1,5 +1,5 @@
 import { describe, expect, it, mock } from "bun:test";
-import type { BaseMessage } from "@langchain/core/messages";
+import { type BaseMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
 import { SearchMode } from "../../../src/application/config/AppConfig.ts";
 import type {
@@ -8,7 +8,7 @@ import type {
     IChatClientMessageAttachment,
 } from "../../../src/application/ports/chat/IChatClient.ts";
 import type { IAgentOrchestrator } from "../../../src/application/ports/IAgentOrchestrator.ts";
-import type { IAttachmentDownloader } from "../../../src/application/ports/IAttachmentDownloader.ts";
+import type { AgentMessageBuilder } from "../../../src/application/services/AgentMessageBuilder.ts";
 import type { StatusMessageUpdater } from "../../../src/application/services/StatusMessageUpdater.ts";
 import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
 import { HandleChatMessageUseCase } from "../../../src/application/use-cases/HandleChatMessage.ts";
@@ -99,10 +99,16 @@ function makeOrchestrator(
     } as unknown as IAgentOrchestrator;
 }
 
-function makeAttachmentDownloader(): IAttachmentDownloader {
+function makeAgentMessageBuilder(): AgentMessageBuilder {
     return {
-        download: mock(async () => ({ name: "file.png", mimeType: "image/png", data: "base64data" })),
-    } as unknown as IAttachmentDownloader;
+        buildMessage: mock(async ({ content }: { content: string }) => ({
+            msg: new HumanMessage(content),
+            pendingRecords: [],
+        })),
+        persistPendingGeminiRecords: mock(async () => {}),
+        maxInlineAttachmentBytes: 10 * 1024 * 1024,
+        mode: "inline",
+    } as unknown as AgentMessageBuilder;
 }
 
 function makeStatusUpdater(): StatusMessageUpdater {
@@ -122,7 +128,7 @@ function makeUseCase(
         previousBotId?: string;
         defaultRetriesLeft?: number;
         searchMode?: SearchMode;
-        attachmentDownloader?: IAttachmentDownloader;
+        messageBuilder?: AgentMessageBuilder;
     } = {},
 ): HandleChatMessageUseCase {
     return new HandleChatMessageUseCase(
@@ -135,14 +141,7 @@ function makeUseCase(
         overrides.messagePageRepo ?? makePageRepo(),
         overrides.defaultRetriesLeft ?? 0,
         overrides.searchMode ?? SearchMode.tavily,
-        overrides.attachmentDownloader ?? makeAttachmentDownloader(),
-        // Minimal config stub — inline mode; limit set high so test attachments are never rejected
-        {
-            file: {
-                agent: { maxInlineAttachmentSizeBytes: 10 * 1024 * 1024, uploadAttachmentMode: "inline" },
-                attachmentDownloader: { tempDir: "/tmp" },
-            },
-        } as never,
+        overrides.messageBuilder ?? makeAgentMessageBuilder(),
     );
 }
 
