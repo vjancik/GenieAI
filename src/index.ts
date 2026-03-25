@@ -176,6 +176,7 @@ const htmlToImage = new HtmlToImageRenderer();
 
 // Discord gateway
 const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
+const discordClientBot = new DiscordClientBot(discordClient.client);
 const agentMessageBuilder = new AgentMessageBuilder(
     attachmentDownloader,
     logger.child({ module: "agent-message-builder" }),
@@ -190,7 +191,7 @@ const handleChatMessageUseCase = new HandleChatMessageUseCase(
     messageRepository,
     statusUpdater,
     logger.child({ module: "handle-chat-message-use-case" }),
-    new DiscordClientBot(discordClient.client),
+    discordClientBot,
     config.file.discord.previousBotId,
     messagePageRepository,
     config.file.discord.defaultRetriesLeft,
@@ -206,27 +207,27 @@ const handleNextPageUseCase = new HandleNextPageUseCase(
     getNextPageQuery,
     messageRepository,
     messagePageRepository,
-    new DiscordClientBot(discordClient.client),
+    discordClientBot,
     logger.child({ module: "next-page" }),
     interactionLock,
 );
 const handleRetryUseCase = new HandleRetryUseCase(
     handleChatMessageUseCase,
     messageRepository,
-    new DiscordClientBot(discordClient.client),
+    discordClientBot,
     logger.child({ module: "retry" }),
     interactionLock,
 );
 const handleSummarizeUseCase = new HandleSummarizeUseCase(
     handleChatMessageUseCase,
     messageRepository,
-    new DiscordClientBot(discordClient.client),
+    discordClientBot,
 );
 const handleExportUseCase = new HandleExportUseCase(
     messageRepository,
     markdownToHtml,
     htmlToImage,
-    new DiscordClientBot(discordClient.client),
+    discordClientBot,
     logger.child({ module: "export" }),
     config.file.discord.previousBotId,
     interactionLock,
