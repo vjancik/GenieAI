@@ -137,3 +137,63 @@ export class TriageModelProvider extends ModelProvider {
         return createTriageModel(apiKey, modelName, this.options);
     }
 }
+
+/** Dependencies for constructing a Tavily-only triage model provider instance. */
+interface TavilyOnlyTriageModelOptions {
+    /** Gemini model identifier. */
+    modelName: string;
+    /** Fallback model name used on 503 or timeout errors. */
+    fallbackModelName?: string;
+    /** Gemini reasoning effort level. */
+    thinkingLevel: ThinkingLevel;
+    /** Whether to include thought tokens in the model response. */
+    includeThoughts: boolean;
+    /** The pre-constructed TavilySearch tool instance. */
+    tavilyTool: IModelTool<{ query: string }>;
+}
+
+/**
+ * Creates a triage model bound only to the Tavily `web_search` tool and
+ * `route_to_general`. No content tools are bound — this variant is used
+ * when the intent is already known to be SEARCH in Tavily mode, so
+ * content fetching and routing sentinel tools are unnecessary.
+ */
+function createTavilyOnlyTriageModel(
+    apiKey: string,
+    modelName: string,
+    options: Omit<TavilyOnlyTriageModelOptions, "modelName" | "fallbackModelName">,
+) {
+    // automatic Sentry instrumentation doesn't work in Bun
+    const sentryCallback =
+        process.versions.bun && process.env.SENTRY_INITIALIZED ? [Sentry.createLangChainCallbackHandler()] : undefined;
+
+    const llm = new ChatGoogle({
+        model: modelName,
+        apiKey,
+        thinkingConfig: {
+            thinkingLevel: options.thinkingLevel,
+            includeThoughts: options.includeThoughts,
+        },
+        safetySettings: blockNoneSafetySettings,
+        callbacks: sentryCallback,
+    });
+
+    return llm.bindTools([options.tavilyTool, routeToGeneralTool], { tool_choice: "any" });
+}
+
+/**
+ * Lazy-caching provider for the Tavily-only triage model.
+ *
+ * Used exclusively when search mode is Tavily and the declared intent is SEARCH.
+ * Only binds `web_search` and `route_to_general` — content tools and routing
+ * sentinels are omitted because they are irrelevant for this narrow path.
+ */
+export class TavilyOnlyTriageModelProvider extends ModelProvider {
+    constructor(private readonly options: TavilyOnlyTriageModelOptions) {
+        super(options.modelName, options.fallbackModelName);
+    }
+
+    protected create(apiKey: string, modelName: string) {
+        return createTavilyOnlyTriageModel(apiKey, modelName, this.options);
+    }
+}

@@ -45,7 +45,7 @@ import { MarkdownToHtmlRenderer } from "./infrastructure/exporters/MarkdownToHtm
 import { AgentOrchestrator } from "./infrastructure/llm/agents/agentOrchestrator.ts";
 import { GeneralModelProvider } from "./infrastructure/llm/models/generalModel.ts";
 import { SearchModelProvider } from "./infrastructure/llm/models/searchModel.ts";
-import { TriageModelProvider } from "./infrastructure/llm/models/triageModel.ts";
+import { TavilyOnlyTriageModelProvider, TriageModelProvider } from "./infrastructure/llm/models/triageModel.ts";
 import { ResilientModelInvoker } from "./infrastructure/llm/ResilientModelInvoker.ts";
 import { RoundRobinFreeKeyProvider } from "./infrastructure/llm/RoundRobinFreeKeyProvider.ts";
 import { SinglePaidKeyProvider } from "./infrastructure/llm/SinglePaidKeyProvider.ts";
@@ -106,6 +106,15 @@ const triageProvider = new TriageModelProvider({
     getVideoCaptionsTool,
     tavilyTool,
 });
+const tavilyOnlyTriageProvider = tavilyTool
+    ? new TavilyOnlyTriageModelProvider({
+          modelName: config.file.agent.nodes.triage.model,
+          fallbackModelName: config.file.agent.nodes.triage.fallbackModel,
+          thinkingLevel: config.file.agent.nodes.triage.thinkingLevel,
+          includeThoughts: config.file.geminiModels.includeThoughts,
+          tavilyTool,
+      })
+    : undefined;
 const generalProvider = new GeneralModelProvider({
     modelName: config.file.agent.nodes.general.model,
     fallbackModelName: config.file.agent.nodes.general.fallbackModel,
@@ -159,6 +168,7 @@ const agentOrchestrator = new AgentOrchestrator(
     logger.child({ module: "agent-orchestrator" }),
     config,
     tavilyTool,
+    tavilyOnlyTriageProvider,
 );
 
 // Live Discord chain fetch service — used as fallback when DB reply chain is empty

@@ -145,6 +145,8 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         private readonly logger: Logger,
         config: Pick<AppConfig, "file">,
         private readonly tavilyTool?: IModelTool<{ query: string }>,
+        /** Used in Tavily mode when intent is SEARCH — skips content tools and routing sentinels. */
+        private readonly tavilyOnlyTriageProvider?: IModelProvider,
     ) {
         this.searchMode = config.file.agent.nodes.search.mode;
         this.nodeTimeoutsMs = {
@@ -236,7 +238,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             case MessageIntent.GENERAL:
                 return OrchestratorNode.GENERAL;
             case MessageIntent.SEARCH:
-                return OrchestratorNode.SEARCH;
+                // In Tavily mode the search node expects a triage AIMessage with a web_search
+                // tool call already in state — triage must run first to produce it.
+                // In Google mode there is no tool call dependency, so we can skip triage.
+                return this.searchMode === SearchMode.tavily ? OrchestratorNode.TRIAGE : OrchestratorNode.SEARCH;
             default:
                 return OrchestratorNode.TRIAGE;
         }
@@ -318,9 +323,18 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 ...triageWindow,
             ];
 
+            // In Tavily mode with a known SEARCH intent, use the Tavily-only triage provider
+            // which only has web_search + route_to_general bound — content tools are irrelevant.
+            const activeTriageProvider =
+                this.searchMode === SearchMode.tavily &&
+                state.intent === MessageIntent.SEARCH &&
+                this.tavilyOnlyTriageProvider
+                    ? this.tavilyOnlyTriageProvider
+                    : this.triageProvider;
+
             const { result: triageResponse } = await this.invoker.invokeWithFreeKeys(
-                this.triageProvider.get.bind(this.triageProvider),
-                this.triageProvider.getFallback.bind(this.triageProvider),
+                activeTriageProvider.get.bind(activeTriageProvider),
+                activeTriageProvider.getFallback.bind(activeTriageProvider),
                 messages,
                 this.nodeTimeoutsMs?.triage,
             );
