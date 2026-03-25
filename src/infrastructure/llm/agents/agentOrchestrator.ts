@@ -294,19 +294,25 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             config.context?.onStatusUpdate?.({
                 type: AgentStatusType.TRIAGE,
             });
-            // Triage only needs the current turn to classify — pass just the messages
-            // starting from the second-to-last HumanMessage (i.e. the prior user turn
-            // plus: last AI response, any tool messages, and the new user message).
-            // Slicing from that index (inclusive) ensures the window always starts with
-            // a HumanMessage, satisfying Gemini's turn-ordering requirement.
-            // Falls back to full history if there is no prior HumanMessage.
-            const secondToLastHumanIdx = state.messages.reduceRight(
-                (found, msg, i) =>
-                    found === -1 && i < state.messages.length - 1 && msg instanceof HumanMessage ? i : found,
+            // Triage only needs the last full turn to classify, not the full history.
+            // "Last full turn" = the HumanMessage immediately before the last AIMessage, through
+            // to the end of state (i.e. the prior exchange + all new human messages since).
+            // Walking newest→oldest: find the last AIMessage, then find the last HumanMessage
+            // before it — that is the turn boundary.
+            // Falls back to full history when there is no prior AIMessage in state.
+            const lastAiIdx = state.messages.reduceRight(
+                (found, msg, i) => (found === -1 && msg instanceof AIMessage ? i : found),
                 -1,
             );
-            const triageWindow =
-                secondToLastHumanIdx === -1 ? state.messages : state.messages.slice(secondToLastHumanIdx);
+            // Last HumanMessage strictly before the last AIMessage — the start of the prior turn.
+            const turnStartIdx =
+                lastAiIdx === -1
+                    ? -1
+                    : state.messages.reduceRight(
+                          (found, msg, i) => (found === -1 && i < lastAiIdx && msg instanceof HumanMessage ? i : found),
+                          -1,
+                      );
+            const triageWindow = turnStartIdx === -1 ? state.messages : state.messages.slice(turnStartIdx);
             const messages: BaseMessage[] = [
                 new SystemMessage(buildTriageSystemPrompt(this.searchMode)),
                 ...triageWindow,
