@@ -171,7 +171,7 @@ export class HandleRetryUseCase {
                 try {
                     // Delete the old failed bot reply from Discord before sending a fresh response.
                     // DB deletion happens later after retriesLeft has been read.
-                    await interaction.message.delete().catch((err) => {
+                    interaction.message.delete().catch((err) => {
                         this.logger.warn({ err }, "Failed to delete old failed bot reply from Discord on retry");
                     });
 
@@ -186,16 +186,21 @@ export class HandleRetryUseCase {
                     }
 
                     // Delete the old failed bot reply from DB now that retriesLeft has been read.
+                    // Only delete if langchainMessages is empty — that is the reliable signal that
+                    // this was a failure row with no real LLM output. Non-empty rows may have been
+                    // replied to by someone else and form part of another conversation chain.
                     // Fire-and-forget — failure here doesn't block the retry from proceeding.
-                    this.messageRepo
-                        .deleteByDiscordMessageId({
-                            discordMessageId: interaction.message.id,
-                            channelId: originalMessage.channelId,
-                            guildId,
-                        })
-                        .catch((err) => {
-                            this.logger.warn({ err }, "Failed to delete old failed bot reply from DB on retry");
-                        });
+                    if (botRecord?.langchainMessages.length === 0) {
+                        this.messageRepo
+                            .deleteByDiscordMessageId({
+                                discordMessageId: interaction.message.id,
+                                channelId: originalMessage.channelId,
+                                guildId,
+                            })
+                            .catch((err) => {
+                                this.logger.warn({ err }, "Failed to delete old failed bot reply from DB on retry");
+                            });
+                    }
 
                     if (humanRecord?.role === "human") {
                         // --- Scenario A: human message exists, re-run orchestration only ---
