@@ -19,7 +19,7 @@ import type { DiscordClient } from "./DiscordClient.ts";
 export class DiscordChatMessageService implements IChatMessageService {
     /** Saved reference to the discord.js Client, available after DiscordClient.start(). */
     private readonly client: Client;
-    private readonly defaultChainLimit: number;
+    private readonly chainLimit: number;
 
     constructor(
         discordClient: DiscordClient,
@@ -27,7 +27,7 @@ export class DiscordChatMessageService implements IChatMessageService {
         config: Pick<FileConfig, "discord">,
     ) {
         this.client = discordClient.client;
-        this.defaultChainLimit = config.discord.defaultChainLimit;
+        this.chainLimit = config.discord.chainLimit;
     }
 
     async fetchChain(lookup: {
@@ -36,7 +36,7 @@ export class DiscordChatMessageService implements IChatMessageService {
         guildId: string;
         limit?: number;
     }): Promise<IChatClientMessage[]> {
-        const limit = lookup.limit ?? this.defaultChainLimit;
+        const limit = lookup.limit ?? this.chainLimit;
         const chain: IChatClientMessage[] = [];
 
         const channel = await this.fetchTextChannel(lookup.channelId);

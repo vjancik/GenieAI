@@ -126,7 +126,7 @@ function makeUseCase(
         statusUpdater?: StatusMessageUpdater;
         bot?: IChatClientBot;
         previousBotId?: string;
-        defaultRetriesLeft?: number;
+        retries?: number;
         searchMode?: SearchMode;
         messageBuilder?: AgentMessageBuilder;
     } = {},
@@ -139,7 +139,7 @@ function makeUseCase(
         overrides.bot ?? makeBot(),
         overrides.previousBotId,
         overrides.messagePageRepo ?? makePageRepo(),
-        overrides.defaultRetriesLeft ?? 0,
+        overrides.retries ?? 0,
         overrides.searchMode ?? SearchMode.tavily,
         overrides.messageBuilder ?? makeAgentMessageBuilder(),
     );

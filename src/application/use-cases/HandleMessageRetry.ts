@@ -137,7 +137,7 @@ export class HandleRetryUseCase {
                 const humanRecord = chain.length >= 2 ? chain.at(-2) : undefined;
 
                 // Decrement retriesLeft from the stored bot reply row — each click consumes one retry.
-                // null if not set or record missing (sendBotReply will fall back to defaultRetriesLeft).
+                // null if not set or record missing (sendBotReply will fall back to configured retries).
                 const storedRetriesLeft = botRecord?.retriesLeft ?? null;
                 const retriesLeft = storedRetriesLeft !== null ? storedRetriesLeft - 1 : null;
 

@@ -208,7 +208,7 @@ const handleChatMessageUseCase = new HandleChatMessageUseCase(
     discordClientBot,
     config.file.discord.previousBotId,
     messagePageRepository,
-    config.file.discord.defaultRetriesLeft,
+    config.file.discord.retries,
     config.file.agent.nodes.search.mode,
     agentMessageBuilder,
     discordChatMessageService,

@@ -63,9 +63,9 @@ const fileConfigDefaults = {
     },
     discord: {
         /** Maximum number of messages to walk when fetching a Discord reply chain. */
-        defaultChainLimit: 100,
+        chainLimit: 100,
         /** Number of retry attempts granted to a retryable bot response. */
-        defaultRetriesLeft: 3,
+        retries: 3,
         /** Whether the bot responds to messages and commands in Direct Message channels. */
         enableInDMs: false,
     },
@@ -190,18 +190,8 @@ const fileConfigSchema = z.object({
         .prefault(fileConfigDefaults.geminiFileApi),
     discord: z
         .object({
-            defaultChainLimit: z
-                .number()
-                .int()
-                .positive()
-                .optional()
-                .prefault(fileConfigDefaults.discord.defaultChainLimit),
-            defaultRetriesLeft: z
-                .number()
-                .int()
-                .nonnegative()
-                .optional()
-                .prefault(fileConfigDefaults.discord.defaultRetriesLeft),
+            chainLimit: z.number().int().positive().optional().prefault(fileConfigDefaults.discord.chainLimit),
+            retries: z.number().int().nonnegative().optional().prefault(fileConfigDefaults.discord.retries),
             enableInDMs: z.boolean().optional().prefault(fileConfigDefaults.discord.enableInDMs),
             previousBotId: z.string().optional(),
         })

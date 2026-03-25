@@ -77,7 +77,7 @@ export class HandleChatMessageUseCase {
         private readonly bot: IChatClientBot,
         private readonly previousBotId: string | undefined,
         private readonly messagePageRepo: IMessagePageRepository,
-        private readonly defaultRetriesLeft: number,
+        private readonly retries: number,
         private readonly searchMode: SearchMode,
         private readonly messageBuilder: AgentMessageBuilder,
         private readonly chatMessageService?: IChatMessageService,
@@ -683,9 +683,9 @@ export class HandleChatMessageUseCase {
         const sourcesLinePromise = isFailure ? Promise.resolve(null) : this.resolveGroundingSources(newMessages);
 
         // Attach a Retry button when the use case signals a retryable failure and retries remain.
-        // retriesLeft=undefined means this is a fresh response — use defaultRetriesLeft.
+        // retriesLeft=undefined means this is a fresh response — use configured retries.
         // retriesLeft=0 means all retries exhausted — suppress the button.
-        const effectiveRetriesLeft = retriesLeft ?? this.defaultRetriesLeft;
+        const effectiveRetriesLeft = retriesLeft ?? this.retries;
         const retryButton: IChatClientMessageButton | undefined =
             isRetryable && effectiveRetriesLeft > 0
                 ? {
