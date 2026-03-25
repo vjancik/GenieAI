@@ -4,6 +4,20 @@ import { ConfigError } from "../../domain/errors/AppError.ts";
 import type { Logger } from "../types/Logger.ts";
 import { THINKING_LEVELS } from "../types/ThinkingLevel.ts";
 
+/**
+ * Controls which API key pool is used when invoking an agent node.
+ * - "free": round-robin rotation over the free key pool (GOOGLE_FREE_API_KEYS)
+ * - "paid": single paid key (GOOGLE_PAID_API_KEY)
+ */
+export const ApiKeyType = {
+    free: "free",
+    paid: "paid",
+} as const;
+
+export type ApiKeyType = (typeof ApiKeyType)[keyof typeof ApiKeyType];
+
+const API_KEY_TYPES = Object.values(ApiKeyType) as readonly ApiKeyType[];
+
 /** Controls how file attachments are included in LLM requests. */
 export const AttachmentMode = {
     inline: "inline",
@@ -101,6 +115,11 @@ const agentModelSchema = z.object({
     fallbackModel: z.string().optional(),
     /** Maximum milliseconds to wait for a model response before aborting. */
     timeoutMs: z.number().int().positive(),
+    /** Which API key pool to use when invoking this node ("free" or "paid"). */
+    apiKeyType: z
+        .string()
+        .transform((v) => v.toLowerCase())
+        .pipe(z.enum(API_KEY_TYPES)),
 });
 
 const searchModelSchema = agentModelSchema.extend({

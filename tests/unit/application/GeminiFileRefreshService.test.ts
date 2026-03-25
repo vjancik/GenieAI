@@ -45,9 +45,19 @@ const testConfig = {
             maxInlineAttachmentSizeMB: 100,
             maxInlineAttachmentSizeBytes: 100 * 1024 * 1024,
             nodes: {
-                triage: { model: "gemini-test", timeoutMs: 60_000, thinkingLevel: "LOW" as const },
-                general: { model: "gemini-test", timeoutMs: 120_000 },
-                search: { model: "gemini-test", timeoutMs: 120_000, mode: "google" as const },
+                triage: {
+                    model: "gemini-test",
+                    timeoutMs: 60_000,
+                    thinkingLevel: "LOW" as const,
+                    apiKeyType: "free" as const,
+                },
+                general: { model: "gemini-test", timeoutMs: 120_000, apiKeyType: "free" as const },
+                search: {
+                    model: "gemini-test",
+                    timeoutMs: 120_000,
+                    mode: "google" as const,
+                    apiKeyType: "paid" as const,
+                },
             },
         },
         ytDlp: { retries: 1 },

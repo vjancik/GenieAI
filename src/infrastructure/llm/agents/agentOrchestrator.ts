@@ -3,7 +3,7 @@ import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/
 import { Command, END, MessagesValue, ReducedValue, START, StateGraph, StateSchema } from "@langchain/langgraph";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
-import { type AppConfig, SearchMode } from "../../../application/config/AppConfig.ts";
+import { type ApiKeyType, type AppConfig, SearchMode } from "../../../application/config/AppConfig.ts";
 import { dbMessagesToLangchain, extractContent } from "../../../application/helpers/messageTransformers.ts";
 import type { IAgentOrchestrator } from "../../../application/ports/IAgentOrchestrator.ts";
 import type { IModelProvider } from "../../../application/ports/IModelProvider.ts";
@@ -128,11 +128,19 @@ export interface ModelTimeouts {
  * refreshing Gemini file upload state per key before each model invocation. The search
  * node always uses the paid key with no rotation.
  */
+/** Per-node API key type configuration. */
+interface NodeApiKeyTypes {
+    triage: ApiKeyType;
+    general: ApiKeyType;
+    search: ApiKeyType;
+}
+
 export class AgentOrchestrator implements IAgentOrchestrator {
     // Type inferred from buildGraph() return — avoids complex LangGraph generic annotation
     // biome-ignore lint/suspicious/noExplicitAny: LangGraph compiled graph generic is impractical to annotate
     private readonly graph: ReturnType<() => any>;
     private readonly nodeTimeoutsMs: ModelTimeouts;
+    private readonly nodeApiKeyTypes: NodeApiKeyTypes;
     private readonly searchMode: SearchMode;
 
     constructor(
@@ -153,6 +161,11 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             triage: config.file.agent.nodes.triage.timeoutMs,
             general: config.file.agent.nodes.general.timeoutMs,
             search: config.file.agent.nodes.search.timeoutMs,
+        };
+        this.nodeApiKeyTypes = {
+            triage: config.file.agent.nodes.triage.apiKeyType,
+            general: config.file.agent.nodes.general.apiKeyType,
+            search: config.file.agent.nodes.search.apiKeyType,
         };
         this.graph = this.buildGraph();
     }
@@ -332,7 +345,8 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     ? this.tavilyOnlyTriageProvider
                     : this.triageProvider;
 
-            const { result: triageResponse } = await this.invoker.invokeWithFreeKeys(
+            const { result: triageResponse } = await this.invoker.invoke(
+                this.nodeApiKeyTypes.triage,
                 activeTriageProvider.get.bind(activeTriageProvider),
                 activeTriageProvider.getFallback.bind(activeTriageProvider),
                 messages,
@@ -545,7 +559,8 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 ...state.messages,
             ];
 
-            const { result: response, usedFallback } = await this.invoker.invokeWithFreeKeys(
+            const { result: response, usedFallback } = await this.invoker.invoke(
+                this.nodeApiKeyTypes.general,
                 this.generalProvider.get.bind(this.generalProvider),
                 this.generalProvider.getFallback.bind(this.generalProvider),
                 invokeMessages,
@@ -644,7 +659,8 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     tavilyResultMessage,
                 ];
 
-                const { result, usedFallback } = await this.invoker.invokeWithFreeKeys(
+                const { result, usedFallback } = await this.invoker.invoke(
+                    this.nodeApiKeyTypes.search,
                     this.searchProvider.get.bind(this.searchProvider),
                     this.searchProvider.getFallback.bind(this.searchProvider),
                     invokeMessages,
@@ -664,7 +680,8 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 new SystemMessage(buildSearchSystemPrompt(dateStr, this.searchMode)),
                 ...state.messages,
             ];
-            const { result: response, usedFallback } = await this.invoker.invokeWithFreeKeys(
+            const { result: response, usedFallback } = await this.invoker.invoke(
+                this.nodeApiKeyTypes.search,
                 this.searchProvider.get.bind(this.searchProvider),
                 this.searchProvider.getFallback.bind(this.searchProvider),
                 messages,

@@ -55,6 +55,7 @@ agent:
   nodes:
     triage:
       model: "gemini-3.1-flash-lite-preview"  # <required>
+      apiKeyType: "free"                      # <required>
       fallbackModel: "gemini-2.5-flash"       # <optional>
       # Maximum milliseconds to wait for a triage model response before aborting.
       timeoutMs: 60000                        # <required>
@@ -62,12 +63,14 @@ agent:
 
     general:
       model: "gemini-3-flash-preview"   # <required>
+      apiKeyType: "free"                # <required>
       fallbackModel: "gemini-2.5-flash" # <optional>
       # Maximum milliseconds to wait for a general model response before aborting.
       timeoutMs: 120000                 # <required>
 
     search:
-      model: "gemini-2.5-flash"         # <required>
+      model: "gemini-3-flash-preview"   # <required>
+      apiKeyType: "paid"                # <required>
       fallbackModel: "gemini-2.5-flash" # <optional>
       # Maximum milliseconds to wait for a search model response before aborting.
       timeoutMs: 120000                 # <required>

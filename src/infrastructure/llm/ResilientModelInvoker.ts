@@ -1,7 +1,10 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
-import type { AttachmentMode } from "../../application/config/AppConfig.ts";
-import { AttachmentMode as AttachmentModeValues } from "../../application/config/AppConfig.ts";
+import {
+    ApiKeyType,
+    type AttachmentMode,
+    AttachmentMode as AttachmentModeValues,
+} from "../../application/config/AppConfig.ts";
 import type { IGeminiFileRefreshService } from "../../application/ports/IGeminiFileRefreshService.ts";
 import type {
     IInvokableModel,
@@ -50,6 +53,18 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
         timeoutMs?: number,
     ): Promise<ModelInvocationResult> {
         return this.invokeWithKeyRotation(getModel, getFallbackModel, messages, timeoutMs, this.paidKeyProvider, true);
+    }
+
+    invoke(
+        keyType: ApiKeyType,
+        getModel: (key: GeminiApiKey) => IInvokableModel,
+        getFallbackModel: ((key: GeminiApiKey) => IInvokableModel | undefined) | undefined,
+        messages: BaseMessage[],
+        timeoutMs?: number,
+    ): Promise<ModelInvocationResult> {
+        return keyType === ApiKeyType.paid
+            ? this.invokeWithPaidKey(getModel, getFallbackModel, messages, timeoutMs)
+            : this.invokeWithFreeKeys(getModel, getFallbackModel, messages, timeoutMs);
     }
 
     /**

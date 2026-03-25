@@ -1,5 +1,6 @@
 import type { AIMessageChunk, BaseMessage } from "@langchain/core/messages";
 import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
+import type { ApiKeyType } from "../config/AppConfig.ts";
 
 /** Minimal invokable model interface used by the resilient invoker. */
 export interface IInvokableModel {
@@ -48,6 +49,18 @@ export interface IResilientModelInvoker {
      * @throws {PaidKeyExhaustedError} if the paid key is rate-limited
      */
     invokeWithPaidKey(
+        getModel: (key: GeminiApiKey) => IInvokableModel,
+        getFallbackModel: ((key: GeminiApiKey) => IInvokableModel | undefined) | undefined,
+        messages: BaseMessage[],
+        timeoutMs?: number,
+    ): Promise<ModelInvocationResult>;
+
+    /**
+     * Dispatches to {@link invokeWithFreeKeys} or {@link invokeWithPaidKey} based on `keyType`.
+     * Prefer this over the individual methods when the key type is a runtime value.
+     */
+    invoke(
+        keyType: ApiKeyType,
         getModel: (key: GeminiApiKey) => IInvokableModel,
         getFallbackModel: ((key: GeminiApiKey) => IInvokableModel | undefined) | undefined,
         messages: BaseMessage[],

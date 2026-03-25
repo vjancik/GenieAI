@@ -17,14 +17,17 @@ agent:
       model: "gemini-flash-lite"
       fallbackModel: "gemini-flash"
       timeoutMs: 60000
+      apiKeyType: "free"
     general:
       model: "gemini-flash"
       fallbackModel: "gemini-flash"
       timeoutMs: 120000
+      apiKeyType: "free"
     search:
       model: "gemini-pro"
       fallbackModel: "gemini-flash"
       timeoutMs: 120000
+      apiKeyType: "paid"
 `;
 
 describe("parseFileConfig", () => {
@@ -44,12 +47,15 @@ agent:
     triage:
       model: "gemini-flash-lite"
       timeoutMs: 60000
+      apiKeyType: "free"
     general:
       model: "gemini-flash"
       timeoutMs: 120000
+      apiKeyType: "free"
     search:
       model: "gemini-pro"
       timeoutMs: 120000
+      apiKeyType: "paid"
 `;
         const config = parseFileConfig(yaml);
         expect(config.agent.nodes.triage.fallbackModel).toBeUndefined();
@@ -149,12 +155,15 @@ agent:
     triage:
       model: "gemini-flash-lite"
       timeoutMs: 60000
+      apiKeyType: "free"
     general:
       model: "gemini-flash"
       timeoutMs: 120000
+      apiKeyType: "free"
     search:
       model: "gemini-pro"
       timeoutMs: 120000
+      apiKeyType: "paid"
 typoKey: oops
 `;
         parseFileConfig(yaml, "test.yaml", logger);
@@ -173,13 +182,16 @@ agent:
     triage:
       model: "gemini-flash-lite"
       timeoutMs: 60000
+      apiKeyType: "free"
       misspelledFallback: "gemini-flash"
     general:
       model: "gemini-flash"
       timeoutMs: 120000
+      apiKeyType: "free"
     search:
       model: "gemini-pro"
       timeoutMs: 120000
+      apiKeyType: "paid"
 `;
         parseFileConfig(yaml, "test.yaml", logger);
         expect(warnMock).toHaveBeenCalledTimes(1);
@@ -196,12 +208,15 @@ agent:
     triage:
       model: "gemini-flash-lite"
       timeoutMs: 60000
+      apiKeyType: "free"
     general:
       model: "gemini-flash"
       timeoutMs: 120000
+      apiKeyType: "free"
     search:
       model: "gemini-pro"
       timeoutMs: 120000
+      apiKeyType: "paid"
 unknownKey: oops
 `;
         // Should not throw even with unknown keys when no logger passed
@@ -215,13 +230,16 @@ agent:
     triage:
       model: "gemini-flash-lite"
       timeoutMs: 60000
+      apiKeyType: "free"
       thinkingLevel: "low"
     general:
       model: "gemini-flash"
       timeoutMs: 120000
+      apiKeyType: "free"
     search:
       model: "gemini-pro"
       timeoutMs: 120000
+      apiKeyType: "paid"
 `;
         const config = parseFileConfig(yaml);
         expect(config.agent.nodes.triage.thinkingLevel).toBe("LOW");
@@ -235,12 +253,15 @@ agent:
     triage:
       model: "gemini-flash-lite"
       timeoutMs: 60000
+      apiKeyType: "free"
     general:
       model: "gemini-flash"
       timeoutMs: 120000
+      apiKeyType: "free"
     search:
       model: "gemini-pro"
       timeoutMs: 120000
+      apiKeyType: "paid"
 `;
         const config = parseFileConfig(yaml);
         expect(config.agent.uploadAttachmentMode).toBe("upload");
