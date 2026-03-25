@@ -1,4 +1,4 @@
-import { Client, Events, GatewayIntentBits } from "discord.js";
+import { Client, Events, GatewayIntentBits, Partials } from "discord.js";
 import type { Logger } from "../../application/types/Logger.ts";
 
 /**
@@ -25,6 +25,7 @@ export class DiscordClient {
                 GatewayIntentBits.MessageContent,
                 GatewayIntentBits.DirectMessages,
             ],
+            partials: [Partials.Channel],
         });
 
         this.client.once(Events.ClientReady, (readyClient) => {
