@@ -38,6 +38,9 @@ export class StatusMessageUpdater {
     /** Pending timer + latest content per messageId. */
     private readonly pendingByMessage = new Map<string, MessagePending>();
 
+    /** Content of the last edit that was actually fired per messageId. */
+    private readonly lastFiredContentByMessage = new Map<string, string>();
+
     /**
      * @param logger - Logger for warning on edit failures
      * @param rateLimitMs - Minimum ms between edits per channel (default: 2000). Configurable for testing.
@@ -100,6 +103,7 @@ export class StatusMessageUpdater {
         if (pending) {
             clearTimeout(pending.timer);
             this.pendingByMessage.delete(messageId);
+            this.lastFiredContentByMessage.delete(messageId);
         }
     }
 
@@ -113,6 +117,13 @@ export class StatusMessageUpdater {
             if (!pending) return;
 
             this.pendingByMessage.delete(messageId);
+
+            // Skip the edit if the content hasn't changed since the last fired update —
+            // prevents the Discord message timestamp from resetting when the agent state
+            // is unchanged (e.g. rapid re-schedules during the same processing phase).
+            if (this.lastFiredContentByMessage.get(messageId) === pending.latestContent) return;
+
+            this.lastFiredContentByMessage.set(messageId, pending.latestContent);
             this.channelLastEdit.set(channelId, Date.now());
             this.fireEdit(messageId, pending.editFn, pending.latestContent);
         }, delay);
