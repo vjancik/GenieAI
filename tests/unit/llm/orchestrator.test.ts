@@ -114,7 +114,7 @@ function asProvider<T>(model: T) {
 
 /** Minimal IRoundRobinKeyProvider stub — single key, no rotation side-effects. */
 function makeFreeKeyProvider() {
-    const key = { id: "free-key-id", apiKey: "free-key", isPaid: false };
+    const key = { id: "free-key-id", apiKey: "free-key", isPaid: false, lastUsed: false };
     return {
         get currentKey() {
             return key;
@@ -725,11 +725,12 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
      * request advancing the cursor between an invoke and the catch handler.
      */
     function makeMultiKeyProvider(n: number) {
-        type Key = { id: string; apiKey: string; isPaid: false };
+        type Key = { id: string; apiKey: string; isPaid: false; lastUsed: false };
         const keys: Key[] = Array.from({ length: n }, (_, i) => ({
             id: `key-${i}`,
             apiKey: `k${i}`,
             isPaid: false as const,
+            lastUsed: false as const,
         }));
         let idx = 0;
         // idx is always in [0, n-1] via modulo, so keys[idx] is always defined.

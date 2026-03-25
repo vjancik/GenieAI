@@ -1,4 +1,4 @@
-import { ne, sql } from "drizzle-orm";
+import { eq, ne, sql } from "drizzle-orm";
 import type { IGeminiApiKeyRepository } from "../../../application/ports/IGeminiApiKeyRepository.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
 import { DatabaseError } from "../../../domain/errors/AppError.ts";
@@ -30,7 +30,12 @@ function buildUpsertKeyStmt(db: Db) {
                 isActive: true,
             },
         })
-        .returning({ id: geminiApiKeys.id, apiKey: geminiApiKeys.apiKey, isPaid: geminiApiKeys.isPaid })
+        .returning({
+            id: geminiApiKeys.id,
+            apiKey: geminiApiKeys.apiKey,
+            isPaid: geminiApiKeys.isPaid,
+            lastUsed: geminiApiKeys.lastUsed,
+        })
         .prepare("gemini_api_key_upsert");
 }
 
@@ -46,8 +51,24 @@ function buildDeactivateNotInStmt(db: Db) {
         .update(geminiApiKeys)
         .set({ isActive: false })
         .where(ne(geminiApiKeys.apiKey, sql`ALL(${sql.placeholder("keys")})`))
-
         .prepare("gemini_api_key_deactivate_not_in");
+}
+
+/**
+ * Prepared statement: clear lastUsed from all free keys then set it on the given id.
+ *
+ * Scoped to isPaid = false so paid keys are never touched.
+ * Uses a CASE expression so all free-key rows are updated in a single pass:
+ * each row either gets lastUsed = true (the target key) or lastUsed = false.
+ * This avoids a two-step clear-then-set that could leave all keys false if
+ * the process dies between the two statements.
+ */
+function buildSetLastUsedStmt(db: Db) {
+    return db
+        .update(geminiApiKeys)
+        .set({ lastUsed: sql`${geminiApiKeys.id} = ${sql.placeholder("id")}` })
+        .where(eq(geminiApiKeys.isPaid, false))
+        .prepare("gemini_api_key_set_last_used");
 }
 
 /**
@@ -64,6 +85,7 @@ function buildDeactivateNotInStmt(db: Db) {
 export class PgGeminiApiKeyRepository implements IGeminiApiKeyRepository {
     private readonly stmtUpsertKey: ReturnType<typeof buildUpsertKeyStmt>;
     private readonly stmtDeactivateNotIn: ReturnType<typeof buildDeactivateNotInStmt>;
+    private readonly stmtSetLastUsed: ReturnType<typeof buildSetLastUsedStmt>;
 
     constructor(
         db: Db,
@@ -71,6 +93,7 @@ export class PgGeminiApiKeyRepository implements IGeminiApiKeyRepository {
     ) {
         this.stmtUpsertKey = buildUpsertKeyStmt(db);
         this.stmtDeactivateNotIn = buildDeactivateNotInStmt(db);
+        this.stmtSetLastUsed = buildSetLastUsedStmt(db);
     }
 
     /**
@@ -95,10 +118,25 @@ export class PgGeminiApiKeyRepository implements IGeminiApiKeyRepository {
                 id: result.id,
                 apiKey: result.apiKey,
                 isPaid: result.isPaid,
+                lastUsed: result.lastUsed,
             };
         } catch (err) {
             if (err instanceof DatabaseError) throw err;
             throw new DatabaseError("Failed to upsert Gemini API key", err);
+        }
+    }
+
+    /**
+     * Sets `lastUsed = true` on the given key and `lastUsed = false` on all others
+     * in a single UPDATE pass. Used by {@link RoundRobinFreeKeyProvider} to persist
+     * rotation position across restarts. Errors are logged and not re-thrown.
+     */
+    async setLastUsed(id: string): Promise<void> {
+        try {
+            await this.stmtSetLastUsed.execute({ id });
+            this.logger.debug({ apiKeyId: id }, "Marked Gemini API key as last-used");
+        } catch (err) {
+            this.logger.error({ err, apiKeyId: id }, "Failed to persist last-used Gemini API key");
         }
     }
 

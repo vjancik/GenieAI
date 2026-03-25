@@ -15,4 +15,10 @@ export interface GeminiApiKey {
     apiKey: string;
     /** Whether this is a paid key (eligible for Google Search grounding) or a free-tier key */
     isPaid: boolean;
+    /**
+     * Whether this key was the last one used before the previous shutdown.
+     * Used by {@link RoundRobinFreeKeyProvider} to resume rotation across restarts.
+     * At most one key should have this set to true at any time (best-effort, not enforced).
+     */
+    lastUsed: boolean;
 }

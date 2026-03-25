@@ -99,7 +99,7 @@ const getVideoCaptionsTool = await createGetVideoCaptionsTool(
 const tavilyTool = config.file.agent.nodes.search.mode === "tavily" ? createTavilyTool() : undefined;
 
 // Lazy model providers — one ChatGoogle client per (provider, apiKey) pair
-const freeKeyProvider = new RoundRobinFreeKeyProvider(freeKeys);
+const freeKeyProvider = new RoundRobinFreeKeyProvider(freeKeys, geminiApiKeyRepository);
 // TYPE COERCION: validateConfig throws before this point if any node uses apiKeyType "paid" without GOOGLE_PAID_API_KEY set
 // biome-ignore lint/style/noNonNullAssertion: guaranteed non-null by validateConfig above
 const paidKeyProvider = new SinglePaidKeyProvider(paidKey!);

@@ -1,0 +1,1 @@
+ALTER TABLE "gemini_api_keys" ADD COLUMN "last_used" boolean DEFAULT false NOT NULL;

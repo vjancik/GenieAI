@@ -215,3 +215,42 @@ describe("PgGeminiApiKeyRepository.deactivateNotIn", () => {
         expect(uploads[0]?.geminiFileName).toBe("files/deactivate-test-uuid");
     });
 });
+
+describe("PgGeminiApiKeyRepository.setLastUsed", () => {
+    test("marks the given key as lastUsed=true and clears it on all others", async () => {
+        const k1 = await repo.upsert({ apiKey: "k1", isPaid: false });
+        const k2 = await repo.upsert({ apiKey: "k2", isPaid: false });
+        const k3 = await repo.upsert({ apiKey: "k3", isPaid: false });
+
+        await repo.setLastUsed(k2.id);
+
+        const rows = await db.select().from(geminiApiKeys).orderBy(geminiApiKeys.apiKey);
+        expect(rows.find((r) => r.id === k1.id)?.lastUsed).toBe(false);
+        expect(rows.find((r) => r.id === k2.id)?.lastUsed).toBe(true);
+        expect(rows.find((r) => r.id === k3.id)?.lastUsed).toBe(false);
+    });
+
+    test("moves the lastUsed flag when called again with a different key", async () => {
+        const k1 = await repo.upsert({ apiKey: "k1", isPaid: false });
+        const k2 = await repo.upsert({ apiKey: "k2", isPaid: false });
+
+        await repo.setLastUsed(k1.id);
+        await repo.setLastUsed(k2.id);
+
+        const rows = await db.select().from(geminiApiKeys);
+        expect(rows.find((r) => r.id === k1.id)?.lastUsed).toBe(false);
+        expect(rows.find((r) => r.id === k2.id)?.lastUsed).toBe(true);
+    });
+
+    test("does not touch paid keys", async () => {
+        const free = await repo.upsert({ apiKey: "free-k", isPaid: false });
+        const paid = await repo.upsert({ apiKey: "paid-k", isPaid: true });
+
+        await repo.setLastUsed(free.id);
+
+        const rows = await db.select().from(geminiApiKeys);
+        expect(rows.find((r) => r.id === free.id)?.lastUsed).toBe(true);
+        // Paid key must remain untouched (lastUsed stays false)
+        expect(rows.find((r) => r.id === paid.id)?.lastUsed).toBe(false);
+    });
+});

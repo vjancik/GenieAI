@@ -7,13 +7,14 @@ import type { GeminiApiKey } from "../../../src/domain/message/GeminiApiKey.ts";
 const testLogger = pino({ level: "silent" });
 
 function makeKey(apiKey: string, isPaid: boolean): GeminiApiKey {
-    return { id: `id-${apiKey}`, apiKey, isPaid };
+    return { id: `id-${apiKey}`, apiKey, isPaid, lastUsed: false };
 }
 
 function makeRepo(): IGeminiApiKeyRepository {
     return {
         upsert: mock(async ({ apiKey, isPaid }) => makeKey(apiKey, isPaid)),
         deactivateNotIn: mock(async () => {}),
+        setLastUsed: mock(async () => {}),
     };
 }
 
@@ -113,6 +114,7 @@ describe("GeminiApiKeySyncService.sync", () => {
             deactivateNotIn: mock(async () => {
                 callOrder.push("deactivateNotIn");
             }),
+            setLastUsed: mock(async () => {}),
         };
         const service = new GeminiApiKeySyncService(repo, testLogger);
 

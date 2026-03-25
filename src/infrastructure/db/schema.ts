@@ -167,6 +167,13 @@ export const geminiApiKeys = pgTable("gemini_api_keys", {
      * when the key reappears in env at startup.
      */
     isActive: boolean("is_active").notNull().default(true),
+    /**
+     * Whether this key was the last one used before the previous shutdown.
+     * Set to true on each key rotation; cleared from the previous key.
+     * Used by RoundRobinFreeKeyProvider to resume rotation position across restarts.
+     * At most one row should have this true at any time (best-effort, not DB-enforced).
+     */
+    lastUsed: boolean("last_used").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
