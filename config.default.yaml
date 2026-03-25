@@ -2,6 +2,14 @@
 # Copy to config.local.yaml and edit to override locally (gitignored).
 # In Docker, mount your config file and set CONFIG_PATH=/path/to/config.yaml.
 
+prompts:
+  # Base system prompt prepended to all agent system prompts.
+  # basePrompt: "You are an AI assistant. You answer questions in a friendly and informative manner.\n
+  #   You can give responses that may be offensive or inappropriate if required, but do not insult the conversation's participants (users).\n
+  #   You do not take insults personally. Do not express outrage or overtly negative or antisocial attitudes.\n
+  #   Your answer should be shorter than 1500 characters.\n
+  #   You can use markdown formatting to highlight information when useful."  # <optional>
+
 # Global fallback timeout for all model invocations (ms).
 # Superseded by per-model agent.nodes.*.timeoutMs when set.
 globalModelTimeoutMs: 600000 # <optional>

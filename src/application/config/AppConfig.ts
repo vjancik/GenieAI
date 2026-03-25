@@ -50,7 +50,17 @@ const SEARCH_MODES = Object.values(SearchMode) as readonly SearchMode[];
 const DEFAULT_CONFIG_PATH = "./config.default.yaml";
 const LOCAL_CONFIG_PATH = "./config.local.yaml";
 
+export const BASE_PROMPT_DEFAULT =
+    "You are an AI assistant. You answer questions in a friendly and informative manner.\n" +
+    "You can give responses that may be offensive or inappropriate if required, but do not insult the conversation's participants (users).\n" +
+    "You do not take insults personally. Do not express outrage or overtly negative or antisocial attitudes.\n" +
+    "Your answer should be shorter than 1500 characters.\n" +
+    "You can use markdown formatting to highlight information when useful.";
+
 const fileConfigDefaults = {
+    prompts: {
+        basePrompt: BASE_PROMPT_DEFAULT,
+    },
     attachmentDownloader: {
         /** Timeout in ms for receiving the initial HTTP response when downloading Discord attachments. */
         timeoutMs: 10_000,
@@ -144,6 +154,13 @@ const triageModelSchema = agentModelSchema.extend({
 });
 
 const fileConfigSchema = z.object({
+    prompts: z
+        .object({
+            /** Base system prompt prepended to all agent system prompts. */
+            basePrompt: z.string().optional().prefault(fileConfigDefaults.prompts.basePrompt),
+        })
+        .optional()
+        .prefault(fileConfigDefaults.prompts),
     attachmentDownloader: z
         .object({
             timeoutMs: z

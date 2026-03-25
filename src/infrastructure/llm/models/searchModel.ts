@@ -3,7 +3,7 @@ import * as Sentry from "@sentry/bun";
 import { SearchMode } from "../../../application/config/AppConfig.ts";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
-import { BASE_USER_FACING_PROMPT, SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
+import { SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
 import { blockHighSafetySettings, neverTool } from "./sharedGeminiSettings.ts";
 
 /**
@@ -17,9 +17,9 @@ import { blockHighSafetySettings, neverTool } from "./sharedGeminiSettings.ts";
  * @param dateStr - Human-readable date string representing today (e.g. "Sunday, March 22, 2026")
  * @param searchMode - Determines whether Google Search instructions are included
  */
-export function buildSearchSystemPrompt(dateStr: string, searchMode: SearchMode): string {
+export function buildSearchSystemPrompt(basePrompt: string, dateStr: string, searchMode: SearchMode): string {
     return (
-        BASE_USER_FACING_PROMPT +
+        basePrompt +
         "\n" +
         `You should assume the current date is ${dateStr}. Do not mention the date unless the user asks about it.\n` +
         (searchMode === SearchMode.google

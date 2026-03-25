@@ -65,6 +65,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
                 },
             },
             ytDlp: { retries: 1 },
+            prompts: { basePrompt: "You are an AI assistant." },
         },
     };
     return { ...base, ...overrides };

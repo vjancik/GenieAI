@@ -142,6 +142,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     private readonly nodeTimeoutsMs: ModelTimeouts;
     private readonly nodeApiKeyTypes: NodeApiKeyTypes;
     private readonly searchMode: SearchMode;
+    private readonly basePrompt: string;
 
     constructor(
         private readonly triageProvider: IModelProvider,
@@ -157,6 +158,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         private readonly tavilyOnlyTriageProvider?: IModelProvider,
     ) {
         this.searchMode = config.file.agent.nodes.search.mode;
+        this.basePrompt = config.file.prompts.basePrompt;
         this.nodeTimeoutsMs = {
             triage: config.file.agent.nodes.triage.timeoutMs,
             general: config.file.agent.nodes.general.timeoutMs,
@@ -555,7 +557,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             this.logger.debug({ dateStr, hasVideoCaptions, hasToolResult }, "General node prompt parameters");
 
             const invokeMessages: BaseMessage[] = [
-                new SystemMessage(buildGeneralSystemPrompt(dateStr, hasVideoCaptions, hasToolResult)),
+                new SystemMessage(buildGeneralSystemPrompt(this.basePrompt, dateStr, hasVideoCaptions, hasToolResult)),
                 ...state.messages,
             ];
 
@@ -654,7 +656,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     : {};
 
                 const invokeMessages: BaseMessage[] = [
-                    new SystemMessage(buildSearchSystemPrompt(dateStr, this.searchMode)),
+                    new SystemMessage(buildSearchSystemPrompt(this.basePrompt, dateStr, this.searchMode)),
                     ...state.messages,
                     tavilyResultMessage,
                 ];
@@ -677,7 +679,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             }
 
             const messages: BaseMessage[] = [
-                new SystemMessage(buildSearchSystemPrompt(dateStr, this.searchMode)),
+                new SystemMessage(buildSearchSystemPrompt(this.basePrompt, dateStr, this.searchMode)),
                 ...state.messages,
             ];
             const { result: response, usedFallback } = await this.invoker.invoke(

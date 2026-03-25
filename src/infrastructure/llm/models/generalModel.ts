@@ -2,7 +2,7 @@ import { ChatGoogle } from "@langchain/google/node";
 import * as Sentry from "@sentry/bun";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
-import { BASE_USER_FACING_PROMPT, SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
+import { SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
 import { blockHighSafetySettings, neverTool } from "./sharedGeminiSettings.ts";
 
 // TODO: rebuild only once a day, return cached otherwise
@@ -16,12 +16,13 @@ import { blockHighSafetySettings, neverTool } from "./sharedGeminiSettings.ts";
  *   triggering hallucinated tool calls on models that confuse timestamp hints with tool use.
  */
 export function buildGeneralSystemPrompt(
+    basePrompt: string,
     dateStr: string,
     includeVideoCaptionHints = false,
     hasToolResult = false,
 ): string {
     return (
-        BASE_USER_FACING_PROMPT +
+        basePrompt +
         "\n" +
         `You should assume the current date is ${dateStr} and your base knowledge is outdated by more than a year. Do not mention the date unless the user asks about it.\n` +
         (includeVideoCaptionHints

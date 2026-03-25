@@ -50,6 +50,7 @@ const testConfig = {
             },
         },
         ytDlp: { retries: 1 },
+        prompts: { basePrompt: "You are an AI assistant." },
     },
 };
 
