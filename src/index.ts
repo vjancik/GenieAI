@@ -16,8 +16,12 @@ import * as Sentry from "@sentry/bun";
 import { ConfigProvider } from "./application/config/AppConfig.ts";
 import { GeminiApiKeySyncService } from "./application/services/GeminiApiKeySyncService.ts";
 import { GeminiFileRefreshService } from "./application/services/GeminiFileRefreshService.ts";
-import { GetNextPageUseCase } from "./application/use-cases/GetNextPage.ts";
-import { HandleDiscordMessageUseCase } from "./application/use-cases/HandleDiscordMessage.ts";
+import { StatusMessageUpdater } from "./application/services/StatusMessageUpdater.ts";
+import { HandleChatMessageUseCase } from "./application/use-cases/HandleChatMessage.ts";
+import { HandleExportUseCase } from "./application/use-cases/HandleMessageExport.ts";
+import { HandleNextPageUseCase } from "./application/use-cases/HandleMessageNextPage.ts";
+import { HandleRetryUseCase } from "./application/use-cases/HandleMessageRetry.ts";
+import { HandleSummarizeUseCase } from "./application/use-cases/HandleMessageSummarize.ts";
 import { FetchAttachmentDownloader } from "./infrastructure/attachments/FetchAttachmentDownloader.ts";
 import { FetchDiskAttachmentDownloader } from "./infrastructure/attachments/FetchDiskAttachmentDownloader.ts";
 import { GenaiFileUploaderRegistry } from "./infrastructure/attachments/GenaiFileUploaderRegistry.ts";
@@ -27,13 +31,14 @@ import { PgGeminiApiKeyRepository } from "./infrastructure/db/repositories/PgGem
 import { PgGeminiFileRepository } from "./infrastructure/db/repositories/PgGeminiFileRepository.ts";
 import { PgMessagePageRepository } from "./infrastructure/db/repositories/PgMessagePageRepository.ts";
 import { PgMessageRepository } from "./infrastructure/db/repositories/PgMessageRepository.ts";
+import { DiscordClientBot } from "./infrastructure/discord/adapters/DiscordClientBot.ts";
 import { DiscordChatMessageService } from "./infrastructure/discord/DiscordChatMessageService.ts";
 import { DiscordClient } from "./infrastructure/discord/DiscordClient.ts";
 import { DiscordCommandRegistry } from "./infrastructure/discord/DiscordCommandRegistry.ts";
 import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
 import { DiscordMediaService } from "./infrastructure/discord/DiscordMediaService.ts";
+import { InteractionLock } from "./infrastructure/discord/InteractionLock.ts";
 import { RateLimiter } from "./infrastructure/discord/RateLimiter.ts";
-import { StatusMessageUpdater } from "./infrastructure/discord/StatusMessageUpdater.ts";
 import { HtmlToImageRenderer } from "./infrastructure/exporters/HtmlToImageRenderer.ts";
 import { MarkdownToHtmlRenderer } from "./infrastructure/exporters/MarkdownToHtmlRenderer.ts";
 import { AgentOrchestrator } from "./infrastructure/llm/agents/agentOrchestrator.ts";
@@ -164,23 +169,9 @@ const discordChatMessageService = new DiscordChatMessageService(
     config.file,
 );
 
-// Application use case
-const handleDiscordMessageUseCase = new HandleDiscordMessageUseCase(
-    messageRepository,
-    agentOrchestrator,
-    attachmentDownloader,
-    logger.child({ module: "discord-message-use-case" }),
-    config,
-    diskDownloader,
-    primaryUploader,
-    geminiFileRepository,
-    discordChatMessageService,
-);
-
 // Pagination
 const messagePageRepository = new PgMessagePageRepository(db, logger.child({ module: "repository:message-pages" }));
 const getNextPageQuery = new PgGetNextPageQuery(db);
-const getNextPage = new GetNextPageUseCase(getNextPageQuery, logger.child({ module: "get-next-page-use-case" }));
 
 // Exporters — singletons shared across all export command invocations
 const markdownToHtml = new MarkdownToHtmlRenderer();
@@ -188,21 +179,69 @@ const htmlToImage = new HtmlToImageRenderer();
 
 // Discord gateway
 const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
+const handleChatMessageUseCase = new HandleChatMessageUseCase(
+    agentOrchestrator,
+    messageRepository,
+    statusUpdater,
+    logger.child({ module: "handle-chat-message-use-case" }),
+    new DiscordClientBot(discordClient.client),
+    config.file.discord.previousBotId,
+    messagePageRepository,
+    config.file.discord.defaultRetriesLeft,
+    config.file.agent.nodes.search.mode,
+    attachmentDownloader,
+    config,
+    diskDownloader,
+    primaryUploader,
+    geminiFileRepository,
+    discordChatMessageService,
+);
+
+// Shared interaction lock — one instance reused across all use cases that need locking
+const interactionLock = new InteractionLock();
+
+const handleNextPageUseCase = new HandleNextPageUseCase(
+    getNextPageQuery,
+    messageRepository,
+    messagePageRepository,
+    new DiscordClientBot(discordClient.client),
+    logger.child({ module: "next-page" }),
+    interactionLock,
+);
+const handleRetryUseCase = new HandleRetryUseCase(
+    handleChatMessageUseCase,
+    messageRepository,
+    new DiscordClientBot(discordClient.client),
+    logger.child({ module: "retry" }),
+    interactionLock,
+);
+const handleSummarizeUseCase = new HandleSummarizeUseCase(
+    handleChatMessageUseCase,
+    messageRepository,
+    new DiscordClientBot(discordClient.client),
+);
+const handleExportUseCase = new HandleExportUseCase(
+    messageRepository,
+    markdownToHtml,
+    htmlToImage,
+    new DiscordClientBot(discordClient.client),
+    logger.child({ module: "export" }),
+    config.file.discord.previousBotId,
+    interactionLock,
+);
+
 const rateLimiter = new RateLimiter([
     { windowMs: 3_000, limit: 3 },
     { windowMs: 60_000, limit: 10 },
 ]);
 const discordGateway = new DiscordGateway(
     discordClient,
-    handleDiscordMessageUseCase,
+    handleChatMessageUseCase,
     logger.child({ module: "discord" }),
-    statusUpdater,
-    messagePageRepository,
-    getNextPage,
-    messageRepository,
-    config.file,
-    markdownToHtml,
-    htmlToImage,
+    handleNextPageUseCase,
+    handleRetryUseCase,
+    handleSummarizeUseCase,
+    handleExportUseCase,
     rateLimiter,
 );
 

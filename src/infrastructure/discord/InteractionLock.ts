@@ -1,3 +1,5 @@
+import type { IInteractionLock } from "../../application/ports/IInteractionLock.ts";
+
 /**
  * Prevents duplicate processing when multiple users click the same button
  * simultaneously. Discord does not deduplicate concurrent button clicks,
@@ -7,7 +9,7 @@
  * same message (e.g. Retry and Next Page) have independent locks and don't
  * block each other.
  */
-export class InteractionLock {
+export class InteractionLock implements IInteractionLock {
     private readonly locked = new Set<string>();
 
     private key(messageId: string, customId: string): string {

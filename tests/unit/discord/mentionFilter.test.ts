@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { Message } from "discord.js";
 import { MessageType } from "discord.js";
+import { extractUserContent } from "../../../src/application/helpers/extractUserContent.ts";
 import { parseMessageIntent } from "../../../src/application/helpers/parseMessageIntent.ts";
 import { MessageIntent } from "../../../src/domain/message/MessageIntent.ts";
 import { DiscordClientMessage } from "../../../src/infrastructure/discord/adapters/DiscordClientMessage.ts";
-import { extractUserContent } from "../../../src/infrastructure/discord/DiscordGateway.ts";
 
 const BOT_ID = "123456789";
 const OTHER_USER_ID = "987654321";

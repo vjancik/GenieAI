@@ -1,5 +1,6 @@
 import type { Browser, Page } from "playwright";
 import { chromium } from "playwright";
+import type { IImageRenderer } from "../../application/ports/IImageRenderer.ts";
 
 /**
  * Renders HTML strings to PNG images using a singleton headless Chromium instance.
@@ -8,7 +9,7 @@ import { chromium } from "playwright";
  * launching a new browser per render. Requests are serialized via a queue so
  * concurrent callers don't corrupt each other's page state.
  */
-export class HtmlToImageRenderer {
+export class HtmlToImageRenderer implements IImageRenderer {
     private static browser: Browser | null = null;
     private static page: Page | null = null;
     /** Serializes render calls — each request waits for the previous to finish. */

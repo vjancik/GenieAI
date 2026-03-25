@@ -4,6 +4,7 @@ import { Command, END, MessagesValue, ReducedValue, START, StateGraph, StateSche
 import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
 import { type AppConfig, SearchMode } from "../../../application/config/AppConfig.ts";
+import { dbMessagesToLangchain, extractContent } from "../../../application/helpers/messageTransformers.ts";
 import type { IAgentOrchestrator } from "../../../application/ports/IAgentOrchestrator.ts";
 import type { IModelProvider } from "../../../application/ports/IModelProvider.ts";
 import type { IModelTool } from "../../../application/ports/IModelTool.ts";
@@ -18,7 +19,6 @@ import { buildGeneralSystemPrompt } from "../models/generalModel.ts";
 import { buildSearchSystemPrompt } from "../models/searchModel.ts";
 import { buildTriageSystemPrompt } from "../models/triageModel.ts";
 import { safeParseTavilyResponse } from "../tools/tavilySearchTool.ts";
-import { dbMessagesToLangchain, extractContent } from "../utils/messageTransformers.ts";
 
 /**
  * Graph state schema: extends the prebuilt messages reducer with an `intent` field.

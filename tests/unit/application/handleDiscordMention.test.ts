@@ -6,7 +6,7 @@ import type { IAgentOrchestrator } from "../../../src/application/ports/IAgentOr
 import type { IAttachmentDownloader } from "../../../src/application/ports/IAttachmentDownloader.ts";
 import type { IChatMessageService } from "../../../src/application/ports/IChatMessageService.ts";
 import type { OnStatusUpdate } from "../../../src/application/types/AgentStatus.ts";
-import { HandleDiscordMessageUseCase } from "../../../src/application/use-cases/HandleDiscordMessage.ts";
+import { HandleDiscordMessageUseCase } from "../../../src/application/use-cases/_HandleDiscordMessage.ts";
 import type { IMessageRepository } from "../../../src/domain/message/IMessageRepository.ts";
 import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
 import { MessageIntent } from "../../../src/domain/message/MessageIntent.ts";

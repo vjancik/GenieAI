@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import pino from "pino";
-import { StatusMessageUpdater } from "../../../src/infrastructure/discord/StatusMessageUpdater.ts";
+import { StatusMessageUpdater } from "../../../src/application/services/StatusMessageUpdater.ts";
 
 const testLogger = pino({ level: "silent" });
 
