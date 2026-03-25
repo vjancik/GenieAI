@@ -12,6 +12,8 @@ export interface UploadStreamConfig extends Pick<UploadFileConfig, "name" | "mim
     byteLength: number;
 }
 
+// Implementation methods were hoisted to module level for easier mocking
+
 /**
  * Step 1 of the resumable upload protocol: POST to the Files API to create a
  * session. Returns the `x-goog-upload-url` for the actual data transfer.
@@ -52,6 +54,50 @@ export async function initiateResumableUpload(apiKey: string, config: UploadStre
     }
 
     return uploadUrl;
+}
+
+/**
+ * Single-request upload for files at or below {@link UPLOAD_CHUNK_SIZE}.
+ *
+ * Skips the resumable protocol entirely — no session initiation, no upload
+ * command/offset headers. The file body is streamed inline via `duplex: "half"`
+ * with no intermediate buffer.
+ */
+export async function uploadStreamSingleShot(
+    apiKey: string,
+    stream: ReadableStream<Uint8Array>,
+    config: UploadStreamConfig,
+): Promise<GenaiFile> {
+    const fileMetadata: Record<string, string | undefined> = {
+        mimeType: config.mimeType,
+        displayName: config.displayName,
+    };
+
+    if (config.name) {
+        fileMetadata.name = config.name.startsWith("files/") ? config.name : `files/${config.name}`;
+    }
+
+    const url = `${GEMINI_UPLOAD_BASE}/upload/v1beta/files?key=${apiKey}`;
+
+    const response = await fetch(url, {
+        method: "POST",
+        headers: {
+            "Content-Type": config.mimeType ?? "application/octet-stream",
+            "X-Goog-Upload-Header-Content-Length": String(config.byteLength),
+            "X-Goog-Upload-Header-Content-Type": config.mimeType ?? "application/octet-stream",
+            "Content-Length": String(config.byteLength),
+        },
+        body: stream,
+        duplex: "half",
+    });
+
+    if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`Gemini single-shot upload failed (${response.status}): ${body}`);
+    }
+
+    const fileResource = (await response.json()) as { file: GenaiFile };
+    return fileResource.file;
 }
 
 /**
@@ -179,6 +225,9 @@ export class GoogleGenAIWithStreamingUpload extends GoogleGenAI {
      * @returns Resolves to the completed `File` resource from Gemini.
      */
     async uploadStream(stream: ReadableStream<Uint8Array>, config: UploadStreamConfig): Promise<GenaiFile> {
+        if (config.byteLength <= UPLOAD_CHUNK_SIZE) {
+            return uploadStreamSingleShot(this.geminiApiKey, stream, config);
+        }
         const uploadUrl = await initiateResumableUpload(this.geminiApiKey, config);
         return uploadStreamChunked(stream, uploadUrl);
     }

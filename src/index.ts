@@ -25,7 +25,7 @@ import { HandleNextPageUseCase } from "./application/use-cases/HandleMessageNext
 import { HandleRetryUseCase } from "./application/use-cases/HandleMessageRetry.ts";
 import { HandleSummarizeUseCase } from "./application/use-cases/HandleMessageSummarize.ts";
 import { FetchAttachmentDownloader } from "./infrastructure/attachments/FetchAttachmentDownloader.ts";
-import { FetchDiskAttachmentDownloader } from "./infrastructure/attachments/FetchDiskAttachmentDownloader.ts";
+import { FetchStreamingAttachmentDownloader } from "./infrastructure/attachments/FetchStreamingAttachmentDownloader.ts";
 import { GenaiFileUploaderRegistry } from "./infrastructure/attachments/GenaiFileUploaderRegistry.ts";
 import { createDb } from "./infrastructure/db/connection.ts";
 import { PgGetNextPageQuery } from "./infrastructure/db/queries/PgGetNextPageQuery.ts";
@@ -77,7 +77,10 @@ const { freeKeys, paidKey } = await apiKeySyncService.sync(config.googleFreeApiK
 
 // Attachment infrastructure
 const attachmentDownloader = new FetchAttachmentDownloader(logger.child({ module: "attachments" }), config);
-const diskDownloader = new FetchDiskAttachmentDownloader(logger.child({ module: "attachments:disk" }), config);
+const streamingDownloader = new FetchStreamingAttachmentDownloader(
+    logger.child({ module: "attachments:streaming" }),
+    config,
+);
 
 // Lazy uploader registry — one GenaiFileUploader per API key, constructed on first use
 const uploaderRegistry = new GenaiFileUploaderRegistry(
@@ -143,7 +146,7 @@ const discordMediaService = new DiscordMediaService(discordClient);
 const geminiFileRefreshService = new GeminiFileRefreshService(
     geminiFileRepository,
     uploaderRegistry,
-    diskDownloader,
+    streamingDownloader,
     discordMediaService,
     logger.child({ module: "attachments:refresh" }),
     config,
@@ -196,7 +199,7 @@ const agentMessageBuilder = new AgentMessageBuilder(
     attachmentDownloader,
     logger.child({ module: "agent-message-builder" }),
     config,
-    diskDownloader,
+    streamingDownloader,
     uploaderRegistry,
     freeKeyProvider,
     geminiFileRepository,

@@ -1,5 +1,3 @@
-import { unlink } from "node:fs/promises";
-import { join } from "node:path";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import { randomUUIDv7 } from "bun";
@@ -7,10 +5,10 @@ import { EMBED_MEDIA_KEYS, type GeminiFile, GeminiFileSourceType } from "../../d
 import { type AppConfig, AttachmentMode } from "../config/AppConfig.ts";
 import type { IChatClientMessageAttachment, IChatClientMessageEmbed } from "../ports/chat/IChatClient.ts";
 import type { IAttachmentDownloader } from "../ports/IAttachmentDownloader.ts";
-import type { IDiskAttachmentDownloader } from "../ports/IDiskAttachmentDownloader.ts";
 import type { IGeminiFileRepository } from "../ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploaderRegistry } from "../ports/IGeminiFileUploaderRegistry.ts";
 import type { IRoundRobinKeyProvider } from "../ports/IRoundRobinKeyProvider.ts";
+import type { IStreamingAttachmentDownloader } from "../ports/IStreamingAttachmentDownloader.ts";
 import type { OnStatusUpdate } from "../types/AgentStatus.ts";
 import { AgentStatusType } from "../types/AgentStatus.ts";
 import type { Logger } from "../types/Logger.ts";
@@ -44,7 +42,6 @@ export type PendingGeminiRecord = {
 export class AgentMessageBuilder {
     private readonly maxInlineBytes: number;
     private readonly attachmentMode: AttachmentMode;
-    private readonly attachmentsTempDir: string;
 
     /**
      * @param attachmentDownloader - Downloads attachments in inline mode
@@ -60,14 +57,13 @@ export class AgentMessageBuilder {
         private readonly logger: Logger,
         config: Pick<AppConfig, "file">,
         /** Required in upload mode; unused in inline mode. */
-        private readonly diskDownloader?: IDiskAttachmentDownloader,
+        private readonly streamingDownloader?: IStreamingAttachmentDownloader,
         private readonly uploaderRegistry?: IGeminiFileUploaderRegistry,
         private readonly freeKeyProvider?: IRoundRobinKeyProvider,
         private readonly geminiFileRepo?: IGeminiFileRepository,
     ) {
         this.maxInlineBytes = config.file.agent.maxInlineAttachmentSizeBytes;
         this.attachmentMode = config.file.agent.uploadAttachmentMode;
-        this.attachmentsTempDir = config.file.attachmentDownloader.tempDir;
     }
 
     /**
@@ -238,9 +234,9 @@ export class AgentMessageBuilder {
     }
 
     /**
-     * Upload mode: streams each attachment and embed media item to a temp file, uploads
-     * to Gemini Files API, then returns content parts with Gemini URL references and
-     * pending Gemini records.
+     * Upload mode: streams each attachment and embed media item directly to the Gemini
+     * Files API (no temp file on disk), then returns content parts with Gemini URL
+     * references and pending Gemini records.
      */
     private async buildUploadModeContentParts(
         content: string,
@@ -257,12 +253,12 @@ export class AgentMessageBuilder {
                 attributes: { "app.attachment_count": attachments.length },
             },
             async () => {
-                if (!this.diskDownloader || !this.uploaderRegistry || !this.freeKeyProvider) {
+                if (!this.streamingDownloader || !this.uploaderRegistry || !this.freeKeyProvider) {
                     throw new Error("Upload mode dependencies not injected into AgentMessageBuilder");
                 }
 
                 // Destructure to satisfy TypeScript narrowing after the undefined guard above.
-                const { uploaderRegistry, freeKeyProvider } = this;
+                const { streamingDownloader, uploaderRegistry, freeKeyProvider } = this;
 
                 const uploadedParts: Array<{
                     type: "media";
@@ -272,42 +268,35 @@ export class AgentMessageBuilder {
                 const pendingRecords: PendingGeminiRecord[] = [];
 
                 for (const attachment of attachments) {
-                    const tempPath = join(this.attachmentsTempDir, `${randomUUIDv7()}-${attachment.name}`);
-                    try {
-                        const mimeType = await this.diskDownloader.downloadToFile(attachment, tempPath);
+                    const { stream, mimeType, byteLength } = await streamingDownloader.downloadStream(attachment);
 
-                        const fileName = `files/${randomUUIDv7()}`;
-                        const uploaded = await uploaderRegistry
-                            .get(freeKeyProvider.currentKey.id)
-                            .upload(tempPath, fileName, mimeType, attachment.name);
+                    const fileName = `files/${randomUUIDv7()}`;
+                    const uploaded = await uploaderRegistry
+                        .get(freeKeyProvider.currentKey.id)
+                        .uploadStream(stream, fileName, mimeType, attachment.name, byteLength ?? attachment.size);
 
-                        this.logger.debug(
-                            { name: attachment.name, geminiFileName: uploaded.geminiFileName, mimeType },
-                            "Uploaded attachment to Gemini Files API",
-                        );
+                    this.logger.debug(
+                        { name: attachment.name, geminiFileName: uploaded.geminiFileName, mimeType },
+                        "Uploaded attachment to Gemini Files API",
+                    );
 
-                        pendingRecords.push({
-                            fileAnchor: {
-                                originalGeminiUrl: uploaded.geminiUrl,
-                                sourceType: GeminiFileSourceType.ATTACHMENT,
-                                discordAttachmentId: attachment.id,
-                                discordFilename: attachment.name,
-                                embedIndex: null,
-                                embedMediaKey: null,
-                            },
-                            uploadData: {
-                                geminiFileName: uploaded.geminiFileName,
-                                geminiUrl: uploaded.geminiUrl,
-                                uploadedAt: new Date(),
-                            },
-                        });
+                    pendingRecords.push({
+                        fileAnchor: {
+                            originalGeminiUrl: uploaded.geminiUrl,
+                            sourceType: GeminiFileSourceType.ATTACHMENT,
+                            discordAttachmentId: attachment.id,
+                            discordFilename: attachment.name,
+                            embedIndex: null,
+                            embedMediaKey: null,
+                        },
+                        uploadData: {
+                            geminiFileName: uploaded.geminiFileName,
+                            geminiUrl: uploaded.geminiUrl,
+                            uploadedAt: new Date(),
+                        },
+                    });
 
-                        uploadedParts.push({ type: "media", mimeType, fileUri: uploaded.geminiUrl });
-                    } finally {
-                        await unlink(tempPath).catch((err) => {
-                            this.logger.warn({ tempPath, err }, "Failed to delete temp file after Gemini upload");
-                        });
-                    }
+                    uploadedParts.push({ type: "media", mimeType, fileUri: uploaded.geminiUrl });
                 }
 
                 if (embeds) {
@@ -320,7 +309,6 @@ export class AgentMessageBuilder {
                                 typeof key
                             >;
                             const displayName = `Embed-${embedIndex}-${capitalizedKey}`;
-                            const tempPath = join(this.attachmentsTempDir, `${randomUUIDv7()}-${displayName}`);
                             try {
                                 const embedAttachment: IChatClientMessageAttachment = {
                                     id: media.url,
@@ -332,16 +320,15 @@ export class AgentMessageBuilder {
                                     contentType: null,
                                 };
                                 const acceptTypes = key === "video" ? "video/*" : "image/*";
-                                const mimeType = await this.diskDownloader.downloadToFile(
+                                const { stream, mimeType, byteLength } = await streamingDownloader.downloadStream(
                                     embedAttachment,
-                                    tempPath,
                                     acceptTypes,
                                 );
 
                                 const fileName = `files/${randomUUIDv7()}`;
                                 const uploaded = await uploaderRegistry
                                     .get(freeKeyProvider.currentKey.id)
-                                    .upload(tempPath, fileName, mimeType, displayName);
+                                    .uploadStream(stream, fileName, mimeType, displayName, byteLength ?? 0);
 
                                 this.logger.debug(
                                     { embedIndex, key, geminiFileName: uploaded.geminiFileName, mimeType },
@@ -370,13 +357,6 @@ export class AgentMessageBuilder {
                                     { err, embedIndex, key, url: media.url },
                                     "Failed to download or upload embed media — skipping",
                                 );
-                            } finally {
-                                await unlink(tempPath).catch((unlinkErr) => {
-                                    this.logger.warn(
-                                        { tempPath, err: unlinkErr },
-                                        "Failed to delete temp embed media file after Gemini upload",
-                                    );
-                                });
                             }
                         }
                     }

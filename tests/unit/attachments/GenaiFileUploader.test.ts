@@ -135,6 +135,55 @@ describe("GenaiFileUploader.upload", () => {
     });
 });
 
+describe("GenaiFileUploader.uploadStream", () => {
+    test("returns geminiFileName and geminiUrl when file is immediately ACTIVE", async () => {
+        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger, {
+            geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 15 },
+        });
+
+        const result = await uploader.uploadStream(new ReadableStream(), "files/test123", "image/png", "test.png", 512);
+
+        expect(result.geminiFileName).toBe("files/test123");
+        expect(result.geminiUrl).toBe(GEMINI_URI);
+        expect(mockFilesGet).not.toHaveBeenCalled();
+    });
+
+    test("passes stream and config to ai.uploadStream", async () => {
+        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger, {
+            geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 15 },
+        });
+        const stream = new ReadableStream();
+
+        await uploader.uploadStream(stream, "files/my-uuid", "video/mp4", "clip.mp4", 4096);
+
+        expect(mockUploadStream).toHaveBeenCalledWith(
+            stream,
+            expect.objectContaining({
+                name: "files/my-uuid",
+                mimeType: "video/mp4",
+                displayName: "clip.mp4",
+                byteLength: 4096,
+            }),
+        );
+    });
+
+    test("throws AppError when file reaches FAILED state", async () => {
+        mockUploadStream.mockImplementationOnce(async () => ({
+            name: "files/test123",
+            state: "FAILED",
+            uri: null as unknown as string,
+        }));
+
+        const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger, {
+            geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 15 },
+        });
+
+        await expect(
+            uploader.uploadStream(new ReadableStream(), "files/test123", "image/png", "test.png", 512),
+        ).rejects.toBeInstanceOf(AppError);
+    });
+});
+
 describe("GenaiFileUploader.deleteFile", () => {
     test("calls ai.files.delete with the provided file name", async () => {
         const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger, {

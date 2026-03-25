@@ -47,6 +47,26 @@ export interface IGeminiFileUploader {
     upload(filePath: string, fileName: string, mimeType: string, displayName: string): Promise<UploadedGeminiFile>;
 
     /**
+     * Uploads a `ReadableStream<Uint8Array>` directly to the Gemini Files API,
+     * bypassing the temp-file write, and waits until the file reaches ACTIVE state.
+     *
+     * @param stream - The byte stream to upload
+     * @param fileName - The Gemini file name to use (e.g. `"files/<uuid>"`)
+     * @param mimeType - MIME type of the file
+     * @param displayName - Human-readable filename shown in the Gemini console
+     * @param byteLength - Total byte length of the stream (required by the resumable protocol)
+     * @throws {@link AppError} with code `GEMINI_UPLOAD_FAILED` if the upload
+     *         or processing fails, or times out waiting for ACTIVE state.
+     */
+    uploadStream(
+        stream: ReadableStream<Uint8Array>,
+        fileName: string,
+        mimeType: string,
+        displayName: string,
+        byteLength: number,
+    ): Promise<UploadedGeminiFile>;
+
+    /**
      * Deletes a Gemini file by its file name.
      * Silently ignores not-found errors (the file may already have expired).
      *

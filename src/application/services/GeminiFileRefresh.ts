@@ -1,5 +1,3 @@
-import { unlink } from "node:fs/promises";
-import { join } from "node:path";
 import type { BaseMessage, MessageContent } from "@langchain/core/messages";
 import { HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
@@ -8,10 +6,10 @@ import { type GeminiFile, GeminiFileSourceType } from "../../domain/message/Gemi
 import type { GeminiFileUpload } from "../../domain/message/GeminiFileUpload.ts";
 import type { AppConfig } from "../config/AppConfig.ts";
 import type { IDiscordMediaService } from "../ports/IDiscordMediaService.ts";
-import type { IDiskAttachmentDownloader } from "../ports/IDiskAttachmentDownloader.ts";
 import type { IGeminiFileRefreshService } from "../ports/IGeminiFileRefreshService.ts";
 import type { IGeminiFileRepository } from "../ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploaderRegistry } from "../ports/IGeminiFileUploaderRegistry.ts";
+import type { IStreamingAttachmentDownloader } from "../ports/IStreamingAttachmentDownloader.ts";
 import type { Logger } from "../types/Logger.ts";
 
 /** URL prefix that identifies a Gemini Files API URI in a content block. */
@@ -80,12 +78,11 @@ function extractGeminiUrls(message: BaseMessage): string[] {
 export class GeminiFileRefreshService implements IGeminiFileRefreshService {
     /** Gemini file TTL is 48 hours. Files older than (TTL - staleThresholdMs) are refreshed. */
     private readonly staleThresholdMs: number;
-    private readonly attachmentsTempDir: string;
 
     constructor(
         private readonly geminiFileRepo: IGeminiFileRepository,
         private readonly uploaderRegistry: IGeminiFileUploaderRegistry,
-        private readonly diskDownloader: IDiskAttachmentDownloader,
+        private readonly streamingDownloader: IStreamingAttachmentDownloader,
         private readonly mediaService: IDiscordMediaService,
         private readonly logger: Logger,
         config: Pick<AppConfig, "file">,
@@ -93,7 +90,6 @@ export class GeminiFileRefreshService implements IGeminiFileRefreshService {
         // Gemini TTL is 48 hours; a file is stale when less than staleThreshold remains
         const geminiTtlMs = 48 * 60 * 60 * 1000;
         this.staleThresholdMs = geminiTtlMs - config.file.geminiFileApi.fileStaleBeforeExpiryMs;
-        this.attachmentsTempDir = config.file.attachmentDownloader.tempDir;
     }
 
     /**
@@ -248,48 +244,46 @@ export class GeminiFileRefreshService implements IGeminiFileRefreshService {
                 // attachment.name is always set: discord.js filenames for attachments,
                 // synthetic "Embed-<index>-<Key>" for embed media from fetchEmbedMedia.
                 const displayName = attachment.name;
-                const tempPath = join(this.attachmentsTempDir, `${randomUUIDv7()}-${displayName}`);
-                try {
-                    // Stream attachment to disk
-                    const mimeType = await this.diskDownloader.downloadToFile(attachment, tempPath);
 
-                    // Upload to Gemini using the uploader for this specific API key
-                    const uploader = this.uploaderRegistry.get(apiKeyId);
-                    const newFileName = `files/${randomUUIDv7()}`;
-                    const uploaded = await uploader.upload(tempPath, newFileName, mimeType, displayName);
+                // Stream directly from Discord CDN to Gemini — no temp file on disk.
+                const { stream, mimeType, byteLength } = await this.streamingDownloader.downloadStream(attachment);
 
-                    // Delete the old Gemini file best-effort (may already be expired).
-                    // Not awaited so it doesn't delay the response.
-                    if (existingUpload !== null) {
-                        void uploader.deleteFile(existingUpload.geminiFileName);
-                    }
+                const uploader = this.uploaderRegistry.get(apiKeyId);
+                const newFileName = `files/${randomUUIDv7()}`;
+                const uploaded = await uploader.uploadStream(
+                    stream,
+                    newFileName,
+                    mimeType,
+                    displayName,
+                    byteLength ?? attachment.size,
+                );
 
-                    // Persist the new upload record (upserts on conflict for (geminiFileId, apiKeyId))
-                    await this.geminiFileRepo.upsertUpload({
-                        geminiFileId: file.id,
-                        apiKeyId,
-                        geminiFileName: uploaded.geminiFileName,
-                        geminiUrl: uploaded.geminiUrl,
-                        uploadedAt: new Date(),
-                    });
-
-                    this.logger.info(
-                        {
-                            originalUrl,
-                            newGeminiUrl: uploaded.geminiUrl,
-                            apiKeyId,
-                            discordAttachmentId: file.discordAttachmentId,
-                        },
-                        "Refreshed Gemini file upload",
-                    );
-
-                    return uploaded.geminiUrl;
-                } finally {
-                    // Always clean up the temp file
-                    await unlink(tempPath).catch((err) => {
-                        this.logger.warn({ tempPath, err }, "Failed to delete temp file after Gemini upload");
-                    });
+                // Delete the old Gemini file best-effort (may already be expired).
+                // Not awaited so it doesn't delay the response.
+                if (existingUpload !== null) {
+                    void uploader.deleteFile(existingUpload.geminiFileName);
                 }
+
+                // Persist the new upload record (upserts on conflict for (geminiFileId, apiKeyId))
+                await this.geminiFileRepo.upsertUpload({
+                    geminiFileId: file.id,
+                    apiKeyId,
+                    geminiFileName: uploaded.geminiFileName,
+                    geminiUrl: uploaded.geminiUrl,
+                    uploadedAt: new Date(),
+                });
+
+                this.logger.info(
+                    {
+                        originalUrl,
+                        newGeminiUrl: uploaded.geminiUrl,
+                        apiKeyId,
+                        discordAttachmentId: file.discordAttachmentId,
+                    },
+                    "Refreshed Gemini file upload",
+                );
+
+                return uploaded.geminiUrl;
             },
         );
     }

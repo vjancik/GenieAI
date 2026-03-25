@@ -43,6 +43,18 @@ export class GenaiFileUploader implements IGeminiFileUploader {
         mimeType: string,
         displayName: string,
     ): Promise<UploadedGeminiFile> {
+        this.logger.debug({ filePath, fileName, mimeType, displayName }, "Uploading file to Gemini Files API");
+        const bunFileHandle = bunFile(filePath);
+        return this.uploadStream(bunFileHandle.stream(), fileName, mimeType, displayName, bunFileHandle.size);
+    }
+
+    async uploadStream(
+        stream: ReadableStream<Uint8Array>,
+        fileName: string,
+        mimeType: string,
+        displayName: string,
+        byteLength: number,
+    ): Promise<UploadedGeminiFile> {
         return Sentry.startSpan(
             {
                 name: "Upload file to Gemini Files API",
@@ -54,12 +66,6 @@ export class GenaiFileUploader implements IGeminiFileUploader {
                 },
             },
             async (span) => {
-                this.logger.debug({ filePath, fileName, mimeType, displayName }, "Uploading file to Gemini Files API");
-
-                const bunFileHandle = bunFile(filePath);
-                const byteLength = bunFileHandle.size;
-                const stream = bunFileHandle.stream();
-
                 let file = await this.ai.uploadStream(stream, {
                     name: fileName,
                     mimeType,

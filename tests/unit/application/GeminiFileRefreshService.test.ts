@@ -3,10 +3,10 @@ import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
 import type { IChatClientMessageAttachment } from "../../../src/application/ports/chat/IChatClient.ts";
 import type { IDiscordMediaService } from "../../../src/application/ports/IDiscordMediaService.ts";
-import type { IDiskAttachmentDownloader } from "../../../src/application/ports/IDiskAttachmentDownloader.ts";
 import type { IGeminiFileRepository } from "../../../src/application/ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploader } from "../../../src/application/ports/IGeminiFileUploader.ts";
 import type { IGeminiFileUploaderRegistry } from "../../../src/application/ports/IGeminiFileUploaderRegistry.ts";
+import type { IStreamingAttachmentDownloader } from "../../../src/application/ports/IStreamingAttachmentDownloader.ts";
 import { GeminiFileRefreshService } from "../../../src/application/services/GeminiFileRefresh.ts";
 import type { GeminiFile } from "../../../src/domain/message/GeminiFile.ts";
 import type { GeminiFileUpload } from "../../../src/domain/message/GeminiFileUpload.ts";
@@ -129,6 +129,10 @@ function makeUploader(newUrl = GEMINI_URL_NEW): IGeminiFileUploader {
             geminiFileName: "files/newfile",
             geminiUrl: newUrl,
         })),
+        uploadStream: mock(async () => ({
+            geminiFileName: "files/newfile",
+            geminiUrl: newUrl,
+        })),
         deleteFile: mock(async () => {}),
     };
 }
@@ -143,9 +147,14 @@ function makeRegistry(uploader: IGeminiFileUploader): IGeminiFileUploaderRegistr
     };
 }
 
-function makeDiskDownloader(): IDiskAttachmentDownloader {
+function makeStreamingDownloader(): IStreamingAttachmentDownloader {
     return {
-        downloadToFile: mock(async () => "image/png"),
+        downloadStream: mock(async () => ({
+            stream: new ReadableStream(),
+            mimeType: "image/png",
+            byteLength: 1024,
+            name: "test.png",
+        })),
     };
 }
 
@@ -177,7 +186,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         const service = new GeminiFileRefreshService(
             makeRepo(),
             makeRegistry(makeUploader()),
-            makeDiskDownloader(),
+            makeStreamingDownloader(),
             makeAttachmentFetcher(),
             testLogger,
             testConfig,
@@ -197,7 +206,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         const service = new GeminiFileRefreshService(
             makeRepo([{ file, upload }]),
             makeRegistry(makeUploader()),
-            makeDiskDownloader(),
+            makeStreamingDownloader(),
             makeAttachmentFetcher(),
             testLogger,
             testConfig,
@@ -220,7 +229,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         const service = new GeminiFileRefreshService(
             makeRepo([{ file, upload }]),
             makeRegistry(uploader),
-            makeDiskDownloader(),
+            makeStreamingDownloader(),
             makeAttachmentFetcher(),
             testLogger,
             testConfig,
@@ -244,7 +253,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         const service = new GeminiFileRefreshService(
             repo,
             makeRegistry(makeUploader()),
-            makeDiskDownloader(),
+            makeStreamingDownloader(),
             makeAttachmentFetcher(),
             testLogger,
             testConfig,
@@ -274,7 +283,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         const service = new GeminiFileRefreshService(
             makeRepo([{ file, upload }]),
             makeRegistry(uploader),
-            makeDiskDownloader(),
+            makeStreamingDownloader(),
             makeAttachmentFetcher(),
             testLogger,
             testConfig,
@@ -295,7 +304,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         const service = new GeminiFileRefreshService(
             makeRepo([{ file, upload }]),
             makeRegistry(makeUploader()),
-            makeDiskDownloader(),
+            makeStreamingDownloader(),
             makeAttachmentFetcher(null),
             testLogger,
             testConfig,
@@ -324,7 +333,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         const service = new GeminiFileRefreshService(
             repo,
             makeRegistry(uploader),
-            makeDiskDownloader(),
+            makeStreamingDownloader(),
             makeAttachmentFetcher(),
             testLogger,
             testConfig,
@@ -357,7 +366,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         const service = new GeminiFileRefreshService(
             makeRepo(),
             makeRegistry(makeUploader()),
-            makeDiskDownloader(),
+            makeStreamingDownloader(),
             makeAttachmentFetcher(),
             testLogger,
             testConfig,
@@ -373,7 +382,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         const service = new GeminiFileRefreshService(
             makeRepo(),
             makeRegistry(makeUploader()),
-            makeDiskDownloader(),
+            makeStreamingDownloader(),
             makeAttachmentFetcher(),
             testLogger,
             testConfig,
@@ -392,7 +401,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         const service = new GeminiFileRefreshService(
             makeRepo([{ file, upload }]),
             makeRegistry(makeUploader()),
-            makeDiskDownloader(),
+            makeStreamingDownloader(),
             makeAttachmentFetcher(),
             testLogger,
             testConfig,
@@ -411,7 +420,7 @@ describe("GeminiFileRefreshService.refreshHistory", () => {
         const service = new GeminiFileRefreshService(
             makeRepo(),
             makeRegistry(makeUploader()),
-            makeDiskDownloader(),
+            makeStreamingDownloader(),
             makeAttachmentFetcher(),
             testLogger,
             testConfig,
