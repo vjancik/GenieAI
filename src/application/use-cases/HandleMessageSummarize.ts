@@ -7,6 +7,7 @@ import type {
     IChatClientContextMenuInteraction,
     IChatClientMessage,
 } from "../ports/chat/IChatClient.ts";
+import type { Logger } from "../types/Logger.ts";
 import type { HandleChatMessageUseCase } from "./HandleChatMessage.ts";
 
 /** Sentinel value stored as guild_id for DM messages, which have no guild. */
@@ -24,11 +25,13 @@ export class HandleSummarizeUseCase {
      * @param handleChatMessage - Use case for the full message handling pipeline
      * @param messageRepo - Repository for checking whether a message already exists in the DB
      * @param bot - Chat client bot adapter for reading the current bot user ID
+     * @param logger - Logger instance
      */
     constructor(
         private readonly handleChatMessage: HandleChatMessageUseCase,
         private readonly messageRepo: IMessageRepository,
         private readonly bot: IChatClientBot,
+        private readonly logger: Logger,
     ) {}
 
     /**
@@ -54,6 +57,16 @@ export class HandleSummarizeUseCase {
                 const botUserId = this.bot.userId;
 
                 const targetMessage = interaction.targetMessage;
+
+                this.logger.info(
+                    {
+                        targetMessageId: targetMessage.id,
+                        channelId: targetMessage.channelId,
+                        guildId: targetMessage.guildId,
+                        invokerUserId: interaction.userId,
+                    },
+                    "Handling Summarize command",
+                );
                 const attachments = targetMessage.attachments;
                 const embeds = targetMessage.embeds;
                 const userContent = extractUserContent(targetMessage.content, botUserId, targetMessage.botRoleId);

@@ -1,5 +1,6 @@
 import { describe, expect, it, mock } from "bun:test";
 import type { BaseMessage } from "@langchain/core/messages";
+import pino from "pino";
 import type {
     IChatClientBot,
     IChatClientContextMenuInteraction,
@@ -8,6 +9,8 @@ import type {
 import type { HandleChatMessageUseCase } from "../../../src/application/use-cases/HandleChatMessage.ts";
 import { HandleSummarizeUseCase } from "../../../src/application/use-cases/HandleMessageSummarize.ts";
 import type { IMessageRepository } from "../../../src/domain/message/IMessageRepository.ts";
+
+const logger = pino({ level: "silent" });
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -135,6 +138,7 @@ function makeUseCase(
         overrides.handleChatMessage ?? makeHandleChatMessageUseCase(),
         overrides.messageRepo ?? makeMessageRepo(),
         overrides.bot ?? makeBot(),
+        logger,
     );
 }
 

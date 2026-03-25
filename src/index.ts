@@ -236,6 +236,7 @@ const handleSummarizeUseCase = new HandleSummarizeUseCase(
     handleChatMessageUseCase,
     messageRepository,
     discordClientBot,
+    logger.child({ module: "summarize" }),
 );
 const handleExportUseCase = new HandleExportUseCase(
     messageRepository,

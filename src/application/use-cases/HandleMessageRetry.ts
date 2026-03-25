@@ -91,6 +91,17 @@ export class HandleRetryUseCase {
             return;
         }
 
+        this.logger.info(
+            {
+                botMessageId: interaction.message.id,
+                originalMessageId: originalMessage.id,
+                channelId: originalMessage.channelId,
+                guildId: originalMessage.guildId,
+                invokerUserId: interaction.userId,
+            },
+            "Handling Retry button",
+        );
+
         // Acknowledge the interaction immediately so Discord doesn't show "interaction failed"
         await interaction.deferUpdate();
 

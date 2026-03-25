@@ -67,6 +67,16 @@ export class HandleExportUseCase {
             return;
         }
 
+        this.logger.info(
+            {
+                targetMessageId: target.id,
+                channelId: target.channelId,
+                guildId: target.guildId,
+                invokerUserId: interaction.userId,
+            },
+            "Handling Export as HTML command",
+        );
+
         await interaction.deferReply({ isEphemeral: true });
 
         const markdown = await this.resolveExportContent(target);
@@ -88,6 +98,16 @@ export class HandleExportUseCase {
             await interaction.reply({ content: "*You can only export bot messages.*", isEphemeral: true });
             return;
         }
+
+        this.logger.info(
+            {
+                targetMessageId: target.id,
+                channelId: target.channelId,
+                guildId: target.guildId,
+                invokerUserId: interaction.userId,
+            },
+            "Handling Export as Image command",
+        );
 
         await interaction.deferReply({ isEphemeral: true });
 
@@ -112,6 +132,16 @@ export class HandleExportUseCase {
 
         this.interactionLock.setLocked(botMessage.id, RENDER_BUTTON_ID);
         try {
+            this.logger.info(
+                {
+                    botMessageId: botMessage.id,
+                    channelId: botMessage.channelId,
+                    guildId: botMessage.guildId,
+                    invokerUserId: interaction.userId,
+                },
+                "Handling Render button",
+            );
+
             // Acknowledge the button press without creating an interaction reply — the
             // rendered image will be sent as a normal reply to the bot message instead.
             await interaction.deferUpdate();

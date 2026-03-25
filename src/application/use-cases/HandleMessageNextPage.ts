@@ -140,6 +140,16 @@ export class HandleNextPageUseCase {
 
             const currentBotMessageId = interaction.message.id;
 
+            this.logger.info(
+                {
+                    botMessageId: currentBotMessageId,
+                    channelId: interaction.message.channelId,
+                    guildId: interaction.message.guildId,
+                    invokerUserId: interaction.userId,
+                },
+                "Handling Next Page button",
+            );
+
             await Sentry.startSpan(
                 {
                     name: "Handle Next Page button",
