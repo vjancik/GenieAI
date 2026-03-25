@@ -2,6 +2,7 @@ import {
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
+    ChannelType,
     ComponentType,
     type Message,
     MessageReferenceType,
@@ -134,6 +135,10 @@ export class DiscordClientMessage implements IChatClientMessage {
 
     get botRoleId() {
         return this.discordMessage.guild?.members.me?.roles.botRole?.id ?? null;
+    }
+
+    get isDM() {
+        return this.discordMessage.channel.type === ChannelType.DM;
     }
 
     hasExplicitMention(botUserId: string) {

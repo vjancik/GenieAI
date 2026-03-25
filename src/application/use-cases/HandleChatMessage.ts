@@ -81,6 +81,7 @@ export class HandleChatMessageUseCase {
         private readonly searchMode: SearchMode,
         private readonly messageBuilder: AgentMessageBuilder,
         private readonly chatMessageService?: IChatMessageService,
+        private readonly enableInDMs: boolean = false,
     ) {}
 
     /**
@@ -101,6 +102,9 @@ export class HandleChatMessageUseCase {
 
         // Ignore all bot messages (including our own) to prevent feedback loops
         if (message.isAuthorBot) return;
+
+        // Silently ignore DM messages when DM support is disabled
+        if (message.isDM && !this.enableInDMs) return;
 
         // Parse intent from raw content before stripping, so the command prefix is visible
         const intent = parseMessageIntent(message.content);

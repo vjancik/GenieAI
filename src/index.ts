@@ -212,6 +212,7 @@ const handleChatMessageUseCase = new HandleChatMessageUseCase(
     config.file.agent.nodes.search.mode,
     agentMessageBuilder,
     discordChatMessageService,
+    config.file.discord.enableInDMs,
 );
 
 // Shared interaction lock — one instance reused across all use cases that need locking
@@ -237,6 +238,7 @@ const handleSummarizeUseCase = new HandleSummarizeUseCase(
     messageRepository,
     discordClientBot,
     logger.child({ module: "summarize" }),
+    config.file.discord.enableInDMs,
 );
 const handleExportUseCase = new HandleExportUseCase(
     messageRepository,

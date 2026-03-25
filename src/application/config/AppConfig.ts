@@ -66,6 +66,8 @@ const fileConfigDefaults = {
         defaultChainLimit: 100,
         /** Number of retry attempts granted to a retryable bot response. */
         defaultRetriesLeft: 3,
+        /** Whether the bot responds to messages and commands in Direct Message channels. */
+        enableInDMs: false,
     },
     geminiModels: {
         /** Whether to include thought tokens in model responses. Useful for debugging. */
@@ -200,6 +202,7 @@ const fileConfigSchema = z.object({
                 .nonnegative()
                 .optional()
                 .prefault(fileConfigDefaults.discord.defaultRetriesLeft),
+            enableInDMs: z.boolean().optional().prefault(fileConfigDefaults.discord.enableInDMs),
             previousBotId: z.string().optional(),
         })
         .optional()

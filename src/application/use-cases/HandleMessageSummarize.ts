@@ -26,12 +26,14 @@ export class HandleSummarizeUseCase {
      * @param messageRepo - Repository for checking whether a message already exists in the DB
      * @param bot - Chat client bot adapter for reading the current bot user ID
      * @param logger - Logger instance
+     * @param enableInDMs - Whether the bot is allowed to respond in Direct Message channels
      */
     constructor(
         private readonly handleChatMessage: HandleChatMessageUseCase,
         private readonly messageRepo: IMessageRepository,
         private readonly bot: IChatClientBot,
         private readonly logger: Logger,
+        private readonly enableInDMs: boolean = false,
     ) {}
 
     /**
@@ -55,6 +57,15 @@ export class HandleSummarizeUseCase {
             },
             async () => {
                 const botUserId = this.bot.userId;
+
+                // Reject the command in DMs when DM support is disabled
+                if (interaction.isDM && !this.enableInDMs) {
+                    void (await interaction.reply({
+                        content: "*Use of this command is currently disabled in DMs.*",
+                        isEphemeral: true,
+                    }));
+                    return;
+                }
 
                 const targetMessage = interaction.targetMessage;
 

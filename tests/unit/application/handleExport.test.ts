@@ -39,6 +39,7 @@ function makeMessage(overrides: Partial<IChatClientMessage> & { id: string }): I
         isForwarded: false,
         forwardedSnapshot: null,
         botRoleId: null,
+        isDM: false,
         hasExplicitMention: () => false,
         reply: mock(async () => sent),
         edit: mock(async () => sent),
@@ -62,6 +63,7 @@ function makeMessage(overrides: Partial<IChatClientMessage> & { id: string }): I
         isForwarded: overrides.isForwarded ?? false,
         forwardedSnapshot: overrides.forwardedSnapshot ?? null,
         botRoleId: overrides.botRoleId ?? null,
+        isDM: overrides.isDM ?? false,
         hasExplicitMention: overrides.hasExplicitMention ?? (() => false),
         reply: overrides.reply ?? mock(async () => sent),
         edit: overrides.edit ?? mock(async () => sent),
@@ -85,6 +87,7 @@ function makeContextMenuInteraction(overrides: {
     return {
         targetMessage: target,
         userId: overrides.userId ?? "invoker-1",
+        isDM: false,
         reply: mock(async () => {}),
         deferReply: mock(async () => {}),
         editReply: mock(async () => {}),

@@ -127,6 +127,9 @@ export interface IChatClientMessage {
      */
     readonly botRoleId: string | null;
 
+    /** Whether this message was sent in a Direct Message channel (no guild). */
+    readonly isDM: boolean;
+
     /**
      * Returns true when the bot was explicitly @mentioned in this message
      * (i.e. the user typed `@BotName`), as opposed to Discord auto-including

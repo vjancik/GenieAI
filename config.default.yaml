@@ -35,6 +35,8 @@ discord:
   defaultChainLimit: 100  # <optional>
   # Number of retry attempts granted to a retryable bot response.
   defaultRetriesLeft: 3   # <optional>
+  # Whether the bot responds to messages and commands in Direct Message channels.
+  enableInDMs: false       # <optional>
   # Discord user ID of a previous bot version treated as own-bot messages.
 # previousBotId: ""        # <optional>
 

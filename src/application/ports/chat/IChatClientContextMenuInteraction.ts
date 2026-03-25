@@ -33,6 +33,9 @@ export interface IChatClientContextMenuInteraction {
     /** The ID of the user who invoked the context menu. */
     readonly userId: string;
 
+    /** Whether this interaction was invoked in a Direct Message channel. */
+    readonly isDM: boolean;
+
     /** Sends an ephemeral reply (used for early-exit cases or ACK messages). */
     reply(options: ContextMenuReplyOptions): Promise<void>;
 

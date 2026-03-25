@@ -42,6 +42,7 @@ function makeMsg(overrides: {
         isForwarded: overrides.isForwarded ?? false,
         forwardedSnapshot: overrides.forwardedSnapshot ?? null,
         botRoleId: null,
+        isDM: false,
         hasExplicitMention: () => false,
         reply: async () => {
             throw new Error("not implemented");

@@ -1,4 +1,4 @@
-import { type MessageContextMenuCommandInteraction, MessageFlags } from "discord.js";
+import { ChannelType, type MessageContextMenuCommandInteraction, MessageFlags } from "discord.js";
 import type {
     ContextMenuDeferReplyOptions,
     ContextMenuEditReplyOptions,
@@ -29,6 +29,10 @@ export class DiscordClientContextMenuInteraction implements IChatClientContextMe
 
     get userId() {
         return this.discordInteraction.user.id;
+    }
+
+    get isDM() {
+        return this.discordInteraction.channel?.type === ChannelType.DM;
     }
 
     async reply(options: ContextMenuReplyOptions) {
