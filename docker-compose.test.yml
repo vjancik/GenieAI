@@ -11,4 +11,9 @@ services:
             - "5433:5432"
         volumes:
             - ./db_test:/var/lib/postgresql/data
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U genie_test -d genie_test"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
         restart: unless-stopped

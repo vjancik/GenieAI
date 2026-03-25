@@ -14,6 +14,11 @@ services:
             - db-data:/var/lib/postgresql/data
             - ./postgres-local-prod.conf:/etc/postgresql/postgresql.conf:ro
         command: postgres -c config_file=/etc/postgresql/postgresql.conf
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U genie -d genie"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
         restart: unless-stopped
 
     app:
@@ -31,7 +36,8 @@ services:
             - ~/bin:/home/bun/bin
             - ./config.local.yaml:/usr/src/app/config.local.yaml:ro
         depends_on:
-            - db
+            db:
+                condition: service_healthy
         restart: unless-stopped
 volumes:
     db-data:
