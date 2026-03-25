@@ -80,6 +80,10 @@ export class HandleExportUseCase {
         await interaction.deferReply({ isEphemeral: true });
 
         const markdown = await this.resolveExportContent(target);
+        if (!markdown.trim()) {
+            void (await interaction.editReply({ content: "*The message has no text content.*" }));
+            return;
+        }
         const html = this.markdownRenderer.render(markdown);
         const filename = `render-${target.id}.html`;
 
@@ -112,6 +116,10 @@ export class HandleExportUseCase {
         await interaction.deferReply({ isEphemeral: true });
 
         const markdown = await this.resolveExportContent(target);
+        if (!markdown.trim()) {
+            void (await interaction.editReply({ content: "*The message has no text content.*" }));
+            return;
+        }
         const html = this.markdownRenderer.render(markdown);
         const png = await this.imageRenderer.render(html);
         const filename = `render-${target.id}.png`;

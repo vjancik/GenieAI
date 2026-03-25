@@ -19,7 +19,8 @@ export interface ContextMenuDeferReplyOptions {
 
 /** Options for editing a deferred context menu reply. */
 export interface ContextMenuEditReplyOptions {
-    files: InteractionFileAttachment[];
+    files?: InteractionFileAttachment[];
+    content?: string;
 }
 
 /**
