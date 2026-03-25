@@ -6,8 +6,23 @@ on:
   pull_request:
 
 jobs:
-  unit-tests:
+  tests:
     runs-on: ubuntu-latest
+
+    services:
+      db:
+        image: postgres:18.3-alpine
+        env:
+          POSTGRES_USER: genie_test
+          POSTGRES_PASSWORD: genie_test
+          POSTGRES_DB: genie_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@v6
@@ -19,8 +34,12 @@ jobs:
       - name: Install dependencies
         run: bun ci
 
-      - name: Run unit tests
-        run: bun test --env-file .env.test tests/unit
+      - name: Run migrations
+        run: bun db:test:migrate
+
+      - name: Run tests
+        run: bun run test
         env:
+          DATABASE_URL: postgresql://genie_test:genie_test@localhost:5433/genie_test
           # TODO: remove once TAVILY_API_KEY is no longer required at startup (should be optional)
           TAVILY_API_KEY: dummy
