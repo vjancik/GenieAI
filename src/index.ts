@@ -14,8 +14,8 @@
  */
 import * as Sentry from "@sentry/bun";
 import { ConfigProvider } from "./application/config/AppConfig.ts";
-import { GeminiApiKeySyncService } from "./application/services/GeminiApiKeySyncService.ts";
-import { GeminiFileRefreshService } from "./application/services/GeminiFileRefreshService.ts";
+import { GeminiApiKeySyncService } from "./application/services/GeminiApiKeySync.ts";
+import { GeminiFileRefreshService } from "./application/services/GeminiFileRefresh.ts";
 import { StatusMessageUpdater } from "./application/services/StatusMessageUpdater.ts";
 import { HandleChatMessageUseCase } from "./application/use-cases/HandleChatMessage.ts";
 import { HandleExportUseCase } from "./application/use-cases/HandleMessageExport.ts";

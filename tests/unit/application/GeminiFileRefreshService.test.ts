@@ -7,7 +7,7 @@ import type { IDiskAttachmentDownloader } from "../../../src/application/ports/I
 import type { IGeminiFileRepository } from "../../../src/application/ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploader } from "../../../src/application/ports/IGeminiFileUploader.ts";
 import type { IGeminiFileUploaderRegistry } from "../../../src/application/ports/IGeminiFileUploaderRegistry.ts";
-import { GeminiFileRefreshService } from "../../../src/application/services/GeminiFileRefreshService.ts";
+import { GeminiFileRefreshService } from "../../../src/application/services/GeminiFileRefresh.ts";
 import type { GeminiFile } from "../../../src/domain/message/GeminiFile.ts";
 import type { GeminiFileUpload } from "../../../src/domain/message/GeminiFileUpload.ts";
 
