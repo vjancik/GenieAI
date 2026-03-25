@@ -45,7 +45,7 @@ const RENDER_BUTTON_ID = "render_image";
 
 /**
  * Internal agent result produced by {@link HandleChatMessageUseCase.invokeAgent}
- * and consumed immediately by {@link HandleChatMessageUseCase.sendAgentReply}.
+ * and consumed immediately by {@link HandleChatMessageUseCase.sendAgentResponse}.
  * `thinkingMessagePromise` is always defined — the thinking placeholder is always sent.
  */
 type AgentResult = {
@@ -672,7 +672,10 @@ export class HandleChatMessageUseCase {
             : "";
 
         // Start resolving grounding sources in parallel with sending the response and saving to DB.
-        const sourcesLinePromise = this.resolveGroundingSources(newMessages);
+        // Skipped on failure responses — the error message has no meaningful sources to cite,
+        // and in Tavily mode the triage AIMessage may carry tool calls that would produce
+        // spurious source citations even though no real LLM answer was generated.
+        const sourcesLinePromise = isFailure ? Promise.resolve(null) : this.resolveGroundingSources(newMessages);
 
         // Attach a Retry button when the use case signals a retryable failure and retries remain.
         // retriesLeft=undefined means this is a fresh response — use defaultRetriesLeft.
