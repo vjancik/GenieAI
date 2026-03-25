@@ -5,12 +5,12 @@ import { AppError } from "../../../src/domain/errors/AppError.ts";
 const testLogger = pino({ level: "silent" });
 
 /**
- * Module-level mocks shared by all MockGoogleGenAI instances.
- * Since GenaiFileUploader calls `new GoogleGenAI()` internally, and each instance
- * gets these shared mock functions on `files`, we can control behavior via
- * `mockImplementationOnce` without needing access to the internal instance.
+ * Module-level mocks shared across all test instances.
+ * `@google/genai` is mocked so `GoogleGenAIWithStreamingUpload` (which extends
+ * `GoogleGenAI`) gets these methods injected via its base class mock, letting
+ * us control behaviour per-test via `mockImplementationOnce`.
  */
-const mockFilesUpload = mock(async () => ({
+const mockUploadStream = mock(async () => ({
     name: "files/test123",
     state: "ACTIVE",
     uri: "https://generativelanguage.googleapis.com/v1beta/files/test123",
@@ -29,13 +29,20 @@ mock.module("@google/genai", () => ({
         FAILED: "FAILED",
     },
     GoogleGenAI: class MockGoogleGenAI {
-        // All instances share the same mock function references
+        uploadStream = mockUploadStream;
         readonly files = {
-            upload: mockFilesUpload,
             get: mockFilesGet,
             delete: mockFilesDelete,
         };
     },
+}));
+
+// Provide a stub bun file handle: fixed size so byteLength is available without disk I/O.
+mock.module("bun", () => ({
+    file: (_path: string) => ({
+        size: 1024,
+        stream: () => new ReadableStream(),
+    }),
 }));
 
 const { GenaiFileUploader } = await import("../../../src/infrastructure/attachments/GenaiFileUploader.ts");
@@ -45,11 +52,11 @@ const GEMINI_URI = "https://generativelanguage.googleapis.com/v1beta/files/test1
 beforeEach(() => {
     // mockReset clears both call history AND the mockImplementationOnce queue,
     // preventing leftover one-time impls from bleeding across tests.
-    mockFilesUpload.mockReset();
+    mockUploadStream.mockReset();
     mockFilesGet.mockReset();
     mockFilesDelete.mockReset();
     // Restore default ACTIVE response after reset
-    mockFilesUpload.mockImplementation(async () => ({
+    mockUploadStream.mockImplementation(async () => ({
         name: "files/test123",
         state: "ACTIVE",
         uri: GEMINI_URI,
@@ -76,25 +83,27 @@ describe("GenaiFileUploader.upload", () => {
         expect(mockFilesGet).not.toHaveBeenCalled();
     });
 
-    test("calls ai.files.upload with correct parameters", async () => {
+    test("calls uploadStream with correct parameters", async () => {
         const uploader = new GenaiFileUploader("test-key", "test-api-key-id", testLogger, {
             geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 15 },
         });
 
         await uploader.upload("/tmp/photo.jpg", "files/my-uuid", "image/jpeg", "photo.jpg");
 
-        expect(mockFilesUpload).toHaveBeenCalledWith({
-            file: "/tmp/photo.jpg",
-            config: {
+        expect(mockUploadStream).toHaveBeenCalledWith(
+            // First arg is a ReadableStream — only validate the config object
+            expect.anything(),
+            expect.objectContaining({
                 name: "files/my-uuid",
                 mimeType: "image/jpeg",
                 displayName: "photo.jpg",
-            },
-        });
+                byteLength: expect.any(Number),
+            }),
+        );
     });
 
     test("throws AppError when file reaches FAILED state", async () => {
-        mockFilesUpload.mockImplementationOnce(async () => ({
+        mockUploadStream.mockImplementationOnce(async () => ({
             name: "files/test123",
             state: "FAILED",
             uri: null as unknown as string,
@@ -110,7 +119,7 @@ describe("GenaiFileUploader.upload", () => {
     });
 
     test("throws AppError when ACTIVE file has no URI", async () => {
-        mockFilesUpload.mockImplementationOnce(async () => ({
+        mockUploadStream.mockImplementationOnce(async () => ({
             name: "files/test123",
             state: "ACTIVE",
             uri: null as unknown as string,

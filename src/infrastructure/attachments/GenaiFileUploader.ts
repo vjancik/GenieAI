@@ -1,15 +1,20 @@
-import { FileState, GoogleGenAI } from "@google/genai";
+import { FileState } from "@google/genai";
 import * as Sentry from "@sentry/bun";
+import { file as bunFile } from "bun";
 import type { FileConfig } from "../../application/config/AppConfig.ts";
 import type { IGeminiFileUploader, UploadedGeminiFile } from "../../application/ports/IGeminiFileUploader.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import { AppError } from "../../domain/errors/AppError.ts";
+import { GoogleGenAIWithStreamingUpload } from "./GoogleGenAI.ts";
 
 /**
- * Uploads files to the Gemini Files API using `@google/genai`.
+ * Uploads files to the Gemini Files API using `GoogleGenAIWithStreamingUpload`.
  *
  * Each upload is assigned a caller-provided file name (e.g. `"files/<uuid>"`),
  * which makes names predictable and avoids UNIQUE constraint collisions on refresh.
+ *
+ * Files are streamed directly from disk without buffering into memory, using the
+ * resumable upload protocol implemented in `GoogleGenAIWithStreamingUpload`.
  *
  * After upload, the file may be in PROCESSING state. This class polls
  * `ai.files.get()` every `geminiFileApi.pollIntervalMs` ms until the file reaches
@@ -17,7 +22,7 @@ import { AppError } from "../../domain/errors/AppError.ts";
  * error is thrown.
  */
 export class GenaiFileUploader implements IGeminiFileUploader {
-    private readonly ai: GoogleGenAI;
+    private readonly ai: GoogleGenAIWithStreamingUpload;
     private readonly pollIntervalMs: number;
     private readonly maxPollWaitMs: number;
 
@@ -27,7 +32,7 @@ export class GenaiFileUploader implements IGeminiFileUploader {
         private readonly logger: Logger,
         config: Pick<FileConfig, "geminiFileApi">,
     ) {
-        this.ai = new GoogleGenAI({ apiKey });
+        this.ai = new GoogleGenAIWithStreamingUpload({ apiKey });
         this.pollIntervalMs = config.geminiFileApi.pollIntervalMs;
         this.maxPollWaitMs = config.geminiFileApi.maxPollWaitMs;
     }
@@ -51,9 +56,15 @@ export class GenaiFileUploader implements IGeminiFileUploader {
             async (span) => {
                 this.logger.debug({ filePath, fileName, mimeType, displayName }, "Uploading file to Gemini Files API");
 
-                let file = await this.ai.files.upload({
-                    file: filePath,
-                    config: { name: fileName, mimeType, displayName },
+                const bunFileHandle = bunFile(filePath);
+                const byteLength = bunFileHandle.size;
+                const stream = bunFileHandle.stream();
+
+                let file = await this.ai.uploadStream(stream, {
+                    name: fileName,
+                    mimeType,
+                    displayName,
+                    byteLength,
                 });
 
                 this.logger.debug({ geminiFileName: file.name, state: file.state }, "File uploaded, checking state");
