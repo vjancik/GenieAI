@@ -14,6 +14,7 @@
  */
 import * as Sentry from "@sentry/bun";
 import { ConfigProvider } from "./application/config/AppConfig.ts";
+import { sanitizeForLog } from "./application/helpers/errorHelpers.ts";
 import { AgentMessageBuilder } from "./application/services/AgentMessageBuilder.ts";
 import { GeminiApiKeySyncService } from "./application/services/GeminiApiKeySync.ts";
 import { GeminiFileRefreshService } from "./application/services/GeminiFileRefresh.ts";
@@ -52,7 +53,6 @@ import { SinglePaidKeyProvider } from "./infrastructure/llm/SinglePaidKeyProvide
 import { createGetVideoCaptionsTool } from "./infrastructure/llm/tools/getVideoCaptionsTool.ts";
 import { createGetWebsiteTool } from "./infrastructure/llm/tools/getWebsiteTool.ts";
 import { createTavilyTool } from "./infrastructure/llm/tools/tavilySearchTool.ts";
-import { sanitizeForLog } from "./infrastructure/logging/helpers.ts";
 import { createLogger } from "./infrastructure/logging/logger.ts";
 
 const logger = createLogger(

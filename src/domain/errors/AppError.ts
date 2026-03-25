@@ -64,6 +64,19 @@ export class DiscordError extends AppError {
     }
 }
 
+/** Discord API error code for missing channel permissions. */
+const DISCORD_MISSING_PERMISSIONS_CODE = 50013;
+
+/** Returns true if `err` is a Discord API error with the Missing Permissions code. */
+export function isMissingPermissionsError(err: unknown): boolean {
+    return (
+        err !== null &&
+        typeof err === "object" &&
+        "code" in err &&
+        (err as { code: unknown }).code === DISCORD_MISSING_PERMISSIONS_CODE
+    );
+}
+
 /** Thrown when all free-tier Gemini API keys have responded with HTTP 429. */
 export class AllFreeKeysExhaustedError extends AppError {
     constructor(cause?: unknown) {

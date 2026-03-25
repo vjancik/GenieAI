@@ -1,4 +1,6 @@
+import { DiscordError, isMissingPermissionsError } from "../../domain/errors/AppError.ts";
 import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
+import { sanitizeForLog } from "../helpers/errorHelpers.ts";
 import { dbMessagesToLangchain, extractContent } from "../helpers/messageTransformers.ts";
 import type {
     IChatClientBot,
@@ -119,10 +121,23 @@ export class HandleExportUseCase {
             const png = await this.imageRenderer.render(html);
             const filename = `render-${botMessage.id}.png`;
 
-            const renderReply = await botMessage.reply({
-                files: [{ attachment: png, name: filename }],
-                allowedMentions: { repliedUser: false },
-            });
+            let renderReply: IChatClientMessage;
+            try {
+                renderReply = await botMessage.reply({
+                    files: [{ attachment: png, name: filename }],
+                    allowedMentions: { repliedUser: false },
+                });
+            } catch (err) {
+                sanitizeForLog(err);
+                if (isMissingPermissionsError(err)) {
+                    this.logger.error(
+                        { channelId: botMessage.channelId, guildId: botMessage.guildId },
+                        "Render failed: bot is missing Send Messages or Attach Files permission in this channel",
+                    );
+                    throw new DiscordError("Missing permissions to send render reply", err);
+                }
+                throw err;
+            }
 
             // Persist so the render reply participates in the DB reply chain
             await this.messageRepo.saveBotMessage({
