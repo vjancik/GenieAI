@@ -78,9 +78,19 @@ export class DiscordMediaService implements IDiscordMediaService {
 
             const msg = await channel.messages.fetch(messageDiscordId);
             const embed = msg.embeds[embedIndex];
-            if (!embed) return null;
+            let media = embed?.[embedMediaKey];
 
-            const media = embed[embedMediaKey];
+            // Fall back to searching embeds across all messageSnapshots (e.g. forwards)
+            if (!media?.url) {
+                for (const snapshot of msg.messageSnapshots.values()) {
+                    const snapshotMedia = snapshot.embeds[embedIndex]?.[embedMediaKey];
+                    if (snapshotMedia?.url) {
+                        media = snapshotMedia;
+                        break;
+                    }
+                }
+            }
+
             if (!media?.url) return null;
 
             // Synthesize a display name in the form "Embed-<index>-<Key>" (e.g. "Embed-0-Image")
