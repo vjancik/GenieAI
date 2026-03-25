@@ -278,9 +278,7 @@ export class PgMessageRepository implements IMessageRepository {
                         discordAuthorId: result.discordAuthorId,
                         // TYPE COERCION: the parsed value's shape matches DiscordMessage["langchainMessages"]
                         // by construction (it was stored from BaseMessage.toJSON()), but TS cannot verify it.
-                        langchainMessages: (typeof result.langchainMessages === "string"
-                            ? JSON.parse(result.langchainMessages)
-                            : result.langchainMessages) as DiscordMessage["langchainMessages"],
+                        langchainMessages: result.langchainMessages as DiscordMessage["langchainMessages"],
                         retriesLeft: result.retriesLeft,
                         usedFallback: result.usedFallback,
                         interactionType: result.interactionType,
@@ -330,13 +328,9 @@ export class PgMessageRepository implements IMessageRepository {
                         guildId: result.guildId,
                         role: result.role,
                         discordAuthorId: result.discordAuthorId,
-                        // langchain_messages is a JSON column; Bun's SQL driver may return it as either a
-                        // pre-parsed JS value or a raw JSON string — handle both cases defensively.
                         // TYPE COERCION: the parsed value's shape matches DiscordMessage["langchainMessages"]
                         // by construction (it was stored from BaseMessage.toJSON()), but TS cannot verify it.
-                        langchainMessages: (typeof result.langchainMessages === "string"
-                            ? JSON.parse(result.langchainMessages)
-                            : result.langchainMessages) as DiscordMessage["langchainMessages"],
+                        langchainMessages: result.langchainMessages as DiscordMessage["langchainMessages"],
                         retriesLeft: result.retriesLeft,
                         usedFallback: result.usedFallback,
                         interactionType: result.interactionType,
@@ -464,9 +458,9 @@ export class PgMessageRepository implements IMessageRepository {
                  * The collected rows are then ordered by created_at ASC to produce
                  * chronological conversation history.
                  *
-                 * langchain_messages is a JSON column; Bun's SQL driver may return it as either
-                 * a pre-parsed JS value or as a raw JSON string depending on the query path.
-                 * The row mapping below handles both cases defensively.
+                 * langchain_messages is a JSON column; Bun's SQL driver returns it as a
+                 * pre-parsed JS value for ORM queries but as a raw JSON string for raw
+                 * db.execute() calls — handle both cases here.
                  *
                  * Note: recursive CTEs cannot be expressed via the Drizzle query builder and
                  * therefore cannot use a prepared statement — raw SQL is required here.
@@ -505,8 +499,7 @@ export class PgMessageRepository implements IMessageRepository {
                         guildId: row.guild_id as string,
                         role: row.role as DiscordMessage["role"],
                         discordAuthorId: row.discord_author_id as string,
-                        // langchain_messages is a JSON column; Bun's SQL driver may return it as either a
-                        // pre-parsed JS value or a raw JSON string — handle both cases defensively.
+                        // Raw db.execute() returns JSON columns as strings unlike ORM queries —
                         // TYPE COERCION: the parsed value's shape matches DiscordMessage["langchainMessages"]
                         // by construction (it was stored from BaseMessage.toJSON()), but TS cannot verify it.
                         langchainMessages: (typeof row.langchain_messages === "string"

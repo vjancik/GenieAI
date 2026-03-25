@@ -25,8 +25,8 @@ import { messagePages, messages } from "../schema.ts";
  * Two aliases of the messages table are required: `bot` for the row identified by the
  * Discord snowflake triple, and `fp` (first page) for the row holding the LangChain content.
  *
- * langchain_messages is a JSON column; Bun's SQL driver may return it as either a
- * pre-parsed JS value or a raw JSON string — both cases are handled defensively.
+ * langchain_messages is a JSON column returned as a pre-parsed JS value
+ * by Bun's SQL driver (verified by integration test).
  */
 function buildGetNextPageStmt(db: Db) {
     const bot = alias(messages, "bot");
@@ -99,12 +99,9 @@ export class PgGetNextPageQuery implements IGetNextPageQuery {
                         totalPages: row.totalPages,
                         endedInCodeBlock: row.endedInCodeBlock,
                         codeBlockType: row.codeBlockType,
-                        // TYPE COERCION: Bun SQL driver returns JSON columns as either a pre-parsed
-                        // JS value or a raw JSON string; the stored shape matches langchainMessages
-                        // by construction (written via BaseMessage.toJSON()), but TS cannot verify it.
-                        langchainMessages: (typeof row.langchainMessages === "string"
-                            ? JSON.parse(row.langchainMessages)
-                            : row.langchainMessages) as DiscordMessage["langchainMessages"],
+                        // TYPE COERCION: the stored shape matches langchainMessages by construction
+                        // (written via BaseMessage.toJSON()), but TS cannot verify it.
+                        langchainMessages: row.langchainMessages as DiscordMessage["langchainMessages"],
                     };
                 } catch (err) {
                     throw new DatabaseError("Failed to fetch next page data", err);
