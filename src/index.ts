@@ -52,12 +52,14 @@ import { SinglePaidKeyProvider } from "./infrastructure/llm/SinglePaidKeyProvide
 import { createGetVideoCaptionsTool } from "./infrastructure/llm/tools/getVideoCaptionsTool.ts";
 import { createGetWebsiteTool } from "./infrastructure/llm/tools/getWebsiteTool.ts";
 import { createTavilyTool } from "./infrastructure/llm/tools/tavilySearchTool.ts";
+import { sanitizeForLog } from "./infrastructure/logging/helpers.ts";
 import { createLogger } from "./infrastructure/logging/logger.ts";
 
 const logger = createLogger(
     process.env.LOG_LEVEL?.toLowerCase() ?? "info",
     process.env.FILE_LOG?.toLowerCase() === "true",
 );
+
 logger.info("Starting GenieAI bot...");
 
 const configProvider = new ConfigProvider(logger);
@@ -273,11 +275,13 @@ process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 process.on("unhandledRejection", (reason) => {
+    sanitizeForLog(reason);
     Sentry.captureException(reason);
     logger.error({ reason }, "Unhandled promise rejection");
 });
 
 process.on("uncaughtException", (error) => {
+    sanitizeForLog(error);
     Sentry.captureException(error);
     logger.error({ error }, "Uncaught exception");
     process.exit(1);
