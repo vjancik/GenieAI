@@ -59,11 +59,11 @@ export async function initiateResumableUpload(apiKey: string, config: UploadStre
 /**
  * Single-request upload for files at or below {@link UPLOAD_CHUNK_SIZE}.
  *
- * Skips the resumable protocol entirely — no session initiation, no upload
- * command/offset headers. The file body is streamed inline via `duplex: "half"`
- * with no intermediate buffer.
+ * Skips the resumable protocol entirely. Buffers the stream into a `Uint8Array`
+ * first (safe under 8 MB) so the body can be retried with exponential backoff
+ * on transient failures.
  */
-export async function uploadStreamSingleShot(
+export async function uploadStreamSingleRequest(
     apiKey: string,
     stream: ReadableStream<Uint8Array>,
     config: UploadStreamConfig,
@@ -79,25 +79,37 @@ export async function uploadStreamSingleShot(
 
     const url = `${GEMINI_UPLOAD_BASE}/upload/v1beta/files?key=${apiKey}`;
 
-    const response = await fetch(url, {
-        method: "POST",
-        headers: {
-            "Content-Type": config.mimeType ?? "application/octet-stream",
-            "X-Goog-Upload-Header-Content-Length": String(config.byteLength),
-            "X-Goog-Upload-Header-Content-Type": config.mimeType ?? "application/octet-stream",
-            "Content-Length": String(config.byteLength),
-        },
-        body: stream,
-        duplex: "half",
-    });
+    // Buffer the full stream so the body can be resent on retry.
+    const body = await new Response(stream).arrayBuffer();
 
-    if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`Gemini single-shot upload failed (${response.status}): ${body}`);
+    let retryCount = 0;
+    let delayMs = INITIAL_RETRY_DELAY_MS;
+
+    while (true) {
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": config.mimeType ?? "application/octet-stream",
+                "Content-Length": String(body.byteLength),
+            },
+            body,
+        });
+
+        if (response.ok) {
+            const fileResource = (await response.json()) as { file: GenaiFile };
+            return fileResource.file;
+        }
+
+        retryCount++;
+        if (retryCount > MAX_RETRY_COUNT) {
+            const text = await response.text();
+            throw new Error(
+                `Gemini File API single request upload failed (${response.status}) after ${MAX_RETRY_COUNT} retries: ${text}`,
+            );
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+        delayMs *= DELAY_MULTIPLIER;
     }
-
-    const fileResource = (await response.json()) as { file: GenaiFile };
-    return fileResource.file;
 }
 
 /**
@@ -226,7 +238,7 @@ export class GoogleGenAIWithStreamingUpload extends GoogleGenAI {
      */
     async uploadStream(stream: ReadableStream<Uint8Array>, config: UploadStreamConfig): Promise<GenaiFile> {
         if (config.byteLength <= UPLOAD_CHUNK_SIZE) {
-            return uploadStreamSingleShot(this.geminiApiKey, stream, config);
+            return uploadStreamSingleRequest(this.geminiApiKey, stream, config);
         }
         const uploadUrl = await initiateResumableUpload(this.geminiApiKey, config);
         return uploadStreamChunked(stream, uploadUrl);
