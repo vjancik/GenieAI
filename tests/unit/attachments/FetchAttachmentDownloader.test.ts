@@ -167,6 +167,48 @@ describe("FetchAttachmentDownloader", () => {
         globalFetch.mockRestore();
     });
 
+    test("throws AppError when response MIME type does not match acceptTypes wildcard", async () => {
+        const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(
+            makeResponse(new Uint8Array([1]), "video/mp4"),
+        );
+
+        await expect(downloader.download(testAttachment, "image/*")).rejects.toThrow(AppError);
+
+        globalFetch.mockRestore();
+    });
+
+    test("does not throw when response MIME type matches acceptTypes wildcard", async () => {
+        const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(
+            makeResponse(new Uint8Array([1]), "image/webp"),
+        );
+
+        const result = await downloader.download(testAttachment, "image/*");
+        expect(result.mimeType).toBe("image/webp");
+
+        globalFetch.mockRestore();
+    });
+
+    test("does not throw when response MIME type matches acceptTypes exactly", async () => {
+        const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(
+            makeResponse(new Uint8Array([1]), "image/png"),
+        );
+
+        const result = await downloader.download(testAttachment, "image/png");
+        expect(result.mimeType).toBe("image/png");
+
+        globalFetch.mockRestore();
+    });
+
+    test("throws AppError when response MIME type does not match exact acceptType", async () => {
+        const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(
+            makeResponse(new Uint8Array([1]), "image/jpeg"),
+        );
+
+        await expect(downloader.download(testAttachment, "image/png")).rejects.toThrow(AppError);
+
+        globalFetch.mockRestore();
+    });
+
     test("does not abort body download after response is received", async () => {
         // Use a 1 ms timeout — body download must still succeed after timeout fires
         const timedOutDownloader = new FetchAttachmentDownloader(testLogger, makeConfig(1));

@@ -463,6 +463,77 @@ describe("HandleRetryUseCase", () => {
         expect(ids).not.toContain("other-bot-msg");
     });
 
+    it("continues with retry when interaction.message.delete() throws", async () => {
+        const originalMsg = makeMessage({ id: "orig-1", content: "!ai hello" });
+        const channel: IChatClientChannel = {
+            fetchMessage: mock(async () => originalMsg),
+            fetchMessagesAfter: mock(async () => []),
+        };
+        const messageRepo = makeMessageRepo({
+            fetchChain: mock(async () => [makeHumanRecord(), makeBotRecord()]),
+            deleteByDiscordMessageId: mock(async () => {}),
+        });
+        const handleChatMessage = makeChatMessageUseCase();
+        const useCase = makeUseCase({ handleChatMessage, messageRepo });
+        const interaction = makeButtonInteraction({ messageId: "bot-msg-1", referencedMessageId: "orig-1", channel });
+        // Override delete to throw — retry should still proceed
+        (interaction.message.delete as ReturnType<typeof mock>).mockImplementation(async () => {
+            throw new Error("Discord delete failed");
+        });
+
+        await useCase.execute(interaction);
+
+        // Agent should still have been called despite the delete failure
+        expect(handleChatMessage.invokeAgentAndReply).toHaveBeenCalled();
+    });
+
+    it("continues with retry when deleteByDiscordMessageId throws", async () => {
+        const originalMsg = makeMessage({ id: "orig-1", content: "!ai hello" });
+        const channel: IChatClientChannel = {
+            fetchMessage: mock(async () => originalMsg),
+            fetchMessagesAfter: mock(async () => []),
+        };
+        const messageRepo = makeMessageRepo({
+            fetchChain: mock(async () => [makeHumanRecord(), makeBotRecord()]),
+            deleteByDiscordMessageId: mock(async () => {
+                throw new Error("DB delete failed");
+            }),
+        });
+        const handleChatMessage = makeChatMessageUseCase();
+        const useCase = makeUseCase({ handleChatMessage, messageRepo });
+        const interaction = makeButtonInteraction({ messageId: "bot-msg-1", referencedMessageId: "orig-1", channel });
+
+        // Should not throw even though DB delete fails (fire-and-forget)
+        await expect(useCase.execute(interaction)).resolves.toBeUndefined();
+        expect(handleChatMessage.invokeAgentAndReply).toHaveBeenCalled();
+    });
+
+    it("does not crash when sources message delete() throws during dangling cleanup", async () => {
+        const sourcesMsg = makeMessage({
+            id: "sources-msg-1",
+            authorId: BOT_USER_ID,
+            isAuthorBot: true,
+            content: "*Sources: [Example](<https://example.com>)*",
+            referencedMessageId: "bot-msg-1",
+        });
+        // Override delete on sourcesMsg to throw
+        (sourcesMsg.delete as ReturnType<typeof mock>).mockImplementation(async () => {
+            throw new Error("sources delete failed");
+        });
+        const channel: IChatClientChannel = {
+            fetchMessage: mock(async () => makeMessage({ id: "orig-1", content: "!ai hello" })),
+            fetchMessagesAfter: mock(async () => [sourcesMsg]),
+        };
+        const messageRepo = makeMessageRepo({
+            fetchChain: mock(async () => [makeHumanRecord(), makeBotRecord()]),
+            deleteByDiscordMessageId: mock(async () => {}),
+        });
+        const useCase = makeUseCase({ messageRepo });
+        const interaction = makeButtonInteraction({ messageId: "bot-msg-1", referencedMessageId: "orig-1", channel });
+
+        await expect(useCase.execute(interaction)).resolves.toBeUndefined();
+    });
+
     it("does not crash when fetchMessagesAfter throws during dangling cleanup", async () => {
         const channel: IChatClientChannel = {
             fetchMessage: mock(async () => makeMessage({ id: "orig-1", content: "!ai hello" })),

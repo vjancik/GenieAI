@@ -107,3 +107,70 @@ describe("RateLimiter", () => {
         expect(limiter.check("u2").allowed).toBe(false);
     });
 });
+
+// ---------------------------------------------------------------------------
+// cleanup() — tested via a subclass that exposes the private method
+// ---------------------------------------------------------------------------
+
+class TestableRateLimiter extends RateLimiter {
+    triggerCleanup() {
+        // TYPE COERCION: accessing private method for test purposes only
+        (this as unknown as { cleanup(): void }).cleanup();
+    }
+}
+
+describe("RateLimiter — cleanup()", () => {
+    beforeEach(() => {
+        jest.setSystemTime(0);
+    });
+
+    afterEach(() => {
+        jest.useRealTimers();
+    });
+
+    it("removes a key whose all timestamps have expired past the max window", () => {
+        const limiter = new TestableRateLimiter([{ windowMs: 3_000, limit: 5 }]);
+        limiter.check("u1"); // records timestamp at t=0
+
+        // Advance past the window so the timestamp is expired
+        jest.setSystemTime(3_001);
+        limiter.triggerCleanup();
+
+        // After cleanup, a fresh check should allow the call (no stale state)
+        jest.setSystemTime(3_001);
+        expect(limiter.check("u1")).toEqual({ allowed: true });
+    });
+
+    it("keeps a key that still has timestamps within the window", () => {
+        const limiter = new TestableRateLimiter([{ windowMs: 10_000, limit: 2 }]);
+        limiter.check("u1"); // t=0
+        jest.setSystemTime(5_000);
+        limiter.check("u1"); // t=5000 — still within the 10s window
+
+        jest.setSystemTime(11_000); // first timestamp expired, second still live
+        limiter.triggerCleanup();
+
+        // Key should still be tracked (second timestamp at 5000 is within 10s window from 11000)
+        // So u1 has used 1 of 2 slots — a second call at t=11000 should be allowed
+        expect(limiter.check("u1")).toEqual({ allowed: true });
+    });
+
+    it("removes multiple expired keys and leaves active ones intact", () => {
+        const limiter = new TestableRateLimiter([{ windowMs: 3_000, limit: 5 }]);
+        limiter.check("expired1"); // t=0
+        limiter.check("expired2"); // t=0
+
+        jest.setSystemTime(1_000);
+        limiter.check("active1"); // t=1000 — within window at cleanup time
+
+        jest.setSystemTime(3_001); // expired1 and expired2 are past window; active1 is not
+        limiter.triggerCleanup();
+
+        // active1 at t=1000 is within 3s window from t=3001 (3001-1000=2001 < 3000)
+        // So active1 still has 1 recorded call — limit=5 means still 4 slots left
+        expect(limiter.check("active1")).toEqual({ allowed: true });
+        // expired keys are gone — fresh checks allowed from zero
+        expect(limiter.check("expired1")).toEqual({ allowed: true });
+        expect(limiter.check("expired2")).toEqual({ allowed: true });
+    });
+});

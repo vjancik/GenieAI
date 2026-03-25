@@ -1,0 +1,23 @@
+[test]
+coveragePathIgnorePatterns = [
+    # Discord adapter classes — thin 1:1 delegation to discord.js objects, no testable logic
+    "src/infrastructure/discord/adapters/**",
+    # Discord event wiring — requires live discord.js Client instance
+    "src/infrastructure/discord/DiscordGateway.ts",
+    # Discord REST API command registration with sleep-based retries
+    "src/infrastructure/discord/DiscordCommandRegistry.ts",
+    # LLM factory functions — side-effectful ChatGoogle construction, requires live API key
+    "src/infrastructure/llm/models/generalModel.ts",
+    "src/infrastructure/llm/models/searchModel.ts",
+    "src/infrastructure/llm/models/triageModel.ts",
+    "src/infrastructure/llm/ModelProvider.ts",
+    # Constant/declarative exports only — no callable logic
+    "src/infrastructure/llm/models/sharedGeminiSettings.ts",
+    "src/infrastructure/db/schema.ts",
+    # Network I/O utility — fetch call with no branching logic worth unit testing
+    "src/infrastructure/http/redirectUrl.ts",
+    # Startup-only AppConfig validation — exercised by running the app with bad env vars
+    "src/application/config/AppConfig.ts",
+    # AgentStatusType const object + assertNever — unreachable branch by design
+    "src/application/types/AgentStatus.ts",
+]

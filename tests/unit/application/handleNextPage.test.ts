@@ -307,6 +307,68 @@ describe("HandleNextPageUseCase", () => {
         );
     });
 
+    it("removes next-page button and returns when langchainMessages array is empty", async () => {
+        const pageData = makePageData({ langchainMessages: [] });
+        const useCase = makeUseCase({ query: makeGetNextPageQuery(pageData) });
+        const interaction = makeButtonInteraction({ messageId: "bot-msg-empty" });
+
+        await useCase.execute(interaction);
+
+        // No reply should be sent when there's nothing to paginate
+        expect(interaction.message.reply).not.toHaveBeenCalled();
+        // Button should be removed
+        expect(interaction.message.edit).toHaveBeenCalled();
+    });
+
+    it("does not save page state when reply throws", async () => {
+        const pageData = makePageData({ currentPage: 1, totalPages: 3, endOffset: 2000 });
+        const pageRepo = makePageRepo();
+        const useCase = makeUseCase({
+            query: makeGetNextPageQuery(pageData),
+            pageRepo,
+        });
+        const interaction = makeButtonInteraction({ messageId: "bot-msg-reply-throws" });
+        // Override reply to throw
+        (interaction.message.reply as ReturnType<typeof mock>).mockImplementation(async () => {
+            throw new Error("Discord API error");
+        });
+
+        await useCase.execute(interaction);
+
+        // Page state must not be saved when the reply failed
+        expect(pageRepo.save).not.toHaveBeenCalled();
+    });
+
+    it("paginates correctly when langchainMessages content is an array of text parts (structured content)", async () => {
+        // Covers extractTextFromMessageJson array-content branch (lines 57-61)
+        const structuredMsgJson = {
+            lc: 1,
+            type: "constructor",
+            id: ["langchain_core", "messages", "AIMessage"],
+            kwargs: {
+                content: [
+                    { type: "text", text: "A".repeat(2000) },
+                    { type: "text", text: "B".repeat(2000) },
+                    // thought chunk — should be filtered out
+                    { type: "text", text: "hidden thought", thought: true },
+                ],
+            },
+        };
+        const pageData = makePageData({
+            langchainMessages: [structuredMsgJson as unknown as Record<string, unknown>],
+            endOffset: 2000,
+            currentPage: 1,
+            totalPages: 2,
+        });
+        const useCase = makeUseCase({ query: makeGetNextPageQuery(pageData) });
+        const interaction = makeButtonInteraction({ messageId: "bot-msg-structured" });
+
+        await useCase.execute(interaction);
+
+        // Reply should be sent because total text (4000 chars) still needs paging
+        expect(interaction.message.reply).toHaveBeenCalled();
+    });
+
     it("releases the lock even when an error is thrown during execution", async () => {
         const lock = makeLock();
         const query: IGetNextPageQuery = {

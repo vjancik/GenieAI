@@ -660,3 +660,188 @@ describe("splitMarkdown — code block continuation (3-page)", () => {
         expect(pages.length).toBe(pageCount as number);
     });
 });
+
+// ---------------------------------------------------------------------------
+// Edge cases: closing fence doesn't fit (lines 211-228)
+// ---------------------------------------------------------------------------
+describe("splitMarkdown — closing fence doesn't fit at limit", () => {
+    it("closing fence line itself exceeds the limit: splits at last newline inside block, signals endedInCodeBlock", () => {
+        // Build a code block where the closing fence line (4 chars: \n```) would push past limit.
+        // Structure:  "safe\n```\nA\nB\n```"
+        // We want the limit to allow everything up to B but NOT the closing fence line.
+        // CODE_FENCE_CLOSE = "\n```" (4 chars). "\n```" is the closing fence line.
+        // Construct text where everything fits except the last ``` line.
+        const body = "safe\n```\nA\nB";
+        // Adding "\n```" (4 chars) as the closing fence line exceeds the limit
+        const text = `${body}\n\`\`\``;
+        // limit: just enough to hold everything up to B, but not "\n```" (closing fence)
+        // body.length = 12, text.length = 16, limit = 15 means the "\n```" (last 4) doesn't fit
+        const limit = body.length; // 12 — fits body exactly but not "\n```"
+
+        const result = splitMarkdown(text, 0, limit);
+        // Should split inside the block, close with synthetic fence, signal continuation
+        expect(result.endedInCodeBlock).toBe(true);
+        expect(result.content.length).toBeLessThanOrEqual(limit);
+        expect(result.content).toContain("```");
+    });
+
+    it("closing fence doesn't fit and no viable newline inside block: falls back to hard split", () => {
+        // Single line inside a code block, no newlines.
+        // Lines split as lookahead on \n: ["```", "\nx"*50, "\n```"].
+        // accumulated after opening fence ("```") = 3 chars.
+        // CODE_FENCE_CLOSE = "\n```" = 4 chars.
+        // limit = 6: accumulated(3) + fence(4) = 7 > 6, so fence doesn't fit.
+        // fenceRoom = 6 - 4 = 2, searchRegion = "``" (no \n), lastNl = -1.
+        // lastSafeLength = 0 → raw hard-cut: text.slice(0, limit), no ellipsis.
+        const longLine = "x".repeat(50);
+        const text = `\`\`\`\n${longLine}\n\`\`\``;
+        const limit = 6;
+
+        const result = splitMarkdown(text, 0, limit);
+        expect(result.content.length).toBeLessThanOrEqual(limit);
+        expect(result.newOffset).toBe(limit);
+        expect(result.endedInCodeBlock).toBe(false);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Edge cases: table hard-split when lastSafeLength=0 (lines 233-240)
+// ---------------------------------------------------------------------------
+describe("splitMarkdown — table starts at position 0 (no safe backup)", () => {
+    it("hard-splits when table begins at offset 0 and immediately exceeds limit", () => {
+        // Table row that is longer than the limit — no safe position before table
+        const row = `| ${"A".repeat(100)} |`;
+        const text = `${row}\n| --- |\n| cell |`;
+        const limit = 20;
+
+        const result = splitMarkdown(text, 0, limit);
+        // Must not exceed limit and must make forward progress
+        expect(result.content.length).toBeLessThanOrEqual(limit);
+        expect(result.newOffset).toBeGreaterThan(0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Edge cases: code block — accumulated=0 hard-split (lines 254-261)
+// ---------------------------------------------------------------------------
+describe("splitMarkdown — code block with accumulated=0 (opening fence exceeds limit)", () => {
+    it("hard-splits when the opening fence line itself is the only content and it exceeds limit", () => {
+        // The opening fence + first code line together exceed the limit, AND accumulated
+        // at the point of overflow is 0 (nothing before the fence)
+        // Text: "```typescript\n" + long line
+        // limit: smaller than the opening fence line length so accumulated=0 when overflow fires
+        const openFence = "```typescript\n";
+        const longLine = "x".repeat(100);
+        const text = openFence + longLine;
+        // limit smaller than openFence — no prior safe position, accumulated is 0 at check
+        const limit = 5;
+
+        const result = splitMarkdown(text, 0, limit);
+        expect(result.content.length).toBeLessThanOrEqual(limit);
+        expect(result.newOffset).toBeGreaterThan(0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Edge cases: code block where fence doesn't fit and no lastNl > codeBlockStart
+// → fall back to lastSafeLength (lines 288-305)
+// ---------------------------------------------------------------------------
+describe("splitMarkdown — code block: fence doesn't fit, no viable split inside block, has safe fallback", () => {
+    it("falls back to pre-block safe content when fence doesn't fit and no split inside block is possible", () => {
+        // Build:  "safe-line\n```\n<one-very-long-line-no-newline>"
+        // Lines split as lookahead on \n: ["safe-line", "\n```", "\ny"*100].
+        // accumulated after opening fence ("safe-line\n```") = 13 chars.
+        // CODE_FENCE_CLOSE = "\n```" = 4 chars.
+        // limit = 16: accumulated(13) + fence(4) = 17 > 16, so fence doesn't fit.
+        // fenceRoom = 16 - 4 = 12, searchRegion = "safe-line\n``" (12 chars).
+        // lastNl = 9 (the \n before ```), codeBlockStartLength = 13.
+        // lastNl(9) > codeBlockStartLength(13) is false → fall back to lastSafeLength(9).
+        // safeContent = accumulated.slice(0, 9) = "safe-line", endedInCodeBlock=false.
+        const safeLine = "safe-line";
+        const openFence = "```";
+        const codeLine = "y".repeat(100);
+        const text = `${safeLine}\n${openFence}\n${codeLine}`;
+        const limit = 16;
+
+        const result = splitMarkdown(text, 0, limit);
+        expect(result.endedInCodeBlock).toBe(false);
+        // safeContent = "safe-line" (last safe point before the block opened)
+        expect(result.content).toBe(safeLine);
+        expect(result.newOffset).toBe(safeLine.length);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Edge cases: unclosed code block at end of text, fence would not fit (lines 339-344)
+// ---------------------------------------------------------------------------
+describe("splitMarkdown — unclosed code block at end of text where fence exceeds limit", () => {
+    it("returns content without closing fence when adding it would exceed the limit", () => {
+        // Build text where the entire content fits within limit BUT adding \n``` (4 chars) would overflow.
+        // "```\nabc" — 7 chars. If limit = 7, adding \n``` (4 chars) = 11 > 7.
+        const text = "```\nabc";
+        const limit = text.length; // exactly 7 — fence ("\n```" = 4) would make it 11
+
+        const result = splitMarkdown(text, 0, limit);
+        // Falls into the "no room for fence" branch: returns content as-is without synthetic fence
+        expect(result.endedInCodeBlock).toBe(false);
+        expect(result.content).toBe(text);
+        expect(result.newOffset).toBe(text.length);
+    });
+
+    it("appends closing fence and signals endedInCodeBlock when fence fits within limit", () => {
+        // "```\nabc" — 7 chars. With limit=12: 7+4=11 <= 12, fence fits.
+        const text = "```\nabc";
+        const limit = 12;
+
+        const result = splitMarkdown(text, 0, limit);
+        expect(result.endedInCodeBlock).toBe(true);
+        expect(result.content).toBe(`${text}\n\`\`\``);
+        expect(result.newOffset).toBe(text.length);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Edge cases: isClosingFence hard split (lines 226-228) when lastNl <= 0
+// ---------------------------------------------------------------------------
+describe("splitMarkdown — isClosingFence: no viable newline, falls to hardSplit", () => {
+    it("hard-splits when closing fence doesn't fit and searchRegion has no newline", () => {
+        // "```\n\n```": opening fence ("```" = 3), empty line ("\n" = 1), closing fence ("\n```" = 4).
+        // accumulated after processing "```" (3) and "\n" (1) = "```\n" (4 chars).
+        // limit=6: closing fence "\n```" (4 chars): 4+4=8 > 6. Doesn't fit.
+        // isClosingFence=true. fenceRoom=6-4=2. searchRegion="``" (no \n). lastNl=-1.
+        // -1 > 0 is false → hardSplit(text, 0, 6). cutoff=5. content="```\n\n"+"…" = 6 chars.
+        const text = "```\n\n```";
+        const limit = 6;
+
+        const result = splitMarkdown(text, 0, limit);
+        expect(result.content.length).toBeLessThanOrEqual(limit);
+        expect(result.content).toMatch(/…$/);
+        expect(result.endedInCodeBlock).toBe(false);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Edge cases: inCodeBlock fence doesn't fit, lastNl > codeBlockStartLength (lines 281-287)
+// ---------------------------------------------------------------------------
+describe("splitMarkdown — inCodeBlock: fence doesn't fit, splits at newline inside block", () => {
+    it("splits at the last newline inside the block when fence doesn't fit but a newline exists after the opening fence", () => {
+        // "```\nline1\nline2\nverylonglinethatpushesitover"
+        // Lines (lookahead split): ["```", "\nline1", "\nline2", "\nverylongline..."]
+        // accumulated after "```"(3) + "\nline1"(6) + "\nline2"(6) = "```\nline1\nline2" (15 chars).
+        // codeBlockStartLength = 3 (after opening fence "```").
+        // Next line "\nverylongline..." (many chars) causes overflow.
+        // limit=18: accumulated(15) + fence(4) = 19 > 18. Fence doesn't fit.
+        // fenceRoom=18-4=14. searchRegion="```\nline1\nline" (14 chars).
+        // lastNl = position of last \n in searchRegion = 10 (before "line2" partial).
+        // 10 > codeBlockStartLength(3) → split at position 10.
+        // content = accumulated.slice(0,10) + "\n```" = "```\nline1\n" + "\n```"
+        const text = `\`\`\`\nline1\nline2\n${"x".repeat(50)}`;
+        const limit = 18;
+
+        const result = splitMarkdown(text, 0, limit);
+        expect(result.endedInCodeBlock).toBe(true);
+        expect(result.content.length).toBeLessThanOrEqual(limit);
+        expect(result.content).toContain("```\nline1");
+        expect(result.newOffset).toBeLessThan(text.length);
+    });
+});

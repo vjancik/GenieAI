@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { discordMessageToLlmText, llmTextToDiscordText } from "../../../src/application/formatters/textTransformers.ts";
+import {
+    discordMessageToLlmText,
+    formatUtcTimestamp,
+    llmTextToDiscordText,
+} from "../../../src/application/formatters/textTransformers.ts";
 import type {
     IChatClientMessage,
     IChatClientMessageEmbed,
@@ -216,6 +220,69 @@ describe("discordMessageToLlmText", () => {
         });
     });
 
+    describe("embed timestamp and fields", () => {
+        it("formats the embed timestamp as a verbose UTC string", () => {
+            const result = discordMessageToLlmText(
+                makeMsg({
+                    content: "x",
+                    embeds: [makeEmbed({ type: "rich", timestamp: "2024-03-17T14:35:00.000Z" })],
+                }),
+            );
+            expect(result).toContain("Date: Sunday, March 17, 2024 at 02:35:00 PM UTC");
+        });
+
+        it("renders embed fields with name and value", () => {
+            const result = discordMessageToLlmText(
+                makeMsg({
+                    content: "x",
+                    embeds: [
+                        makeEmbed({
+                            type: "rich",
+                            fields: [
+                                { name: "Field One", value: "Value One" },
+                                { name: "Field Two", value: "Value Two" },
+                            ],
+                        }),
+                    ],
+                }),
+            );
+            expect(result).toContain("Fields: ");
+            expect(result).toContain("Field One: Value One");
+            expect(result).toContain("Field Two: Value Two");
+        });
+
+        it("renders embed footerText", () => {
+            const result = discordMessageToLlmText(
+                makeMsg({
+                    content: "x",
+                    embeds: [makeEmbed({ type: "rich", footerText: "Powered by Example" })],
+                }),
+            );
+            expect(result).toContain("Footer: Powered by Example");
+        });
+
+        it("omits timestamp field when null", () => {
+            const result = discordMessageToLlmText(
+                makeMsg({ content: "x", embeds: [makeEmbed({ type: "rich", timestamp: null })] }),
+            );
+            expect(result).not.toContain("Date:");
+        });
+
+        it("omits fields section when fields array is empty", () => {
+            const result = discordMessageToLlmText(
+                makeMsg({ content: "x", embeds: [makeEmbed({ type: "rich", fields: [] })] }),
+            );
+            expect(result).not.toContain("Fields:");
+        });
+
+        it("omits footerText when null", () => {
+            const result = discordMessageToLlmText(
+                makeMsg({ content: "x", embeds: [makeEmbed({ type: "rich", footerText: null })] }),
+            );
+            expect(result).not.toContain("Footer:");
+        });
+    });
+
     describe("forwarded message rendering", () => {
         it("renders forwarded content section for forwardedSnapshot", () => {
             const result = discordMessageToLlmText(
@@ -378,5 +445,19 @@ describe("llmTextToDiscordText", () => {
 
             expect(llmTextToDiscordText(input)).toBe(expected);
         });
+    });
+});
+
+describe("formatUtcTimestamp", () => {
+    it("formats midnight UTC correctly", () => {
+        expect(formatUtcTimestamp(new Date("2024-01-01T00:00:00Z"))).toBe("Monday, January 1, 2024 at 12:00:00 AM UTC");
+    });
+
+    it("formats noon UTC correctly", () => {
+        expect(formatUtcTimestamp(new Date("2024-03-17T14:35:00Z"))).toBe("Sunday, March 17, 2024 at 02:35:00 PM UTC");
+    });
+
+    it("always appends UTC suffix", () => {
+        expect(formatUtcTimestamp(new Date("2024-06-15T09:05:03Z"))).toMatch(/ UTC$/);
     });
 });
