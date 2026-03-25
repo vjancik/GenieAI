@@ -671,9 +671,8 @@ export class HandleChatMessageUseCase {
             ? "\n*This response was generated using a fallback model. If it's unsatisfactory you can try to Retry later to see if the primary model is available again.*"
             : "";
 
-        // Resolve grounding sources in parallel with the response being sent.
-        // TODO: this is not in parallel
-        const sourcesLine = await this.resolveGroundingSources(newMessages);
+        // Start resolving grounding sources in parallel with sending the response and saving to DB.
+        const sourcesLinePromise = this.resolveGroundingSources(newMessages);
 
         // Attach a Retry button when the use case signals a retryable failure and retries remain.
         // retriesLeft=undefined means this is a fresh response — use defaultRetriesLeft.
@@ -759,12 +758,14 @@ export class HandleChatMessageUseCase {
                 codeBlockType: page1CodeBlockType,
             });
 
+            const sourcesLine = await sourcesLinePromise;
             if (sourcesLine) {
                 await this.sendSourcesReply(botReply, sourcesLine);
             }
         } else {
             // --- NON-PAGINATED PATH ---
 
+            const sourcesLine = await sourcesLinePromise;
             const responseWithFooter = discordResponse + fallbackFooter;
             const combined =
                 sourcesLine && responseWithFooter.length + 1 + sourcesLine.length <= MESSAGE_LENGTH_LIMIT
