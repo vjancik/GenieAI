@@ -98,7 +98,7 @@ export class PgGetNextPageQuery implements IGetNextPageQuery {
                         currentPage: row.currentPage,
                         totalPages: row.totalPages,
                         endedInCodeBlock: row.endedInCodeBlock,
-                        codeBlockType: row.codeBlockType ?? null,
+                        codeBlockType: row.codeBlockType,
                         // TYPE COERCION: Bun SQL driver returns JSON columns as either a pre-parsed
                         // JS value or a raw JSON string; the stored shape matches langchainMessages
                         // by construction (written via BaseMessage.toJSON()), but TS cannot verify it.

@@ -271,7 +271,7 @@ export class PgMessageRepository implements IMessageRepository {
                     return {
                         id: result.id,
                         discordMessageId: result.discordMessageId,
-                        repliesToDiscordId: result.repliesToDiscordId ?? null,
+                        repliesToDiscordId: result.repliesToDiscordId,
                         channelId: result.channelId,
                         guildId: result.guildId,
                         role: result.role,
@@ -281,10 +281,10 @@ export class PgMessageRepository implements IMessageRepository {
                         langchainMessages: (typeof result.langchainMessages === "string"
                             ? JSON.parse(result.langchainMessages)
                             : result.langchainMessages) as DiscordMessage["langchainMessages"],
-                        retriesLeft: result.retriesLeft ?? null,
-                        usedFallback: result.usedFallback ?? null,
-                        interactionType: result.interactionType ?? null,
-                        interactionAuthorDiscordId: result.interactionAuthorDiscordId ?? null,
+                        retriesLeft: result.retriesLeft,
+                        usedFallback: result.usedFallback,
+                        interactionType: result.interactionType,
+                        interactionAuthorDiscordId: result.interactionAuthorDiscordId,
                         createdAt: result.createdAt,
                     };
                 } catch (err) {
@@ -325,7 +325,7 @@ export class PgMessageRepository implements IMessageRepository {
                     return {
                         id: result.id,
                         discordMessageId: result.discordMessageId,
-                        repliesToDiscordId: result.repliesToDiscordId ?? null,
+                        repliesToDiscordId: result.repliesToDiscordId,
                         channelId: result.channelId,
                         guildId: result.guildId,
                         role: result.role,
@@ -337,10 +337,10 @@ export class PgMessageRepository implements IMessageRepository {
                         langchainMessages: (typeof result.langchainMessages === "string"
                             ? JSON.parse(result.langchainMessages)
                             : result.langchainMessages) as DiscordMessage["langchainMessages"],
-                        retriesLeft: result.retriesLeft ?? null,
-                        usedFallback: result.usedFallback ?? null,
-                        interactionType: result.interactionType ?? null,
-                        interactionAuthorDiscordId: result.interactionAuthorDiscordId ?? null,
+                        retriesLeft: result.retriesLeft,
+                        usedFallback: result.usedFallback,
+                        interactionType: result.interactionType,
+                        interactionAuthorDiscordId: result.interactionAuthorDiscordId,
                         createdAt: result.createdAt,
                     };
                 } catch (err) {
@@ -500,7 +500,7 @@ export class PgMessageRepository implements IMessageRepository {
                     return rows.reverse().map((row) => ({
                         id: row.id as string,
                         discordMessageId: row.discord_message_id as string,
-                        repliesToDiscordId: (row.replies_to_discord_id as string | null) ?? null,
+                        repliesToDiscordId: row.replies_to_discord_id as string | null,
                         channelId: row.channel_id as string,
                         guildId: row.guild_id as string,
                         role: row.role as DiscordMessage["role"],
@@ -512,10 +512,10 @@ export class PgMessageRepository implements IMessageRepository {
                         langchainMessages: (typeof row.langchain_messages === "string"
                             ? JSON.parse(row.langchain_messages)
                             : row.langchain_messages) as DiscordMessage["langchainMessages"],
-                        retriesLeft: (row.retries_left as number | null) ?? null,
-                        usedFallback: (row.used_fallback as boolean | null) ?? null,
-                        interactionType: (row.interaction_type as MessageInteractionType | null) ?? null,
-                        interactionAuthorDiscordId: (row.interaction_author_discord_id as string | null) ?? null,
+                        retriesLeft: row.retries_left as number | null,
+                        usedFallback: row.used_fallback as boolean | null,
+                        interactionType: row.interaction_type as MessageInteractionType | null,
+                        interactionAuthorDiscordId: row.interaction_author_discord_id as string | null,
                         createdAt: row.created_at as Date,
                     }));
                 } catch (err) {
