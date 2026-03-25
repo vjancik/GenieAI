@@ -50,8 +50,8 @@ describe("GeminiApiKeySyncService.sync", () => {
         expect(freeKeys[0]?.isPaid).toBe(false);
         expect(freeKeys[1]?.apiKey).toBe("free-key-2");
         expect(freeKeys[1]?.isPaid).toBe(false);
-        expect(paidKey.apiKey).toBe("paid-key");
-        expect(paidKey.isPaid).toBe(true);
+        expect(paidKey?.apiKey).toBe("paid-key");
+        expect(paidKey?.isPaid).toBe(true);
     });
 
     test("calls deactivateNotIn with all key strings to deactivate orphaned rows", async () => {
@@ -72,9 +72,35 @@ describe("GeminiApiKeySyncService.sync", () => {
 
         expect(freeKeys).toHaveLength(1);
         expect(freeKeys[0]?.apiKey).toBe("only-free");
-        expect(paidKey.apiKey).toBe("paid-key");
+        expect(paidKey?.apiKey).toBe("paid-key");
         expect(repo.upsert).toHaveBeenCalledTimes(2);
         expect(repo.deactivateNotIn).toHaveBeenCalledWith(["only-free", "paid-key"]);
+    });
+
+    test("skips paid key upsert when paidApiKey is null", async () => {
+        const repo = makeRepo();
+        const service = new GeminiApiKeySyncService(repo, testLogger);
+
+        const { freeKeys, paidKey } = await service.sync(["free-key"], null);
+
+        expect(freeKeys).toHaveLength(1);
+        expect(paidKey).toBeNull();
+        expect(repo.upsert).toHaveBeenCalledTimes(1);
+        expect(repo.upsert).toHaveBeenCalledWith({ apiKey: "free-key", isPaid: false });
+        expect(repo.deactivateNotIn).toHaveBeenCalledWith(["free-key"]);
+    });
+
+    test("skips free key upserts when freeApiKeys is null", async () => {
+        const repo = makeRepo();
+        const service = new GeminiApiKeySyncService(repo, testLogger);
+
+        const { freeKeys, paidKey } = await service.sync(null, "paid-key");
+
+        expect(freeKeys).toHaveLength(0);
+        expect(paidKey?.apiKey).toBe("paid-key");
+        expect(repo.upsert).toHaveBeenCalledTimes(1);
+        expect(repo.upsert).toHaveBeenCalledWith({ apiKey: "paid-key", isPaid: true });
+        expect(repo.deactivateNotIn).toHaveBeenCalledWith(["paid-key"]);
     });
 
     test("upserts before deactivating, ensuring keys are not orphaned prematurely", async () => {

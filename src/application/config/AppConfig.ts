@@ -265,7 +265,8 @@ const envConfigSchema = z
         DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
         /**
          * Free-tier Google API keys for triage and general model rotation.
-         * Comma-separated; at least one required. Keys rotate round-robin on HTTP 429.
+         * Comma-separated. Required when any agent node uses apiKeyType "free".
+         * Keys rotate round-robin on HTTP 429.
          */
         GOOGLE_FREE_API_KEYS: z
             .string()
@@ -275,19 +276,20 @@ const envConfigSchema = z
                     .map((k) => k.trim())
                     .filter((k) => k.length > 0),
             )
-            .pipe(z.string().array().min(1, "GOOGLE_FREE_API_KEYS must contain at least one API key")),
+            .pipe(z.string().array())
+            .optional(),
         /**
-         * Paid Google API key used exclusively for the search model.
+         * Paid Google API key. Required when any agent node uses apiKeyType "paid".
          * Google Search grounding is a paid-only feature; comma-separated values are rejected.
          */
         GOOGLE_PAID_API_KEY: z
             .string()
-            .min(1, "GOOGLE_PAID_API_KEY is required (paid key for Google Search grounding)")
             .refine(
                 (v) => !v.includes(","),
                 "GOOGLE_PAID_API_KEY must be a single key. For multiple keys use GOOGLE_FREE_API_KEYS.",
             )
-            .transform((v) => v.trim()),
+            .transform((v) => v.trim())
+            .optional(),
         /**
          * Tavily Search API key — required when agent.nodes.search.mode is "tavily".
          * Obtain a key at https://tavily.com.
@@ -302,9 +304,9 @@ const envConfigSchema = z
         discordClientId: env.DISCORD_CLIENT_ID,
         discordToken: env.DISCORD_TOKEN,
         databaseUrl: env.DATABASE_URL,
-        googleFreeApiKeys: env.GOOGLE_FREE_API_KEYS,
-        googlePaidApiKey: env.GOOGLE_PAID_API_KEY,
-        tavilyApiKey: env.TAVILY_API_KEY,
+        googleFreeApiKeys: env.GOOGLE_FREE_API_KEYS ?? null,
+        googlePaidApiKey: env.GOOGLE_PAID_API_KEY ?? null,
+        tavilyApiKey: env.TAVILY_API_KEY ?? null,
     }));
 
 /** Inferred type from the environment variable schema. */
@@ -507,13 +509,47 @@ function applyComputedValues(config: EnvConfig & { file: FileConfig }): AppConfi
  * Separates compatibility checks from schema parsing so that they run after
  * computed values are applied and can be unit-tested independently.
  *
- * Throws {@link ConfigError} if any constraint is violated.
+ * Throws {@link ConfigError} if any hard constraint is violated.
+ * Logs warnings for non-fatal but likely-misconfigured combinations.
  */
-export function validateConfig(config: AppConfig): void {
+export function validateConfig(config: AppConfig, logger?: Logger): void {
+    const nodes = config.file.agent.nodes;
+
+    // Ensure required API key env vars are present for the configured node apiKeyTypes.
+    const needsFree = [nodes.triage, nodes.general, nodes.search].some((n) => n.apiKeyType === ApiKeyType.free);
+    const needsPaid = [nodes.triage, nodes.general, nodes.search].some((n) => n.apiKeyType === ApiKeyType.paid);
+    if (needsFree && config.googleFreeApiKeys === null) {
+        throw new ConfigError(
+            'GOOGLE_FREE_API_KEYS is required because one or more agent nodes use apiKeyType: "free"',
+        );
+    }
+    if (needsPaid && config.googlePaidApiKey === null) {
+        throw new ConfigError('GOOGLE_PAID_API_KEY is required because one or more agent nodes use apiKeyType: "paid"');
+    }
+
+    // Warn when search is configured with free keys + Google grounding + a Gemini 3 model,
+    // because the Ground with Google Search quota is zero for free-tier on Gemini 3+.
+    if (logger && nodes.search.apiKeyType === ApiKeyType.free && nodes.search.mode === SearchMode.google) {
+        const searchModels = [nodes.search.model, nodes.search.fallbackModel].filter(Boolean) as string[];
+        const hasGemini3 = searchModels.some((m) => m.startsWith("gemini-3"));
+        if (hasGemini3) {
+            logger.warn(
+                {
+                    searchModel: nodes.search.model,
+                    fallbackModel: nodes.search.fallbackModel,
+                    searchMode: nodes.search.mode,
+                    apiKeyType: nodes.search.apiKeyType,
+                },
+                "Gemini 3 models do not support Google Search grounding on free-tier keys " +
+                    "(Ground with Google Search quota is 0 for free tier on gemini-3+). " +
+                    'Switch agent.nodes.search.mode to "tavily" or use a gemini-2.5 model.',
+            );
+        }
+    }
+
     if (config.file.agent.uploadAttachmentMode !== AttachmentMode.upload) return;
 
     // Upload mode uses the Gemini Files API, which is only supported by Gemini models.
-    const nodes = config.file.agent.nodes;
     const providers: { name: string; model: string }[] = [
         { name: "agent.nodes.triage.model", model: nodes.triage.model },
         { name: "agent.nodes.general.model", model: nodes.general.model },
@@ -551,7 +587,7 @@ async function loadConfig(logger: Logger): Promise<AppConfig> {
     fileConfig = applyEnvOverrides(fileConfig, envOverrides);
 
     const config = applyComputedValues({ ...envConfig, file: fileConfig });
-    validateConfig(config);
+    validateConfig(config, logger);
     return config;
 }
 

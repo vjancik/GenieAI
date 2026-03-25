@@ -81,7 +81,7 @@ const diskDownloader = new FetchDiskAttachmentDownloader(logger.child({ module: 
 
 // Lazy uploader registry — one GenaiFileUploader per API key, constructed on first use
 const uploaderRegistry = new GenaiFileUploaderRegistry(
-    [...freeKeys, paidKey],
+    [...freeKeys, ...(paidKey !== null ? [paidKey] : [])],
     logger.child({ module: "attachments:uploaderRegistry" }),
     config.file,
 );
@@ -97,7 +97,8 @@ const tavilyTool = config.file.agent.nodes.search.mode === "tavily" ? createTavi
 
 // Lazy model providers — one ChatGoogle client per (provider, apiKey) pair
 const freeKeyProvider = new RoundRobinFreeKeyProvider(freeKeys);
-const paidKeyProvider = new SinglePaidKeyProvider(paidKey);
+// TYPE COERCION: validateConfig throws before this point if any node uses apiKeyType "paid" without GOOGLE_PAID_API_KEY set
+const paidKeyProvider = new SinglePaidKeyProvider(paidKey!);
 const triageProvider = new TriageModelProvider({
     modelName: config.file.agent.nodes.triage.model,
     fallbackModelName: config.file.agent.nodes.triage.fallbackModel,

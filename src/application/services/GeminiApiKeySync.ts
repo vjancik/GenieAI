@@ -24,25 +24,27 @@ export class GeminiApiKeySyncService {
     /**
      * Upserts all configured API keys and deactivates any orphaned DB rows.
      *
-     * @param freeApiKeys - Raw free-tier key strings from `GOOGLE_FREE_API_KEYS`
-     * @param paidApiKey - Raw paid key string from `GOOGLE_PAID_API_KEY`
+     * Either param may be `null` when the corresponding env var is absent.
+     * `validateConfig` ensures the required keys are present for the configured
+     * node `apiKeyType`s before this method is called.
+     *
+     * @param freeApiKeys - Raw free-tier key strings from `GOOGLE_FREE_API_KEYS`, or null if unset
+     * @param paidApiKey - Raw paid key string from `GOOGLE_PAID_API_KEY`, or null if unset
      * @returns DB records for all keys, split into free and paid groups
      */
     async sync(
-        freeApiKeys: string[],
-        paidApiKey: string,
-    ): Promise<{ freeKeys: GeminiApiKey[]; paidKey: GeminiApiKey }> {
-        const allKeyStrings = [...freeApiKeys, paidApiKey];
+        freeApiKeys: string[] | null,
+        paidApiKey: string | null,
+    ): Promise<{ freeKeys: GeminiApiKey[]; paidKey: GeminiApiKey | null }> {
+        const allKeyStrings: string[] = [...(freeApiKeys ?? []), ...(paidApiKey !== null ? [paidApiKey] : [])];
 
         // Upsert all keys — free first, then paid
         // NOTE: Multiple queries preferred to single unnest() ARRAY query on process initialization
         const freeKeyRecords = await Promise.all(
-            freeApiKeys.map((apiKey) => this.geminiApiKeyRepo.upsert({ apiKey, isPaid: false })),
+            (freeApiKeys ?? []).map((apiKey) => this.geminiApiKeyRepo.upsert({ apiKey, isPaid: false })),
         );
-        const paidKeyRecord = await this.geminiApiKeyRepo.upsert({
-            apiKey: paidApiKey,
-            isPaid: true,
-        });
+        const paidKeyRecord =
+            paidApiKey !== null ? await this.geminiApiKeyRepo.upsert({ apiKey: paidApiKey, isPaid: true }) : null;
 
         // Deactivate keys removed from env. Rows are kept (not deleted) so their
         // gemini_file_uploads rows survive, avoiding unnecessary re-uploads.
@@ -51,7 +53,7 @@ export class GeminiApiKeySyncService {
         this.logger.info(
             {
                 freeKeyCount: freeKeyRecords.length,
-                paidKeyId: paidKeyRecord.id,
+                paidKeyId: paidKeyRecord?.id ?? null,
             },
             "Gemini API keys synced",
         );
