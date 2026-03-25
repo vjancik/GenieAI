@@ -81,31 +81,26 @@ export function isDiscordTokenUrl(value: string): boolean {
 /**
  * Parses a Discord token URL into a typed {@link DiscordTokenUrl} object.
  * Returns `null` if the URL is not a valid Discord token URL or cannot be parsed.
+ *
+ * Uses manual string splitting rather than the `URL` constructor because Discord
+ * snowflakes are purely numeric strings and the URL API interprets numeric-only
+ * hostnames as IPv4 addresses (e.g. "123456789" → "7.91.205.21").
  */
 export function parseDiscordTokenUrl(url: string): DiscordTokenUrl | null {
     if (!isDiscordTokenUrl(url)) return null;
 
-    // URL API requires a valid base URL; discord:// is not a registered scheme,
-    // so we substitute https:// for parsing then extract path segments manually.
-    let parsed: URL;
-    try {
-        parsed = new URL(url.replace(DISCORD_PROTOCOL, "https:"));
-    } catch {
-        return null;
-    }
+    // Strip the "discord://" prefix and split the remaining path by "/"
+    const withoutProtocol = url.slice(`${DISCORD_PROTOCOL}//`.length);
+    const segments = withoutProtocol.split("/");
 
-    // hostname is guildId; pathname starts with a leading "/"
-    const guildId = parsed.hostname;
-    const segments = parsed.pathname.replace(/^\//, "").split("/");
+    // Minimum segments: guildId / channelId / messageId / attachmentId (4)
+    if (segments.length < 4) return null;
 
-    // Minimum: channelId / messageId / attachmentId (3 segments)
-    if (segments.length < 3) return null;
-
-    const [channelId, messageId, ...rest] = segments as [string, string, ...string[]];
-    if (!channelId || !messageId) return null;
+    const [guildId, channelId, messageId, ...rest] = segments;
+    if (!guildId || !channelId || !messageId) return null;
 
     if (rest[0] === "embed") {
-        // Embed: embed / embedIndex / mediaKey (3 more segments after channelId/messageId)
+        // Embed format: embed / embedIndex / mediaKey (3 elements after messageId)
         if (rest.length < 3) return null;
         const embedIndex = Number(rest[1]);
         if (!Number.isInteger(embedIndex) || embedIndex < 0) return null;
@@ -114,7 +109,7 @@ export function parseDiscordTokenUrl(url: string): DiscordTokenUrl | null {
         return { kind: "embed", guildId, channelId, messageId, embedIndex, mediaKey };
     }
 
-    // Attachment: attachmentId is rest[0]
+    // Attachment format: attachmentId is rest[0]
     const attachmentId = rest[0];
     if (!attachmentId) return null;
     return { kind: "attachment", guildId, channelId, messageId, attachmentId };

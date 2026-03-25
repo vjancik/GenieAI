@@ -40,6 +40,7 @@ import { DiscordCommandRegistry } from "./infrastructure/discord/DiscordCommandR
 import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
 import { DiscordMediaService } from "./infrastructure/discord/DiscordMediaService.ts";
 import { InteractionLock } from "./infrastructure/discord/InteractionLock.ts";
+import { normalizeInlineMediaBlocks } from "./infrastructure/discord/inlineMediaNormalizer.ts";
 import { RateLimiter } from "./infrastructure/discord/RateLimiter.ts";
 import { HtmlToImageRenderer } from "./infrastructure/exporters/HtmlToImageRenderer.ts";
 import { MarkdownToHtmlRenderer } from "./infrastructure/exporters/MarkdownToHtmlRenderer.ts";
@@ -144,6 +145,14 @@ const commandRegistry = new DiscordCommandRegistry(
 
 // Gemini file refresh service — depends on discordMediaService for re-fetching expired CDN URLs
 const discordMediaService = new DiscordMediaService(discordClient);
+// Inline media normalizer — resolves discord:// token URLs to base64 data blocks before LLM calls
+const inlineMediaNormalizer = (messages: Parameters<typeof normalizeInlineMediaBlocks>[0]) =>
+    normalizeInlineMediaBlocks(
+        messages,
+        discordMediaService,
+        attachmentDownloader,
+        logger.child({ module: "inline-normalizer" }),
+    );
 const geminiFileRefreshService = new GeminiFileRefreshService(
     geminiFileRepository,
     uploaderRegistry,
@@ -197,7 +206,6 @@ const htmlToImage = new HtmlToImageRenderer();
 const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
 const discordClientBot = new DiscordClientBot(discordClient.client);
 const agentMessageBuilder = new AgentMessageBuilder(
-    attachmentDownloader,
     logger.child({ module: "agent-message-builder" }),
     config,
     streamingDownloader,
@@ -218,6 +226,7 @@ const handleChatMessageUseCase = new HandleChatMessageUseCase(
     agentMessageBuilder,
     discordChatMessageService,
     config.file.discord.enableInDMs,
+    inlineMediaNormalizer,
 );
 
 // Shared interaction lock — one instance reused across all use cases that need locking

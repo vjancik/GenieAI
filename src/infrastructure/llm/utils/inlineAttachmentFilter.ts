@@ -6,24 +6,47 @@ import { HumanMessage } from "@langchain/core/messages";
  * All LangChain complex content parts have at least a `type` discriminant.
  */
 type ContentBlock = Record<string, unknown> & { type: string };
-type InlineAttachmentBlock = ContentBlock & { data: string };
+
+/** A media block with already-resolved base64 data, ready for LLM consumption. */
+type DataAttachmentBlock = ContentBlock & { data: string };
+
+/** A media block still holding a discord:// token URL (data not yet fetched). */
+type TokenAttachmentBlock = ContentBlock & { url: string };
 
 /**
- * Returns true if a content block carries inline binary data (i.e. is an
- * attachment block, not a plain text block). Such blocks have a `data` field
- * containing a base64-encoded string.
+ * Returns true if a content block carries resolved base64 binary data.
+ * These blocks count toward the inline attachment size budget.
  */
-function isAttachmentBlock(block: ContentBlock): block is InlineAttachmentBlock {
+function isDataAttachmentBlock(block: ContentBlock): block is DataAttachmentBlock {
     return typeof block.data === "string";
 }
 
 /**
- * Returns the byte contribution of an attachment block.
- * We use the base64 string length as a conservative upper bound — actual decoded
- * bytes are ~75% of this, but using length avoids the cost of decoding.
+ * Returns true if a content block is an unresolved discord:// token URL block.
+ * These blocks have not yet been downloaded; they count as zero bytes toward the budget
+ * since their size is unknown until normalization resolves them.
  */
-function attachmentBlockBytes(block: InlineAttachmentBlock): number {
-    return block.data.length;
+function isTokenAttachmentBlock(block: ContentBlock): block is TokenAttachmentBlock {
+    return typeof block.url === "string" && block.url.startsWith("discord://");
+}
+
+/**
+ * Returns true if a block is any kind of attachment block (data or token).
+ * Used to identify blocks that should be stripped when trimming history.
+ */
+function isAttachmentBlock(block: ContentBlock): block is DataAttachmentBlock | TokenAttachmentBlock {
+    return isDataAttachmentBlock(block) || isTokenAttachmentBlock(block);
+}
+
+/**
+ * Returns the byte contribution of an attachment block.
+ * Token URL blocks contribute zero — their size is unknown until normalization.
+ * Data blocks use base64 string length as a conservative upper bound (actual decoded
+ * bytes are ~75% of this, but using length avoids the cost of decoding).
+ */
+function attachmentBlockBytes(block: DataAttachmentBlock | TokenAttachmentBlock): number {
+    if (isDataAttachmentBlock(block)) return block.data.length;
+    return 0;
 }
 
 /**
@@ -59,7 +82,7 @@ export function getInlineAttachmentBytes(messages: BaseMessage[]): number {
  * are iterated in order, removing one at a time. Once the total drops below the
  * limit the function returns immediately, leaving all remaining blocks intact.
  *
- * Text blocks (`type: "text"`) are never removed — only blocks with a `data` field.
+ * Text blocks (`type: "text"`) are never removed — only attachment blocks (data or token URL).
  *
  * Messages that are not HumanMessages, or whose content is a plain string, are
  * never modified and are passed through unchanged.

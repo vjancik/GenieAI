@@ -58,6 +58,14 @@ type AgentResult = {
 };
 
 /**
+ * Resolves Discord token URL media blocks in a LangChain message array into
+ * base64 data blocks, ready for LLM consumption.
+ * Only called in inline attachment mode; injected as a functional dependency
+ * so the use case remains decoupled from infrastructure.
+ */
+export type InlineMediaNormalizer = (messages: BaseMessage[]) => Promise<BaseMessage[]>;
+
+/**
  * Application use case: process an incoming chat message from end to end.
  *
  * Owns the full pipeline:
@@ -82,6 +90,8 @@ export class HandleChatMessageUseCase {
         private readonly messageBuilder: AgentMessageBuilder,
         private readonly chatMessageService?: IChatMessageService,
         private readonly enableInDMs: boolean = false,
+        /** Required in inline attachment mode: resolves discord:// token URLs to base64 data blocks. */
+        private readonly inlineMediaNormalizer?: InlineMediaNormalizer,
     ) {}
 
     /**
@@ -509,6 +519,9 @@ export class HandleChatMessageUseCase {
                             attachments: params.attachments,
                             embeds: params.embeds,
                             onStatusUpdate: params.onStatusUpdate,
+                            guildId: params.guildId,
+                            channelId: params.channelId,
+                            discordMessageId: params.discordMessageId,
                         });
 
                         // Persist the user's message first so gemini_files FK is satisfied
@@ -567,6 +580,13 @@ export class HandleChatMessageUseCase {
 
                     span.setAttribute("app.history_length", history.length);
 
+                    // In inline mode, media blocks in history contain discord:// token URLs
+                    // instead of raw base64. Resolve them to data blocks before sending to the LLM.
+                    const llmHistory =
+                        this.messageBuilder.mode === AttachmentMode.inline && this.inlineMediaNormalizer
+                            ? await this.inlineMediaNormalizer(history)
+                            : history;
+
                     this.logger.debug(
                         {
                             discordMessageId: params.discordMessageId,
@@ -579,7 +599,7 @@ export class HandleChatMessageUseCase {
                     );
 
                     const { content, newMessages, isRetryable, usedFallback } = await this.orchestrator.process(
-                        history,
+                        llmHistory,
                         params.intent,
                         params.onStatusUpdate,
                     );

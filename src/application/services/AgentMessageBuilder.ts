@@ -2,9 +2,9 @@ import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import { randomUUIDv7 } from "bun";
 import { EMBED_MEDIA_KEYS, type GeminiFile, GeminiFileSourceType } from "../../domain/message/GeminiFile.ts";
+import { buildAttachmentTokenUrl, buildEmbedTokenUrl } from "../../infrastructure/discord/discordTokenUrl.ts";
 import { type AppConfig, AttachmentMode } from "../config/AppConfig.ts";
 import type { IChatClientMessageAttachment, IChatClientMessageEmbed } from "../ports/chat/IChatClient.ts";
-import type { IAttachmentDownloader } from "../ports/IAttachmentDownloader.ts";
 import type { IGeminiFileRepository } from "../ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploaderRegistry } from "../ports/IGeminiFileUploaderRegistry.ts";
 import type { IRoundRobinKeyProvider } from "../ports/IRoundRobinKeyProvider.ts";
@@ -44,7 +44,6 @@ export class AgentMessageBuilder {
     private readonly attachmentMode: AttachmentMode;
 
     /**
-     * @param attachmentDownloader - Downloads attachments in inline mode
      * @param logger - Logger instance
      * @param config - Application config subset for file/attachment settings
      * @param diskDownloader - Required in upload mode; streams files to a temp path
@@ -53,7 +52,6 @@ export class AgentMessageBuilder {
      * @param geminiFileRepo - Required in upload mode; persists Gemini file metadata
      */
     constructor(
-        private readonly attachmentDownloader: IAttachmentDownloader,
         private readonly logger: Logger,
         config: Pick<AppConfig, "file">,
         /** Required in upload mode; unused in inline mode. */
@@ -69,6 +67,9 @@ export class AgentMessageBuilder {
     /**
      * Constructs a LangChain message from content and optional file attachments.
      * Produces a {@link HumanMessage} for role "human" and an {@link AIMessage} for role "assistant".
+     *
+     * In inline mode, `guildId`, `channelId`, and `discordMessageId` are required — they are
+     * encoded into the Discord token URLs stored in media blocks instead of raw base64 data.
      */
     async buildMessage<R extends "human" | "assistant">(params: {
         role: R;
@@ -76,11 +77,17 @@ export class AgentMessageBuilder {
         attachments: IChatClientMessageAttachment[];
         embeds?: IChatClientMessageEmbed[];
         onStatusUpdate?: OnStatusUpdate;
+        /** Required in inline mode: encoded into discord:// token URLs for deferred media resolution. */
+        guildId?: string;
+        /** Required in inline mode: encoded into discord:// token URLs for deferred media resolution. */
+        channelId?: string;
+        /** Required in inline mode: encoded into discord:// token URLs for deferred media resolution. */
+        discordMessageId?: string;
     }): Promise<{
         msg: R extends "human" ? HumanMessage : AIMessage;
         pendingRecords: PendingGeminiRecord[];
     }> {
-        const { role, content, attachments, embeds, onStatusUpdate } = params;
+        const { role, content, attachments, embeds, onStatusUpdate, guildId, channelId, discordMessageId } = params;
 
         // TYPE COERCION: TypeScript cannot narrow a conditional return type (R extends "human" ? ...)
         // from within the generic implementation body — the union HumanMessage | AIMessage is not
@@ -106,7 +113,14 @@ export class AgentMessageBuilder {
             return { msg: wrap(contentParts), pendingRecords };
         }
 
-        const contentParts = await this.buildInlineModeContentParts(content, attachments, embeds);
+        const contentParts = await this.buildInlineModeContentParts(
+            content,
+            attachments,
+            embeds,
+            guildId,
+            channelId,
+            discordMessageId,
+        );
         return { msg: wrap(contentParts), pendingRecords: [] };
     }
 
@@ -154,81 +168,66 @@ export class AgentMessageBuilder {
     }
 
     /**
-     * Inline mode: downloads each attachment and embed media item to memory as base64,
-     * embeds directly in message content parts.
+     * Inline mode: builds message content parts with Discord token URL media blocks.
+     *
+     * Instead of downloading files and embedding raw base64 (which bloats Postgres),
+     * each attachment or embed media item is encoded as a `discord://` token URL.
+     * The actual bytes are fetched on demand by {@link normalizeInlineMediaBlocks}
+     * just before the message is passed to the LLM.
+     *
+     * MIME type is resolved eagerly from Discord metadata so the block is complete
+     * enough for size-budget checks without requiring a network round-trip.
      */
     private async buildInlineModeContentParts(
         content: string,
         attachments: IChatClientMessageAttachment[],
         embeds?: IChatClientMessageEmbed[],
-    ): Promise<Array<{ type: "text"; text: string } | { type: "media"; mimeType: string; data: string }>> {
+        guildId?: string,
+        channelId?: string,
+        discordMessageId?: string,
+    ): Promise<Array<{ type: "text"; text: string } | { type: "media"; mimeType: string; url: string }>> {
         return Sentry.startSpan(
             {
                 name: "Build inline attachment message",
                 op: "app.attachments.build_inline",
                 attributes: { "app.attachment_count": attachments.length },
             },
-            async () => {
-                const embedMediaItems: { attachment: IChatClientMessageAttachment; acceptTypes: string }[] = [];
+            () => {
+                const mediaBlocks: Array<{ type: "media"; mimeType: string; url: string }> = [];
+
+                for (const attachment of attachments) {
+                    const mimeType = attachment.contentType ?? "application/octet-stream";
+                    const tokenUrl =
+                        guildId && channelId && discordMessageId
+                            ? buildAttachmentTokenUrl(guildId, channelId, discordMessageId, attachment.id)
+                            : attachment.url;
+                    mediaBlocks.push({ type: "media", mimeType, url: tokenUrl });
+                }
+
                 if (embeds) {
                     for (const [embedIndex, embed] of embeds.entries()) {
                         for (const key of EMBED_MEDIA_KEYS) {
                             const media = embed[key];
                             if (!media?.url) continue;
-                            const capitalizedKey = key.charAt(0).toUpperCase() + key.slice(1);
-                            embedMediaItems.push({
-                                attachment: {
-                                    id: media.url,
-                                    url: media.url,
-                                    proxyURL: media.proxyURL ?? media.url,
-                                    name: `Embed-${embedIndex}-${capitalizedKey}`,
-                                    size: 0,
-                                    contentType: null,
-                                },
-                                acceptTypes: key === "video" ? "video/*" : "image/*",
-                            });
+                            const tokenUrl =
+                                guildId && channelId && discordMessageId
+                                    ? buildEmbedTokenUrl(guildId, channelId, discordMessageId, embedIndex, key)
+                                    : media.url;
+                            // MIME type is not available from embed metadata; resolved on download
+                            mediaBlocks.push({ type: "media", mimeType: "application/octet-stream", url: tokenUrl });
                         }
                     }
                 }
 
-                const attachmentsPromise = Promise.all(attachments.map((a) => this.attachmentDownloader.download(a)));
-                const embedsPromise = Promise.allSettled(
-                    embedMediaItems.map(({ attachment, acceptTypes }) =>
-                        this.attachmentDownloader.download(attachment, acceptTypes),
-                    ),
-                );
-                const [downloadedAttachments, embedResults] = await Promise.all([attachmentsPromise, embedsPromise]);
-                const downloadedEmbeds = embedResults.flatMap((result, i) => {
-                    if (result.status === "fulfilled") return [result.value];
-                    this.logger.warn(
-                        {
-                            err: result.reason,
-                            name: embedMediaItems[i]?.attachment.name,
-                            url: embedMediaItems[i]?.attachment.url,
-                        },
-                        "Failed to download embed media for inline embedding — skipping",
-                    );
-                    return [];
-                });
-
-                const downloaded = [...downloadedAttachments, ...downloadedEmbeds];
-
-                this.logger.debug(
-                    { count: downloaded.length, names: downloaded.map((d) => d.name) },
-                    "Downloaded attachments for inline embedding",
-                );
+                this.logger.debug({ count: mediaBlocks.length }, "Built inline media token blocks (download deferred)");
 
                 // Use legacy LangChain media format with type: "media" rather than specific
                 // block types (e.g. "image", "file") via the contentBlocks constructor.
                 // See HandleDiscordMessage for detailed rationale.
-                return [
+                return Promise.resolve([
                     ...(content ? [{ type: "text" as const, text: content }] : []),
-                    ...downloaded.map((d) => ({
-                        type: "media" as const,
-                        mimeType: d.mimeType,
-                        data: d.data,
-                    })),
-                ];
+                    ...mediaBlocks,
+                ]);
             },
         );
     }
