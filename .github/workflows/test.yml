@@ -21,3 +21,6 @@ jobs:
 
       - name: Run unit tests
         run: bun test --env-file .env.test tests/unit
+        env:
+          # TODO: remove once TAVILY_API_KEY is no longer required at startup (should be optional)
+          TAVILY_API_KEY: dummy
