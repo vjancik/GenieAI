@@ -64,7 +64,7 @@ export class DiscordGateway {
 
     private registerEventHandlers(): void {
         this.client.on(Events.MessageCreate, (message) => {
-            this.trackHandler(this.handleMessageCreate(new DiscordClientMessage(message)));
+            this.trackHandler(this.guard(this.handleMessageCreate(new DiscordClientMessage(message)), "MessageCreate"));
         });
 
         this.client.on(Events.InteractionCreate, (interaction) => {
@@ -78,11 +78,15 @@ export class DiscordGateway {
             if (interaction.isMessageContextMenuCommand()) {
                 const wrapped = new DiscordClientContextMenuInteraction(interaction);
                 if (interaction.commandName === SUMMARIZE_COMMAND_NAME) {
-                    this.trackHandler(this.handleSummarizeUseCase.execute(wrapped));
+                    this.trackHandler(this.guard(this.handleSummarizeUseCase.execute(wrapped), SUMMARIZE_COMMAND_NAME));
                 } else if (interaction.commandName === EXPORT_HTML_COMMAND_NAME) {
-                    this.trackHandler(this.handleExportUseCase.handleExportHtml(wrapped));
+                    this.trackHandler(
+                        this.guard(this.handleExportUseCase.handleExportHtml(wrapped), EXPORT_HTML_COMMAND_NAME),
+                    );
                 } else if (interaction.commandName === EXPORT_IMAGE_COMMAND_NAME) {
-                    this.trackHandler(this.handleExportUseCase.handleExportImage(wrapped));
+                    this.trackHandler(
+                        this.guard(this.handleExportUseCase.handleExportImage(wrapped), EXPORT_IMAGE_COMMAND_NAME),
+                    );
                 }
                 return;
             }
@@ -90,11 +94,11 @@ export class DiscordGateway {
             if (!interaction.isButton()) return;
             const wrapped = new DiscordClientButtonInteraction(interaction);
             if (interaction.customId === RETRY_BUTTON_ID) {
-                this.trackHandler(this.handleRetryUseCase.execute(wrapped));
+                this.trackHandler(this.guard(this.handleRetryUseCase.execute(wrapped), RETRY_BUTTON_ID));
             } else if (interaction.customId === NEXT_PAGE_BUTTON_ID) {
-                this.trackHandler(this.handleNextPageUseCase.execute(wrapped));
+                this.trackHandler(this.guard(this.handleNextPageUseCase.execute(wrapped), NEXT_PAGE_BUTTON_ID));
             } else if (interaction.customId === RENDER_BUTTON_ID) {
-                this.trackHandler(this.handleExportUseCase.handleRender(wrapped));
+                this.trackHandler(this.guard(this.handleExportUseCase.handleRender(wrapped), RENDER_BUTTON_ID));
             }
         });
 
@@ -114,6 +118,20 @@ export class DiscordGateway {
             id,
             promise.finally(() => this.inFlightHandlers.delete(id)),
         );
+    }
+
+    /**
+     * Wraps a handler promise with a top-level catch that logs the error,
+     * captures it to Sentry, and swallows it so it never reaches the unhandled
+     * rejection handler. Must be the outermost wrapper — applied before trackHandler.
+     */
+    private async guard(promise: Promise<void>, handlerName: string): Promise<void> {
+        try {
+            await promise;
+        } catch (err) {
+            this.logger.error({ err, handlerName }, "Unhandled error in Discord event handler");
+            Sentry.captureException(err);
+        }
     }
 
     /**

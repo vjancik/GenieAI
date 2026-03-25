@@ -289,6 +289,7 @@ export class HandleChatMessageUseCase {
             };
         } catch (err) {
             this.logger.error({ err, discordMessageId: message.id }, "Failed to invoke agent");
+            Sentry.captureException(err);
 
             // Attempt to edit the thinking message with an error notice. Guard
             // against the error having been thrown before the thinking message
