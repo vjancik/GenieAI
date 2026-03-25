@@ -4,21 +4,7 @@
  * with the concrete fetch-based implementation living in infrastructure.
  */
 
-/** Metadata Discord provides for a message attachment. */
-export interface DiscordAttachmentInfo {
-    /** Discord snowflake for the attachment. Stable identifier used for refetching. */
-    id: string;
-    /** Primary CDN URL for the attachment. */
-    url: string;
-    /** Proxy URL — used as a fallback if the primary URL fails. */
-    proxyURL: string;
-    /** Original filename as uploaded by the user. */
-    name: string;
-    /** File size in bytes as reported by Discord (used for pre-download size checks). */
-    size: number;
-    /** MIME type as reported by Discord, or null if unavailable. */
-    contentType: string | null;
-}
+import type { IChatClientMessageAttachment } from "./chat/IChatClientMessageMedia.ts";
 
 /** A downloaded attachment ready for use as a LangChain content block. */
 export interface DownloadedAttachment {
@@ -41,5 +27,5 @@ export interface IAttachmentDownloader {
      *   When provided, the header is sent with the request and the response Content-Type
      *   is validated against it — throws `UNEXPECTED_CONTENT_TYPE` if it does not match.
      */
-    download(attachment: DiscordAttachmentInfo, acceptTypes?: string): Promise<DownloadedAttachment>;
+    download(attachment: IChatClientMessageAttachment, acceptTypes?: string): Promise<DownloadedAttachment>;
 }

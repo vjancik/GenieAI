@@ -10,9 +10,14 @@ import type { DiscordMessage } from "../../domain/message/Message.ts";
 import type { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import { type AppConfig, AttachmentMode } from "../config/AppConfig.ts";
 import { discordMessageToLlmText } from "../formatters/textTransformers.ts";
+import type {
+    IChatClientMessage,
+    IChatClientMessageAttachment,
+    IChatClientMessageEmbed,
+} from "../ports/chat/IChatClient.ts";
 import type { IAgentOrchestrator } from "../ports/IAgentOrchestrator.ts";
-import type { DiscordAttachmentInfo, IAttachmentDownloader } from "../ports/IAttachmentDownloader.ts";
-import type { DiscordEmbedInfo, DiscordMessageSnapshot, IChatMessageService } from "../ports/IChatMessageService.ts";
+import type { IAttachmentDownloader } from "../ports/IAttachmentDownloader.ts";
+import type { IChatMessageService } from "../ports/IChatMessageService.ts";
 import type { IDiskAttachmentDownloader } from "../ports/IDiskAttachmentDownloader.ts";
 import type { IGeminiFileRepository } from "../ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploader } from "../ports/IGeminiFileUploader.ts";
@@ -45,7 +50,7 @@ type PendingGeminiRecord = {
 };
 
 /** Returns true if at least one embed contains a URL for any of the tracked media keys. */
-function embedsHaveMedia(embeds: DiscordEmbedInfo[]): boolean {
+function embedsHaveMedia(embeds: IChatClientMessageEmbed[]): boolean {
     return embeds.some((embed) => EMBED_MEDIA_KEYS.some((key) => embed[key]?.url != null));
 }
 
@@ -86,7 +91,7 @@ export class HandleDiscordMessageUseCase {
         private readonly geminiFileRepo?: IGeminiFileRepository,
         private readonly chatMessageService?: IChatMessageService,
     ) {
-        this.maxInlineBytes = config.file.agent.maxInlineAttachmentSizeMB * 1024 * 1024;
+        this.maxInlineBytes = config.file.agent.maxInlineAttachmentSizeBytes;
         this.attachmentMode = config.file.agent.uploadAttachmentMode;
         this.attachmentsTempDir = config.file.attachmentDownloader.tempDir;
     }
@@ -122,9 +127,21 @@ export class HandleDiscordMessageUseCase {
         guildId: string;
         /** Discord snowflake of the user who sent this message. Persisted for Retry button authorship checks. */
         discordAuthorId: string;
-        userContent: string;
-        attachments: DiscordAttachmentInfo[];
-        embeds?: DiscordEmbedInfo[];
+        /** The bot's Discord user ID — used to detect bot-authored messages when persisting live chain messages. */
+        botUserId: string;
+        /** Optional previous bot user ID also treated as own-bot during live chain persistence. */
+        previousBotId?: string;
+        /**
+         * The live message object. Null when `reuseHumanMessage` is true.
+         */
+        message: IChatClientMessage | null;
+        /**
+         * Content with bot mentions and command prefix already stripped.
+         * Null when `reuseHumanMessage` is true.
+         */
+        strippedContent: string | null;
+        attachments: IChatClientMessageAttachment[];
+        embeds?: IChatClientMessageEmbed[];
         intent: MessageIntent;
         onStatusUpdate?: OnStatusUpdate;
         reuseHumanMessage?: boolean;
@@ -224,6 +241,8 @@ export class HandleDiscordMessageUseCase {
                                 params.referencedMessageId,
                                 params.channelId,
                                 params.guildId,
+                                params.botUserId,
+                                params.previousBotId,
                                 params.onStatusUpdate,
                                 params.fetchHistory === false ? 1 : undefined,
                             );
@@ -233,7 +252,11 @@ export class HandleDiscordMessageUseCase {
                         // be saved AFTER the user's message row exists (FK constraint).
                         const { msg: builtMsg, pendingRecords } = await this.buildMessage({
                             role: "human",
-                            content: params.userContent,
+                            // message is non-null on this path (reuseHumanMessage is false)
+                            content:
+                                params.message !== null
+                                    ? discordMessageToLlmText(params.message, params.strippedContent ?? undefined)
+                                    : "",
                             attachments: params.attachments,
                             embeds: params.embeds,
                             onStatusUpdate: params.onStatusUpdate,
@@ -365,6 +388,8 @@ export class HandleDiscordMessageUseCase {
         referencedMessageId: string,
         channelId: string,
         guildId: string,
+        botUserId: string,
+        previousBotId?: string,
         onStatusUpdate?: OnStatusUpdate,
         limit?: number,
     ): Promise<DiscordMessage[]> {
@@ -375,15 +400,15 @@ export class HandleDiscordMessageUseCase {
                 attributes: { "discord.message_id": referencedMessageId },
             },
             async (span) => {
-                const snapshots = await chatMessageService.fetchChain({
+                const messages = await chatMessageService.fetchChain({
                     startDiscordMessageId: referencedMessageId,
                     channelId,
                     guildId,
                 });
 
-                span.setAttribute("app.live_chain_length", snapshots.length);
+                span.setAttribute("app.live_chain_length", messages.length);
 
-                if (snapshots.length === 0) {
+                if (messages.length === 0) {
                     this.logger.debug(
                         { referencedMessageId },
                         "Live chain fetch returned no messages — proceeding without history",
@@ -391,52 +416,56 @@ export class HandleDiscordMessageUseCase {
                     return [];
                 }
 
-                // Determine which snapshots are already in the DB to avoid re-inserting them
+                // Determine which messages are already in the DB to avoid re-inserting them
                 const existingIds = await this.messageRepo.findExistingDiscordIds({
                     guildId,
                     channelId,
-                    discordMessageIds: snapshots.map((s) => s.id),
+                    discordMessageIds: messages.map((m) => m.id),
                 });
                 const existingIdSet = new Set(existingIds);
 
-                // Only build and persist messages that are not yet in the DB
-                const newSnapshots = snapshots.filter((s) => !existingIdSet.has(s.id));
+                const newMessages = messages.filter((m) => !existingIdSet.has(m.id));
 
-                span.setAttribute("app.live_chain_new_messages", newSnapshots.length);
+                span.setAttribute("app.live_chain_new_messages", newMessages.length);
 
-                if (newSnapshots.length > 0) {
-                    // Build a LangChain message and collect pending Gemini records for each new snapshot
+                if (newMessages.length > 0) {
                     const built: Array<{
-                        snapshot: DiscordMessageSnapshot;
+                        message: IChatClientMessage;
                         msg: BaseMessage;
                         pendingRecords: PendingGeminiRecord[];
+                        ownBot: boolean;
                     }> = [];
 
-                    for (const snapshot of newSnapshots) {
-                        const content = snapshot.isOwnBot ? snapshot.content : discordMessageToLlmText(snapshot);
+                    for (const liveMsg of newMessages) {
+                        const ownBot =
+                            liveMsg.authorId === botUserId ||
+                            (previousBotId !== undefined && liveMsg.authorId === previousBotId);
+                        const content = ownBot ? liveMsg.cleanContent : discordMessageToLlmText(liveMsg);
 
+                        // Forwarded messages carry attachments on the snapshot; include both in case the outer message has any too
+                        const attachments = [...liveMsg.attachments, ...(liveMsg.forwardedSnapshot?.attachments ?? [])];
                         const { msg, pendingRecords } = await this.buildMessage({
-                            role: snapshot.isOwnBot ? "assistant" : "human",
+                            role: ownBot ? "assistant" : "human",
                             content,
-                            attachments: snapshot.attachments,
-                            embeds: snapshot.embeds,
+                            attachments,
+                            embeds: liveMsg.embeds,
                             onStatusUpdate,
                         });
 
-                        built.push({ snapshot, msg, pendingRecords });
+                        built.push({ message: liveMsg, msg, pendingRecords, ownBot });
                     }
 
                     // Batch-insert all new message rows. saveBatch returns exactly N rows
                     // (one per input) in insertion order — pre-existing rows are included
                     // via the no-op conflict update, so index correlation is safe.
                     const savedRows = await this.messageRepo.saveBatch(
-                        built.map(({ snapshot, msg }) => ({
-                            discordMessageId: snapshot.id,
-                            repliesToDiscordId: snapshot.referencedMessageId,
-                            channelId: snapshot.channelId,
-                            guildId: snapshot.guildId,
-                            role: snapshot.isOwnBot ? "assistant" : ("human" as const),
-                            discordAuthorId: snapshot.authorId,
+                        built.map(({ message: liveMsg, msg, ownBot }) => ({
+                            discordMessageId: liveMsg.id,
+                            repliesToDiscordId: liveMsg.referencedMessageId,
+                            channelId: liveMsg.channelId,
+                            guildId: liveMsg.guildId ?? "@me",
+                            role: ownBot ? "assistant" : ("human" as const),
+                            discordAuthorId: liveMsg.authorId,
                             // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
                             // which is incompatible with our DB schema's Record<string, unknown>. Double cast
                             // through unknown bridges the gap — the serialized shape IS a plain JSON object.
@@ -529,8 +558,8 @@ export class HandleDiscordMessageUseCase {
     private async buildMessage<R extends "human" | "assistant">(params: {
         role: R;
         content: string;
-        attachments: DiscordAttachmentInfo[];
-        embeds?: DiscordEmbedInfo[];
+        attachments: IChatClientMessageAttachment[];
+        embeds?: IChatClientMessageEmbed[];
         onStatusUpdate?: OnStatusUpdate;
     }): Promise<{
         msg: R extends "human" ? HumanMessage : AIMessage;
@@ -572,8 +601,8 @@ export class HandleDiscordMessageUseCase {
      */
     private async buildInlineModeContentParts(
         content: string,
-        attachments: DiscordAttachmentInfo[],
-        embeds?: DiscordEmbedInfo[],
+        attachments: IChatClientMessageAttachment[],
+        embeds?: IChatClientMessageEmbed[],
     ): Promise<Array<{ type: "text"; text: string } | { type: "media"; mimeType: string; data: string }>> {
         return Sentry.startSpan(
             {
@@ -582,9 +611,9 @@ export class HandleDiscordMessageUseCase {
                 attributes: { "app.attachment_count": attachments.length },
             },
             async () => {
-                // Collect embed media as DiscordAttachmentInfo using their direct URLs.
+                // Collect embed media as IChatClientMessageAttachment using their direct URLs.
                 // Size is unknown for embed media — use 0 as a sentinel (checked upstream only in upload guard).
-                const embedMediaItems: { attachment: DiscordAttachmentInfo; acceptTypes: string }[] = [];
+                const embedMediaItems: { attachment: IChatClientMessageAttachment; acceptTypes: string }[] = [];
                 if (embeds) {
                     for (const [embedIndex, embed] of embeds.entries()) {
                         for (const key of EMBED_MEDIA_KEYS) {
@@ -669,8 +698,8 @@ export class HandleDiscordMessageUseCase {
      */
     private async buildUploadModeContentParts(
         content: string,
-        attachments: DiscordAttachmentInfo[],
-        embeds?: DiscordEmbedInfo[],
+        attachments: IChatClientMessageAttachment[],
+        embeds?: IChatClientMessageEmbed[],
     ): Promise<{
         contentParts: Array<{ type: "text"; text: string } | { type: "media"; mimeType: string; fileUri: string }>;
         pendingRecords: PendingGeminiRecord[];
@@ -761,9 +790,10 @@ export class HandleDiscordMessageUseCase {
                             const displayName = `Embed-${embedIndex}-${capitalizedKey}`;
                             const tempPath = join(this.attachmentsTempDir, `${randomUUIDv7()}-${displayName}`);
                             try {
-                                const embedAttachment: DiscordAttachmentInfo = {
+                                const embedAttachment: IChatClientMessageAttachment = {
                                     id: media.url,
                                     url: media.url,
+                                    // TODO: respect the nullability, work with null at consumer side
                                     proxyURL: media.proxyURL ?? media.url,
                                     name: displayName,
                                     size: 0,

@@ -1,12 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { Message } from "discord.js";
 import { MessageType } from "discord.js";
+import { extractUserContent } from "../../../src/application/helpers/extractUserContent.ts";
+import { parseMessageIntent } from "../../../src/application/helpers/parseMessageIntent.ts";
 import { MessageIntent } from "../../../src/domain/message/MessageIntent.ts";
-import {
-    extractUserContent,
-    isExplicitMention,
-    parseMessageIntent,
-} from "../../../src/infrastructure/discord/DiscordGateway.ts";
+import { DiscordClientMessage } from "../../../src/infrastructure/discord/adapters/DiscordClientMessage.ts";
 
 const BOT_ID = "123456789";
 const OTHER_USER_ID = "987654321";
@@ -40,51 +38,45 @@ function makeMessage(opts: {
         },
         type: opts.type ?? MessageType.Default,
         content: opts.content ?? "",
+        attachments: { values: () => [].values() },
+        embeds: [],
+        components: [],
     } as unknown as Message;
 }
 
-describe("isExplicitMention", () => {
+describe("DiscordClientMessage.hasExplicitMention", () => {
     test("returns true when bot is explicitly @mentioned", () => {
-        const msg = makeMessage({
-            mentionsBotId: BOT_ID,
-            type: MessageType.Default,
-        });
-        expect(isExplicitMention(msg, BOT_ID)).toBe(true);
+        const msg = new DiscordClientMessage(makeMessage({ mentionsBotId: BOT_ID, type: MessageType.Default }));
+        expect(msg.hasExplicitMention(BOT_ID)).toBe(true);
     });
 
     test("returns false when bot is not in mentions at all", () => {
-        const msg = makeMessage({ mentionsBotId: OTHER_USER_ID });
-        expect(isExplicitMention(msg, BOT_ID)).toBe(false);
+        const msg = new DiscordClientMessage(makeMessage({ mentionsBotId: OTHER_USER_ID }));
+        expect(msg.hasExplicitMention(BOT_ID)).toBe(false);
     });
 
     test("returns false for reply-mention (Reply type + repliedUser is the bot)", () => {
         // This simulates Discord's reply-with-mention: the bot is in mentions,
         // the message type is Reply, and repliedUser is the bot
-        const msg = makeMessage({
-            mentionsBotId: BOT_ID,
-            repliedUserId: BOT_ID,
-            type: MessageType.Reply,
-        });
-        expect(isExplicitMention(msg, BOT_ID)).toBe(false);
+        const msg = new DiscordClientMessage(
+            makeMessage({ mentionsBotId: BOT_ID, repliedUserId: BOT_ID, type: MessageType.Reply }),
+        );
+        expect(msg.hasExplicitMention(BOT_ID)).toBe(false);
     });
 
     test("returns true when replying to another user but also explicitly mentioning the bot", () => {
         // User replies to someone else AND also types @bot — this IS an explicit mention
-        const msg = makeMessage({
-            mentionsBotId: BOT_ID,
-            repliedUserId: OTHER_USER_ID,
-            type: MessageType.Reply,
-        });
-        expect(isExplicitMention(msg, BOT_ID)).toBe(true);
+        const msg = new DiscordClientMessage(
+            makeMessage({ mentionsBotId: BOT_ID, repliedUserId: OTHER_USER_ID, type: MessageType.Reply }),
+        );
+        expect(msg.hasExplicitMention(BOT_ID)).toBe(true);
     });
 
     test("returns true for Reply type when repliedUser is null (mention without reply notification)", () => {
-        const msg = makeMessage({
-            mentionsBotId: BOT_ID,
-            repliedUserId: null,
-            type: MessageType.Reply,
-        });
-        expect(isExplicitMention(msg, BOT_ID)).toBe(true);
+        const msg = new DiscordClientMessage(
+            makeMessage({ mentionsBotId: BOT_ID, repliedUserId: null, type: MessageType.Reply }),
+        );
+        expect(msg.hasExplicitMention(BOT_ID)).toBe(true);
     });
 });
 
@@ -137,92 +129,73 @@ describe("parseMessageIntent", () => {
 
 describe("extractUserContent", () => {
     test("strips <@userId> mention format", () => {
-        const msg = makeMessage({ content: `<@${BOT_ID}> hello there` });
-        expect(extractUserContent(msg, BOT_ID, null)).toBe("hello there");
+        expect(extractUserContent(`<@${BOT_ID}> hello there`, BOT_ID, null)).toBe("hello there");
     });
 
     test("strips <@!userId> legacy nickname mention format", () => {
-        const msg = makeMessage({ content: `<@!${BOT_ID}> what is 2+2?` });
-        expect(extractUserContent(msg, BOT_ID, null)).toBe("what is 2+2?");
+        expect(extractUserContent(`<@!${BOT_ID}> what is 2+2?`, BOT_ID, null)).toBe("what is 2+2?");
     });
 
     test("strips multiple bot mentions", () => {
-        const msg = makeMessage({
-            content: `<@${BOT_ID}> hey <@${BOT_ID}> test`,
-        });
-        expect(extractUserContent(msg, BOT_ID, null)).toBe("hey  test");
+        expect(extractUserContent(`<@${BOT_ID}> hey <@${BOT_ID}> test`, BOT_ID, null)).toBe("hey  test");
     });
 
     test("trims surrounding whitespace", () => {
-        const msg = makeMessage({
-            content: `  <@${BOT_ID}>   tell me a joke   `,
-        });
-        expect(extractUserContent(msg, BOT_ID, null)).toBe("tell me a joke");
+        expect(extractUserContent(`  <@${BOT_ID}>   tell me a joke   `, BOT_ID, null)).toBe("tell me a joke");
     });
 
     test("returns empty string when only a mention is present", () => {
-        const msg = makeMessage({ content: `<@${BOT_ID}>` });
-        expect(extractUserContent(msg, BOT_ID, null)).toBe("");
+        expect(extractUserContent(`<@${BOT_ID}>`, BOT_ID, null)).toBe("");
     });
 
     test("does not strip other users' mentions", () => {
-        const msg = makeMessage({
-            content: `<@${BOT_ID}> hey <@${OTHER_USER_ID}> what do you think?`,
-        });
-        expect(extractUserContent(msg, BOT_ID, null)).toBe(`hey <@${OTHER_USER_ID}> what do you think?`);
+        expect(extractUserContent(`<@${BOT_ID}> hey <@${OTHER_USER_ID}> what do you think?`, BOT_ID, null)).toBe(
+            `hey <@${OTHER_USER_ID}> what do you think?`,
+        );
     });
 
     test("strips the bot's role mention (<@&roleId>) when botRoleId is provided", () => {
         const BOT_ROLE_ID = "111222333";
-        const msg = makeMessage({
-            content: `<@&${BOT_ROLE_ID}> <@${BOT_ID}> what is 2+2?`,
-        });
-        expect(extractUserContent(msg, BOT_ID, BOT_ROLE_ID)).toBe("what is 2+2?");
+        expect(extractUserContent(`<@&${BOT_ROLE_ID}> <@${BOT_ID}> what is 2+2?`, BOT_ID, BOT_ROLE_ID)).toBe(
+            "what is 2+2?",
+        );
     });
 
     test("does not strip other role mentions when botRoleId is provided", () => {
         const BOT_ROLE_ID = "111222333";
         const OTHER_ROLE_ID = "999888777";
-        const msg = makeMessage({
-            content: `<@&${OTHER_ROLE_ID}> <@${BOT_ID}> what is 2+2?`,
-        });
-        expect(extractUserContent(msg, BOT_ID, BOT_ROLE_ID)).toBe(`<@&${OTHER_ROLE_ID}>  what is 2+2?`);
+        expect(extractUserContent(`<@&${OTHER_ROLE_ID}> <@${BOT_ID}> what is 2+2?`, BOT_ID, BOT_ROLE_ID)).toBe(
+            `<@&${OTHER_ROLE_ID}>  what is 2+2?`,
+        );
     });
 
     test("does not strip role mentions when botRoleId is null (DM)", () => {
-        const msg = makeMessage({
-            content: `<@&111222333> <@${BOT_ID}> what is 2+2?`,
-        });
-        expect(extractUserContent(msg, BOT_ID, null)).toBe("<@&111222333>  what is 2+2?");
+        expect(extractUserContent(`<@&111222333> <@${BOT_ID}> what is 2+2?`, BOT_ID, null)).toBe(
+            "<@&111222333>  what is 2+2?",
+        );
     });
 
     test("strips !ai command prefix", () => {
-        const msg = makeMessage({ content: "!ai tell me a joke" });
-        expect(extractUserContent(msg, BOT_ID, null)).toBe("tell me a joke");
+        expect(extractUserContent("!ai tell me a joke", BOT_ID, null)).toBe("tell me a joke");
     });
 
     test("strips !aisearch command prefix", () => {
-        const msg = makeMessage({ content: "!aisearch latest news" });
-        expect(extractUserContent(msg, BOT_ID, null)).toBe("latest news");
+        expect(extractUserContent("!aisearch latest news", BOT_ID, null)).toBe("latest news");
     });
 
     test("strips !aisummary command prefix", () => {
-        const msg = makeMessage({ content: "!aisummary this article" });
-        expect(extractUserContent(msg, BOT_ID, null)).toBe("this article");
+        expect(extractUserContent("!aisummary this article", BOT_ID, null)).toBe("this article");
     });
 
     test("strips command prefix case-insensitively", () => {
-        const msg = makeMessage({ content: "!AI what is TypeScript?" });
-        expect(extractUserContent(msg, BOT_ID, null)).toBe("what is TypeScript?");
+        expect(extractUserContent("!AI what is TypeScript?", BOT_ID, null)).toBe("what is TypeScript?");
     });
 
     test("strips command prefix when it appears before a bot mention", () => {
-        const msg = makeMessage({ content: `!aisearch <@${BOT_ID}> find something` });
-        expect(extractUserContent(msg, BOT_ID, null)).toBe("find something");
+        expect(extractUserContent(`!aisearch <@${BOT_ID}> find something`, BOT_ID, null)).toBe("find something");
     });
 
     test("does not strip command prefix without trailing whitespace", () => {
-        const msg = makeMessage({ content: "!aiquery something" });
-        expect(extractUserContent(msg, BOT_ID, null)).toBe("!aiquery something");
+        expect(extractUserContent("!aiquery something", BOT_ID, null)).toBe("!aiquery something");
     });
 });

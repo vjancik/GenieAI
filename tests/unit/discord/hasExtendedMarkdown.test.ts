@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { file } from "bun";
-import { hasExtendedMarkdown } from "../../../src/infrastructure/discord/DiscordGateway.ts";
+import { hasExtendedMarkdown } from "../../../src/application/helpers/hasExtendedMarkdown.ts";
 
 // ─── True negatives (must return false) ───────────────────────────────────────
 

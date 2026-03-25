@@ -18,6 +18,7 @@
 # Node.js (Bun) / Typescript Specific Rules
 - use type imports for type only imports
 - use ?? instead of || for nullish coalescing
+- don't use ?? null, if the variable you are coalescing is already nullable
 - don't install dotenv, .env is loaded automatically by bun
 - don't use the "any" type to resolve type errors, except where it actually makes sense logically
 - any type coercions must have a preceding comment explaining why they are necessary or acceptable in the format // (or /*) TYPE COERCION: ..., this applies to project source code, tests are an exception
@@ -26,6 +27,12 @@
 - do not export anything out of a file that isn't needed somewhere else. Not-exported should be the default.
 - Bun runtime functions should use explicit imports from "bun"
 - any function that doesn't need access to "this" should be at module level rather than a method
+
+## ChatClient Interface Rules
+- coalesce all `undefined`s to `null`, properties should ever only be nullable, never undefined
+- do not define return types on methods of concrete implementations of abstract interfaces
+- if the interface method return type is void or Promise<void> make sure to preceed the last statement in the implementation
+  with a `void` keyword to prevent implicit returns 
 
 # Database Rules
 - prefer prepared statements for repeated queries

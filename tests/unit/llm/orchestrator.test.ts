@@ -7,15 +7,14 @@ import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
 import { AllFreeKeysExhaustedError, AppError } from "../../../src/domain/errors/AppError.ts";
 import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
 import { MessageIntent } from "../../../src/domain/message/MessageIntent.ts";
-import { AgentOrchestrator } from "../../../src/infrastructure/llm/agents/geminiAgentOrchestrator.ts";
+import { AgentOrchestrator } from "../../../src/infrastructure/llm/agents/agentOrchestrator.ts";
+import { ResilientModelInvoker } from "../../../src/infrastructure/llm/ResilientModelInvoker.ts";
 import type { WebsiteResultEntry } from "../../../src/infrastructure/llm/tools/getWebsiteTool.ts";
 import { dbMessagesToLangchain } from "../../../src/infrastructure/llm/utils/messageTransformers.ts";
 
 const testLogger = pino({ level: "silent" });
 
 const testConfig = {
-    attachmentMode: "inline" as const,
-    maxInlineAttachmentSizeMB: 100,
     file: {
         attachmentDownloader: {
             tempDir: "/var/tmp/genie-attachments",
@@ -24,12 +23,18 @@ const testConfig = {
             disk: { maxSizeMB: 1_000 },
         },
         globalModelTimeoutMs: 600_000,
-        geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 15 },
+        geminiFileApi: {
+            pollIntervalMs: 5_000,
+            maxPollWaitMs: 120_000,
+            fileStaleBeforeExpiryMinutes: 15,
+            fileStaleBeforeExpiryMs: 15 * 60 * 1000,
+        },
         discord: { defaultChainLimit: 100, defaultRetriesLeft: 3 },
         geminiModels: { includeThoughts: false },
         agent: {
             uploadAttachmentMode: "upload" as const,
             maxInlineAttachmentSizeMB: 100,
+            maxInlineAttachmentSizeBytes: 100 * 1024 * 1024,
             nodes: {
                 triage: { model: "gemini-test", timeoutMs: 60_000, thinkingLevel: "LOW" as const },
                 general: { model: "gemini-test", timeoutMs: 120_000 },
@@ -90,7 +95,6 @@ function makeTriageWithNoToolCall() {
  */
 function asProvider<T>(model: T) {
     return {
-        modelName: "gemini-test",
         get(_key: unknown): T {
             return model;
         },
@@ -116,8 +120,13 @@ function makeFreeKeyProvider() {
     };
 }
 
-/** Dummy paid key provider for tests that don't exercise the paid path. */
-const testPaidKeyProvider = makeFreeKeyProvider();
+/**
+ * Wraps a free-key provider in a ResilientModelInvoker with upload mode disabled
+ * (inline, zero byte limit) so no attachment filtering or file refresh occurs in tests.
+ */
+function makeInvoker(freeKeyProvider = makeFreeKeyProvider()) {
+    return new ResilientModelInvoker(freeKeyProvider, makeFreeKeyProvider(), "inline" as const, 0, 600_000, testLogger);
+}
 
 describe("dbMessagesToLangchain", () => {
     const baseMsg: Omit<DiscordMessage, "role" | "langchainMessages"> = {
@@ -392,8 +401,7 @@ describe("Orchestrator.process", () => {
             asProvider(triageModel) as never,
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
-            makeFreeKeyProvider() as never,
-            testPaidKeyProvider,
+            makeInvoker(),
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -420,8 +428,7 @@ describe("Orchestrator.process", () => {
             asProvider(triageModel) as never,
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
-            makeFreeKeyProvider() as never,
-            testPaidKeyProvider,
+            makeInvoker(),
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -450,8 +457,7 @@ describe("Orchestrator.process", () => {
             asProvider(triageModel) as never,
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
-            makeFreeKeyProvider() as never,
-            testPaidKeyProvider,
+            makeInvoker(),
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -486,8 +492,7 @@ describe("Orchestrator.process", () => {
             asProvider(triageModel) as never,
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
-            makeFreeKeyProvider() as never,
-            testPaidKeyProvider,
+            makeInvoker(),
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -516,8 +521,7 @@ describe("Orchestrator.process", () => {
             asProvider(triageModel) as never,
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
-            makeFreeKeyProvider() as never,
-            testPaidKeyProvider,
+            makeInvoker(),
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -542,8 +546,7 @@ describe("Orchestrator.process", () => {
             asProvider(triageModel) as never,
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
-            makeFreeKeyProvider() as never,
-            testPaidKeyProvider,
+            makeInvoker(),
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -582,8 +585,7 @@ describe("Orchestrator.process", () => {
             asProvider(triageModel) as never,
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
-            makeFreeKeyProvider() as never,
-            testPaidKeyProvider,
+            makeInvoker(),
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -610,8 +612,7 @@ describe("Orchestrator.process", () => {
             asProvider(triageModel) as never,
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
-            makeFreeKeyProvider() as never,
-            testPaidKeyProvider,
+            makeInvoker(),
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -635,8 +636,7 @@ describe("Orchestrator.process", () => {
             asProvider(triageModel) as never,
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
-            makeFreeKeyProvider() as never,
-            testPaidKeyProvider,
+            makeInvoker(),
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -664,8 +664,7 @@ describe("Orchestrator.process", () => {
             asProvider(triageModel) as never,
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
-            makeFreeKeyProvider() as never,
-            testPaidKeyProvider,
+            makeInvoker(),
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -695,8 +694,7 @@ describe("Orchestrator.process", () => {
             asProvider(triageModel) as never,
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
-            makeFreeKeyProvider() as never,
-            testPaidKeyProvider,
+            makeInvoker(),
             websiteTool as never,
             videoTool as never,
             testLogger,
@@ -757,8 +755,7 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
             asProvider(triageModel) as never,
             asProvider(generalModel) as never,
             asProvider(makeModel("search")) as never,
-            provider as never,
-            testPaidKeyProvider,
+            makeInvoker(provider),
             makeTool("w") as never,
             makeTool("v") as never,
             testLogger,
@@ -851,7 +848,6 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
             }),
         };
         const generalProvider = {
-            modelName: "gemini-test",
             get(_key: unknown) {
                 return generalModel;
             },
@@ -864,8 +860,7 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
             asProvider(makeTriageWithNoToolCall()) as never,
             generalProvider as never,
             asProvider(makeModel("search")) as never,
-            provider as never,
-            testPaidKeyProvider,
+            makeInvoker(provider),
             makeTool("w") as never,
             makeTool("v") as never,
             testLogger,
@@ -892,7 +887,6 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
             }),
         };
         const generalProvider = {
-            modelName: "gemini-test",
             get(_key: unknown) {
                 return generalModel;
             },
@@ -905,8 +899,7 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
             asProvider(makeTriageWithNoToolCall()) as never,
             generalProvider as never,
             asProvider(makeModel("search")) as never,
-            provider as never,
-            testPaidKeyProvider,
+            makeInvoker(provider),
             makeTool("w") as never,
             makeTool("v") as never,
             testLogger,

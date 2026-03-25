@@ -1,4 +1,5 @@
 import type { IModelProvider } from "../../application/ports/IModelProvider.ts";
+import type { IInvokableModel } from "../../application/ports/IResilientModelInvoker.ts";
 import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
 
 /**
@@ -21,15 +22,15 @@ function toCacheKey(apiKey: string, modelName: string): ModelCacheKey {
  * distinguished by the composite `[apiKey, modelName]` key.
  *
  * Subclasses must supply `primaryModelName` and optionally `fallbackModelName`
- * to the super constructor.
- *
- * @template T - The concrete model client type (e.g. `ChatGoogle` with bound tools)
+ * to the super constructor. {@link modelName} is an implementation-level property
+ * used internally for caching and model construction — it is not exposed through
+ * the {@link IModelProvider} port.
  */
-export abstract class ModelProvider<T> implements IModelProvider<T> {
-    private readonly cache = new Map<ModelCacheKey, T>();
+export abstract class ModelProvider implements IModelProvider {
+    private readonly cache = new Map<ModelCacheKey, IInvokableModel>();
 
     constructor(
-        readonly modelName: string,
+        protected readonly modelName: string,
         protected readonly fallbackModelName: string | undefined,
     ) {}
 
@@ -38,12 +39,12 @@ export abstract class ModelProvider<T> implements IModelProvider<T> {
      * Called at most once per unique `[apiKey, modelName]` pair — subsequent
      * calls for the same pair return the cached instance.
      */
-    protected abstract create(apiKey: string, modelName: string): T;
+    protected abstract create(apiKey: string, modelName: string): IInvokableModel;
 
     /**
      * Returns (or lazily constructs) the primary model client for the given key.
      */
-    get(key: GeminiApiKey): T {
+    get(key: GeminiApiKey): IInvokableModel {
         return this.getOrCreate(key.apiKey, this.modelName);
     }
 
@@ -51,12 +52,12 @@ export abstract class ModelProvider<T> implements IModelProvider<T> {
      * Returns (or lazily constructs) the fallback model client for the given key,
      * or `undefined` if no fallback model name was configured.
      */
-    getFallback(key: GeminiApiKey): T | undefined {
+    getFallback(key: GeminiApiKey): IInvokableModel | undefined {
         if (!this.fallbackModelName) return undefined;
         return this.getOrCreate(key.apiKey, this.fallbackModelName);
     }
 
-    protected getOrCreate(apiKey: string, modelName: string): T {
+    protected getOrCreate(apiKey: string, modelName: string): IInvokableModel {
         const cacheKey = toCacheKey(apiKey, modelName);
         const cached = this.cache.get(cacheKey);
         if (cached) return cached;

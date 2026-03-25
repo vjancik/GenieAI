@@ -1,6 +1,7 @@
 import katex from "katex";
 import { Marked } from "marked";
 import markedKatex from "marked-katex-extension";
+import type { IMarkdownRenderer } from "../../application/ports/IMarkdownRenderer.ts";
 
 /**
  * Renders Markdown to a self-contained HTML string.
@@ -11,7 +12,7 @@ import markedKatex from "marked-katex-extension";
  * - Inline LaTeX: `$...$`
  * - Block LaTeX: `$$...$$`
  */
-export class MarkdownToHtmlRenderer {
+export class MarkdownToHtmlRenderer implements IMarkdownRenderer {
     private readonly marked: Marked;
 
     constructor() {

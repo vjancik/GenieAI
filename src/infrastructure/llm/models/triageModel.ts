@@ -117,20 +117,18 @@ function createTriageModel(
     return llm.bindTools(tools, { tool_choice: "any" });
 }
 
-export type TriageModel = ReturnType<typeof createTriageModel>;
-
 /**
  * Lazy-caching provider for the triage model.
  *
  * Builds one {@link TriageModel} per unique `[apiKey, modelName]` pair.
  * The fallback model (if configured) is cached in the same map under its own key.
  */
-export class TriageModelProvider extends ModelProvider<TriageModel> {
+export class TriageModelProvider extends ModelProvider {
     constructor(private readonly options: TriageModelOptions) {
         super(options.modelName, options.fallbackModelName);
     }
 
-    protected create(apiKey: string, modelName: string): TriageModel {
+    protected create(apiKey: string, modelName: string) {
         return createTriageModel(apiKey, modelName, this.options);
     }
 }

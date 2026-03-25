@@ -1,5 +1,5 @@
 import type { Client } from "discord.js";
-import type { DiscordAttachmentInfo } from "../../application/ports/IAttachmentDownloader.ts";
+import type { IChatClientMessageAttachment } from "../../application/ports/chat/IChatClient.ts";
 import type { IDiscordMediaService } from "../../application/ports/IDiscordMediaService.ts";
 import type { EmbedMediaKey } from "../../domain/message/GeminiFile.ts";
 import type { DiscordClient } from "./DiscordClient.ts";
@@ -25,7 +25,7 @@ export class DiscordMediaService implements IDiscordMediaService {
         channelId: string,
         messageDiscordId: string,
         attachmentId: string,
-    ): Promise<DiscordAttachmentInfo | null> {
+    ): Promise<IChatClientMessageAttachment | null> {
         try {
             const channel = await this.client.channels.fetch(channelId);
             if (!channel?.isTextBased()) return null;
@@ -71,7 +71,7 @@ export class DiscordMediaService implements IDiscordMediaService {
         messageDiscordId: string,
         embedIndex: number,
         embedMediaKey: EmbedMediaKey,
-    ): Promise<DiscordAttachmentInfo | null> {
+    ): Promise<IChatClientMessageAttachment | null> {
         try {
             const channel = await this.client.channels.fetch(channelId);
             if (!channel?.isTextBased()) return null;

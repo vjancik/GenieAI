@@ -1,219 +1,254 @@
 import { describe, expect, it } from "bun:test";
 import { discordMessageToLlmText, llmTextToDiscordText } from "../../../src/application/formatters/textTransformers.ts";
+import type {
+    IChatClientMessage,
+    IChatClientMessageEmbed,
+    IChatClientMessageSnapshot,
+} from "../../../src/application/ports/chat/IChatClient.ts";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const BASE_DATE = new Date("2024-01-01T00:00:00Z");
+
+/** Builds a minimal IChatClientMessage, with all required fields defaulted. */
+function makeMsg(overrides: {
+    content?: string;
+    authorDisplayName?: string;
+    isForwarded?: boolean;
+    forwardedSnapshot?: IChatClientMessageSnapshot | null;
+    embeds?: IChatClientMessageEmbed[];
+}): IChatClientMessage {
+    return {
+        id: "msg-1",
+        channelId: "ch-1",
+        guildId: "guild-1",
+        authorId: "user-1",
+        authorUsername: "alice",
+        authorDisplayName: overrides.authorDisplayName ?? "Alice",
+        isAuthorBot: false,
+        createdAt: BASE_DATE,
+        content: overrides.content ?? "",
+        cleanContent: overrides.content ?? "",
+        buttons: [],
+        attachments: [],
+        embeds: overrides.embeds ?? [],
+        referencedMessageId: null,
+        isForwarded: overrides.isForwarded ?? false,
+        forwardedSnapshot: overrides.forwardedSnapshot ?? null,
+        botRoleId: null,
+        hasExplicitMention: () => false,
+        reply: async () => {
+            throw new Error("not implemented");
+        },
+        edit: async () => {
+            throw new Error("not implemented");
+        },
+        delete: async () => {},
+    };
+}
+
+/** Builds a minimal IChatClientMessageSnapshot for use as a forwardedSnapshot. */
+function makeSnap(
+    overrides: { content?: string; embeds?: IChatClientMessageEmbed[] } = {},
+): IChatClientMessageSnapshot {
+    return {
+        cleanContent: overrides.content ?? "",
+        content: null,
+        attachments: [],
+        embeds: overrides.embeds ?? [],
+    };
+}
+
+/** Builds a minimal IChatClientMessageEmbed, with all optional fields defaulted to null. */
+function makeEmbed(overrides: Partial<IChatClientMessageEmbed> & { type: string }): IChatClientMessageEmbed {
+    return {
+        title: null,
+        description: null,
+        authorName: null,
+        providerName: null,
+        timestamp: null,
+        footerText: null,
+        fields: [],
+        video: null,
+        image: null,
+        thumbnail: null,
+        ...overrides,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 describe("discordMessageToLlmText", () => {
     describe("basic attribution", () => {
         it("wraps content with attribution header", () => {
-            expect(discordMessageToLlmText({ authorDisplayName: "Alice", content: "Hello!" })).toBe(
-                "Message from user Alice:\nHello!",
-            );
+            expect(discordMessageToLlmText(makeMsg({ content: "Hello!" }))).toBe("Message from user Alice:\nHello!");
         });
 
         it("preserves multi-line content", () => {
-            expect(discordMessageToLlmText({ authorDisplayName: "Bob", content: "Line one\nLine two" })).toBe(
+            expect(discordMessageToLlmText(makeMsg({ authorDisplayName: "Bob", content: "Line one\nLine two" }))).toBe(
                 "Message from user Bob:\nLine one\nLine two",
             );
         });
 
         it("handles empty content", () => {
-            expect(discordMessageToLlmText({ authorDisplayName: "Charlie", content: "" })).toBe(
+            expect(discordMessageToLlmText(makeMsg({ authorDisplayName: "Charlie", content: "" }))).toBe(
                 "Message from user Charlie:\n",
             );
         });
 
         it("uses 'Forwarded message:' prefix when isForwarded is true", () => {
-            expect(discordMessageToLlmText({ authorDisplayName: "Alice", content: "", isForwarded: true })).toBe(
-                "Forwarded message:\n",
+            expect(discordMessageToLlmText(makeMsg({ content: "", isForwarded: true }))).toBe("Forwarded message:\n");
+        });
+
+        it("uses strippedContent when provided", () => {
+            expect(discordMessageToLlmText(makeMsg({ content: "raw @Bot hello" }), "hello")).toBe(
+                "Message from user Alice:\nhello",
             );
         });
     });
 
     describe("embed rendering", () => {
         it("renders a rich embed with all text fields", () => {
-            const result = discordMessageToLlmText({
-                authorDisplayName: "Alice",
-                content: "Check this out",
-                embeds: [
-                    {
-                        type: "rich",
-                        title: "My Title",
-                        description: "A description",
-                        author: { name: "Author Name" },
-                        provider: { name: "Provider Name" },
-                    },
-                ],
-            });
+            const result = discordMessageToLlmText(
+                makeMsg({
+                    content: "Check this out",
+                    embeds: [
+                        makeEmbed({
+                            type: "rich",
+                            title: "My Title",
+                            description: "A description",
+                            authorName: "Author Name",
+                            providerName: "Provider Name",
+                        }),
+                    ],
+                }),
+            );
             expect(result).toContain("Embedded content:");
             expect(result).toContain("Type: rich");
             expect(result).toContain("Title: My Title");
             expect(result).toContain("Description: A description");
             expect(result).toContain("Author: Author Name");
             expect(result).toContain("Source: Provider Name");
-            expect(result).toContain("END");
         });
 
         it("renders an embed with type only when no text fields are set", () => {
-            const result = discordMessageToLlmText({
-                authorDisplayName: "Alice",
-                content: "look",
-                embeds: [{ type: "image" }],
-            });
+            const result = discordMessageToLlmText(
+                makeMsg({ content: "look", embeds: [makeEmbed({ type: "image" })] }),
+            );
             expect(result).toContain("Type: image");
-            expect(result).toContain("END");
         });
 
         it("renders multiple embeds in order", () => {
-            const result = discordMessageToLlmText({
-                authorDisplayName: "Alice",
-                content: "x",
-                embeds: [
-                    { type: "rich", title: "First" },
-                    { type: "rich", title: "Second" },
-                ],
-            });
+            const result = discordMessageToLlmText(
+                makeMsg({
+                    content: "x",
+                    embeds: [makeEmbed({ type: "rich", title: "First" }), makeEmbed({ type: "rich", title: "Second" })],
+                }),
+            );
             const firstIdx = result.indexOf("Title: First");
             const secondIdx = result.indexOf("Title: Second");
             expect(firstIdx).toBeGreaterThanOrEqual(0);
             expect(secondIdx).toBeGreaterThan(firstIdx);
         });
 
-        it("omits embed section when embeds is undefined", () => {
-            const result = discordMessageToLlmText({ authorDisplayName: "Alice", content: "hi" });
+        it("omits embed section when embeds is empty", () => {
+            const result = discordMessageToLlmText(makeMsg({ content: "hi", embeds: [] }));
             expect(result).not.toContain("Embedded content:");
-            expect(result).not.toContain("END");
-        });
-
-        it("omits embed section when embeds array is empty", () => {
-            const result = discordMessageToLlmText({ authorDisplayName: "Alice", content: "hi", embeds: [] });
-            expect(result).not.toContain("Embedded content:");
-            expect(result).not.toContain("END");
         });
 
         it("does not include URL fields in text output", () => {
-            const result = discordMessageToLlmText({
-                authorDisplayName: "Alice",
-                content: "x",
-                embeds: [
-                    {
-                        type: "video",
-                        video: { url: "https://example.com/video.mp4" },
-                        image: { url: "https://example.com/image.png" },
-                        thumbnail: { url: "https://example.com/thumb.png" },
-                    },
-                ],
-            });
+            const result = discordMessageToLlmText(
+                makeMsg({
+                    content: "x",
+                    embeds: [
+                        makeEmbed({
+                            type: "video",
+                            video: { url: "https://example.com/video.mp4", proxyURL: null },
+                            image: { url: "https://example.com/image.png", proxyURL: null },
+                            thumbnail: { url: "https://example.com/thumb.png", proxyURL: null },
+                        }),
+                    ],
+                }),
+            );
             expect(result).not.toContain("https://");
         });
 
         it("omits description for YouTube provider embeds", () => {
-            const result = discordMessageToLlmText({
-                authorDisplayName: "Alice",
-                content: "check this",
-                embeds: [
-                    {
-                        type: "video",
-                        title: "Cool Video",
-                        description: "A very long auto-generated transcript...",
-                        provider: { name: "YouTube" },
-                    },
-                ],
-            });
+            const result = discordMessageToLlmText(
+                makeMsg({
+                    content: "check this",
+                    embeds: [
+                        makeEmbed({
+                            type: "video",
+                            title: "Cool Video",
+                            description: "A very long auto-generated transcript...",
+                            providerName: "YouTube",
+                        }),
+                    ],
+                }),
+            );
             expect(result).toContain("Title: Cool Video");
             expect(result).toContain("Source: YouTube");
             expect(result).not.toContain("Description:");
         });
 
         it("includes description for non-YouTube provider embeds", () => {
-            const result = discordMessageToLlmText({
-                authorDisplayName: "Alice",
-                content: "x",
-                embeds: [{ type: "rich", description: "Some context", provider: { name: "Twitter" } }],
-            });
+            const result = discordMessageToLlmText(
+                makeMsg({
+                    content: "x",
+                    embeds: [makeEmbed({ type: "rich", description: "Some context", providerName: "Twitter" })],
+                }),
+            );
             expect(result).toContain("Description: Some context");
         });
 
         it("omits absent fields without blank lines", () => {
-            const result = discordMessageToLlmText({
-                authorDisplayName: "Alice",
-                content: "x",
-                embeds: [{ type: "rich", title: "Only Title" }],
-            });
+            const result = discordMessageToLlmText(
+                makeMsg({ content: "x", embeds: [makeEmbed({ type: "rich", title: "Only Title" })] }),
+            );
             expect(result).not.toContain("Description:");
             expect(result).not.toContain("Author:");
             expect(result).not.toContain("Source:");
         });
     });
 
-    describe("forwarded message snapshot rendering", () => {
-        it("renders forwarded content section for messageSnapshots", () => {
-            const result = discordMessageToLlmText({
-                authorDisplayName: "Alice",
-                content: "",
-                isForwarded: true,
-                messageSnapshots: [{ authorDisplayName: "", content: "Original message text" }],
-            });
+    describe("forwarded message rendering", () => {
+        it("renders forwarded content section for forwardedSnapshot", () => {
+            const result = discordMessageToLlmText(
+                makeMsg({
+                    content: "",
+                    isForwarded: true,
+                    forwardedSnapshot: makeSnap({ content: "Original message text" }),
+                }),
+            );
             expect(result).toContain("Forwarded content:");
             expect(result).toContain("Original message text");
-            expect(result).toContain("END");
         });
 
         it("renders embeds inside forwarded content", () => {
-            const result = discordMessageToLlmText({
-                authorDisplayName: "Alice",
-                content: "",
-                isForwarded: true,
-                messageSnapshots: [
-                    {
-                        authorDisplayName: "",
+            const result = discordMessageToLlmText(
+                makeMsg({
+                    content: "",
+                    isForwarded: true,
+                    forwardedSnapshot: makeSnap({
                         content: "fwd text",
-                        embeds: [{ type: "rich", title: "Fwd Embed" }],
-                    },
-                ],
-            });
+                        embeds: [makeEmbed({ type: "rich", title: "Fwd Embed" })],
+                    }),
+                }),
+            );
             expect(result).toContain("Forwarded content:");
             expect(result).toContain("fwd text");
             expect(result).toContain("Title: Fwd Embed");
-            expect(result).toContain("END");
         });
 
-        it("omits forwarded section when messageSnapshots is undefined", () => {
-            const result = discordMessageToLlmText({ authorDisplayName: "Alice", content: "hi" });
+        it("omits forwarded section when forwardedSnapshot is null", () => {
+            const result = discordMessageToLlmText(makeMsg({ content: "hi", forwardedSnapshot: null }));
             expect(result).not.toContain("Forwarded content:");
         });
-    });
-
-    describe("END marker", () => {
-        it("appends END when embeds are present", () => {
-            const result = discordMessageToLlmText({
-                authorDisplayName: "Alice",
-                content: "x",
-                embeds: [{ type: "rich" }],
-            });
-            expect(result.endsWith("END")).toBe(true);
-        });
-
-        it("appends END when messageSnapshots are present", () => {
-            const result = discordMessageToLlmText({
-                authorDisplayName: "Alice",
-                content: "x",
-                messageSnapshots: [{ authorDisplayName: "", content: "snap" }],
-            });
-            expect(result.endsWith("END")).toBe(true);
-        });
-
-        it("does not append END when neither embeds nor snapshots are present", () => {
-            const result = discordMessageToLlmText({ authorDisplayName: "Alice", content: "hi" });
-            expect(result.endsWith("END")).toBe(false);
-        });
-    });
-});
-
-describe("discordMessageToLlmText (legacy two-arg style — via snapshot shape)", () => {
-    // Ensure all previous call-site shapes still work via the snapshot object
-    it("wraps content with attribution header", () => {
-        expect(discordMessageToLlmText({ authorDisplayName: "Alice", content: "Hello!" })).toBe(
-            "Message from user Alice:\nHello!",
-        );
     });
 });
 

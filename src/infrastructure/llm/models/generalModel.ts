@@ -73,20 +73,18 @@ function createGeneralModel(
     return llm.bindTools([neverTool], { tool_choice: "none" });
 }
 
-export type GeneralModel = ReturnType<typeof createGeneralModel>;
-
 /**
  * Lazy-caching provider for the general-purpose model.
  *
  * Builds one {@link GeneralModel} per unique `[apiKey, modelName]` pair.
  * The fallback model (if configured) is cached in the same map under its own key.
  */
-export class GeneralModelProvider extends ModelProvider<GeneralModel> {
+export class GeneralModelProvider extends ModelProvider {
     constructor(private readonly options: GeneralModelOptions) {
         super(options.modelName, options.fallbackModelName);
     }
 
-    protected create(apiKey: string, modelName: string): GeneralModel {
+    protected create(apiKey: string, modelName: string) {
         return createGeneralModel(apiKey, modelName, this.options);
     }
 }

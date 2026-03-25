@@ -9,6 +9,7 @@ import type { GeminiFileUpload } from "../../domain/message/GeminiFileUpload.ts"
 import type { AppConfig } from "../config/AppConfig.ts";
 import type { IDiscordMediaService } from "../ports/IDiscordMediaService.ts";
 import type { IDiskAttachmentDownloader } from "../ports/IDiskAttachmentDownloader.ts";
+import type { IGeminiFileRefreshService } from "../ports/IGeminiFileRefreshService.ts";
 import type { IGeminiFileRepository } from "../ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploaderRegistry } from "../ports/IGeminiFileUploaderRegistry.ts";
 import type { Logger } from "../types/Logger.ts";
@@ -76,7 +77,7 @@ function extractGeminiUrls(message: BaseMessage): string[] {
  * - Discord attachment gone → remove content block silently and continue.
  * - Gemini re-upload failure → throw (fail the whole request).
  */
-export class GeminiFileRefreshService {
+export class GeminiFileRefreshService implements IGeminiFileRefreshService {
     /** Gemini file TTL is 48 hours. Files older than (TTL - staleThresholdMs) are refreshed. */
     private readonly staleThresholdMs: number;
     private readonly attachmentsTempDir: string;
@@ -91,7 +92,7 @@ export class GeminiFileRefreshService {
     ) {
         // Gemini TTL is 48 hours; a file is stale when less than staleThreshold remains
         const geminiTtlMs = 48 * 60 * 60 * 1000;
-        this.staleThresholdMs = geminiTtlMs - config.file.geminiFileApi.fileStaleBeforeExpiryMinutes * 60 * 1000;
+        this.staleThresholdMs = geminiTtlMs - config.file.geminiFileApi.fileStaleBeforeExpiryMs;
         this.attachmentsTempDir = config.file.attachmentDownloader.tempDir;
     }
 

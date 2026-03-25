@@ -1,8 +1,8 @@
-import type { Logger } from "../../application/types/Logger.ts";
+import type { Logger } from "../types/Logger.ts";
 
 /**
- * Async function that edits a Discord message to display the given content string.
- * Provided by the caller so this class remains decoupled from discord.js.
+ * Async function that edits a message to display the given content string.
+ * Provided by the caller so this class remains decoupled from any specific platform SDK.
  */
 export type EditFn = (content: string) => Promise<void>;
 
@@ -16,7 +16,7 @@ interface MessagePending {
 }
 
 /**
- * Debouncing + rate-limited Discord message editor for progressive status updates.
+ * Debouncing + rate-limited message editor for progressive status updates.
  *
  * Every `scheduleUpdate` call schedules a deferred edit — never fires immediately.
  * The delay is `max(0, rateLimitMs - elapsedSinceLastEdit)`, where a channel with
@@ -48,7 +48,7 @@ export class StatusMessageUpdater {
     ) {}
 
     /**
-     * Schedule a debounced status edit on a Discord message.
+     * Schedule a debounced status edit on a message.
      *
      * Always deferred — never fires synchronously. The delay is
      * `max(0, rateLimitMs - elapsed)` where a channel with no prior edit is
@@ -59,9 +59,9 @@ export class StatusMessageUpdater {
      * and the existing timer is kept — no reset. This collapses rapid intermediate
      * states into a single edit at the originally scheduled time.
      *
-     * @param channelId - Discord channel ID (rate limit key)
-     * @param messageId - Discord message ID being edited (deduplication key)
-     * @param editFn - Async function that performs the actual `message.edit(content)`
+     * @param channelId - Channel ID (rate limit key)
+     * @param messageId - Message ID being edited (deduplication key)
+     * @param editFn - Async function that performs the actual message edit
      * @param content - The new status string to display
      */
     scheduleUpdate(channelId: string, messageId: string, editFn: EditFn, content: string): void {
@@ -93,7 +93,7 @@ export class StatusMessageUpdater {
      * Must be called before writing the final response to prevent a pending timer
      * from overwriting the final content after it has been displayed.
      *
-     * @param messageId - Discord message ID to cancel pending edits for
+     * @param messageId - Message ID to cancel pending edits for
      */
     cancel(messageId: string): void {
         const pending = this.pendingByMessage.get(messageId);

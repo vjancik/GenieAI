@@ -1,19 +1,18 @@
 import { describe, expect, mock, test } from "bun:test";
 import { AIMessage, type BaseMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
+import type { IChatClientMessage } from "../../../src/application/ports/chat/IChatClient.ts";
 import type { IAgentOrchestrator } from "../../../src/application/ports/IAgentOrchestrator.ts";
 import type { IAttachmentDownloader } from "../../../src/application/ports/IAttachmentDownloader.ts";
-import type {
-    DiscordMessageSnapshot,
-    IChatMessageService,
-} from "../../../src/application/ports/IChatMessageService.ts";
+import type { IChatMessageService } from "../../../src/application/ports/IChatMessageService.ts";
 import type { OnStatusUpdate } from "../../../src/application/types/AgentStatus.ts";
-import { HandleDiscordMessageUseCase } from "../../../src/application/use-cases/HandleDiscordMessage.ts";
+import { HandleDiscordMessageUseCase } from "../../../src/application/use-cases/_HandleDiscordMessage.ts";
 import type { IMessageRepository } from "../../../src/domain/message/IMessageRepository.ts";
 import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
 import { MessageIntent } from "../../../src/domain/message/MessageIntent.ts";
 
 const testLogger = pino({ level: "silent" });
+const BOT_USER_ID = "bot-123";
 
 const prevAiMessage = new AIMessage("Previous response");
 
@@ -49,9 +48,40 @@ function makeRepo(chainMessages: DiscordMessage[] = []): IMessageRepository {
     };
 }
 
-function makeChatMessageService(snapshots: DiscordMessageSnapshot[] = []): IChatMessageService {
+function makeChatMessageService(messages: IChatClientMessage[] = []): IChatMessageService {
     return {
-        fetchChain: mock(async () => snapshots),
+        fetchChain: mock(async () => messages),
+    };
+}
+
+/** Builds a minimal IChatClientMessage with the given content for use in execute() calls. */
+function makeMessage(content: string): IChatClientMessage {
+    return {
+        id: "msg-test",
+        channelId: "ch-1",
+        guildId: "guild-1",
+        authorId: "user-123",
+        authorUsername: "testuser",
+        authorDisplayName: "TestUser",
+        isAuthorBot: false,
+        createdAt: new Date(),
+        content,
+        cleanContent: content,
+        buttons: [],
+        attachments: [],
+        embeds: [],
+        referencedMessageId: null,
+        isForwarded: false,
+        forwardedSnapshot: null,
+        botRoleId: null,
+        hasExplicitMention: () => false,
+        reply: mock(async () => {
+            throw new Error("not implemented");
+        }),
+        edit: mock(async () => {
+            throw new Error("not implemented");
+        }),
+        delete: mock(async () => {}),
     };
 }
 
@@ -79,8 +109,6 @@ function makeDownloader(): IAttachmentDownloader {
 }
 
 const testConfig = {
-    maxInlineAttachmentSizeMB: 100,
-    attachmentMode: "inline" as const,
     file: {
         attachmentDownloader: {
             tempDir: "/var/tmp/genie-attachments",
@@ -89,12 +117,18 @@ const testConfig = {
             disk: { maxSizeMB: 1_000 },
         },
         globalModelTimeoutMs: 600_000,
-        geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 15 },
+        geminiFileApi: {
+            pollIntervalMs: 5_000,
+            maxPollWaitMs: 120_000,
+            fileStaleBeforeExpiryMinutes: 15,
+            fileStaleBeforeExpiryMs: 15 * 60 * 1000,
+        },
         discord: { defaultChainLimit: 100, defaultRetriesLeft: 3 },
         geminiModels: { includeThoughts: false },
         agent: {
             uploadAttachmentMode: "upload" as const,
             maxInlineAttachmentSizeMB: 100,
+            maxInlineAttachmentSizeBytes: 100 * 1024 * 1024,
             nodes: {
                 triage: { model: "gemini-test", timeoutMs: 60_000, thinkingLevel: "LOW" as const },
                 general: { model: "gemini-test", timeoutMs: 120_000 },
@@ -123,7 +157,9 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            botUserId: BOT_USER_ID,
+            message: makeMessage("Hello"),
+            strippedContent: "Hello",
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -149,7 +185,9 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "@me",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            botUserId: BOT_USER_ID,
+            message: makeMessage("Hello"),
+            strippedContent: "Hello",
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -174,7 +212,9 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             discordAuthorId: "user-123",
-            userContent: "Follow-up",
+            botUserId: BOT_USER_ID,
+            message: makeMessage("Follow-up"),
+            strippedContent: "Follow-up",
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -203,7 +243,9 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             discordAuthorId: "user-123",
-            userContent: "Follow-up",
+            botUserId: BOT_USER_ID,
+            message: makeMessage("Follow-up"),
+            strippedContent: "Follow-up",
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -217,7 +259,7 @@ describe("HandleDiscordMention.handle", () => {
         expect(messages).toHaveLength(3);
         const userMessage = messages[messages.length - 1];
         expect(userMessage).toBeInstanceOf(HumanMessage);
-        expect((userMessage as HumanMessage).content).toBe("Follow-up");
+        expect((userMessage as HumanMessage).content).toContain("Follow-up");
     });
 
     test("forwards onStatusUpdate to orchestrator.process as the third argument", async () => {
@@ -239,7 +281,9 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "@me",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            botUserId: BOT_USER_ID,
+            message: makeMessage("Hello"),
+            strippedContent: "Hello",
             attachments: [],
             intent: MessageIntent.UNKNOWN,
             onStatusUpdate,
@@ -268,7 +312,9 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "@me",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            botUserId: BOT_USER_ID,
+            message: makeMessage("Hello"),
+            strippedContent: "Hello",
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -297,7 +343,9 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             discordAuthorId: "user-123",
-            userContent: "What is 2+2?",
+            botUserId: BOT_USER_ID,
+            message: makeMessage("What is 2+2?"),
+            strippedContent: "What is 2+2?",
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -311,7 +359,7 @@ describe("HandleDiscordMention.handle", () => {
         // Verify the stored JSON preserves the message type and content
         const stored = saveCall.langchainMessages[0];
         expect(stored?.id).toContain("HumanMessage");
-        expect((stored?.kwargs as Record<string, unknown>)?.content).toBe("What is 2+2?");
+        expect((stored?.kwargs as Record<string, unknown>)?.content).toContain("What is 2+2?");
     });
 
     test("returns error response when attachment total size exceeds limit", async () => {
@@ -329,6 +377,7 @@ describe("HandleDiscordMention.handle", () => {
                         ...testConfig.file.agent,
                         uploadAttachmentMode: "inline" as const,
                         maxInlineAttachmentSizeMB: 1,
+                        maxInlineAttachmentSizeBytes: 1 * 1024 * 1024,
                     },
                 },
             }, // 1 MB limit
@@ -340,7 +389,9 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "@me",
             discordAuthorId: "user-123",
-            userContent: "Here are files",
+            botUserId: BOT_USER_ID,
+            message: makeMessage("Here are files"),
+            strippedContent: "Here are files",
             attachments: [
                 {
                     id: "att-001",
@@ -374,7 +425,9 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "@me",
             discordAuthorId: "user-123",
-            userContent: "What's in this image?",
+            botUserId: BOT_USER_ID,
+            message: makeMessage("What's in this image?"),
+            strippedContent: "What's in this image?",
             attachments: [
                 {
                     id: "att-002",
@@ -420,7 +473,9 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            botUserId: BOT_USER_ID,
+            message: makeMessage("Hello"),
+            strippedContent: "Hello",
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -453,7 +508,9 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            botUserId: BOT_USER_ID,
+            message: makeMessage("Hello"),
+            strippedContent: "Hello",
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -482,7 +539,9 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "@me",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            botUserId: BOT_USER_ID,
+            message: makeMessage("Hello"),
+            strippedContent: "Hello",
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -491,33 +550,15 @@ describe("HandleDiscordMention.handle", () => {
     });
 
     test("calls saveBatch with only new snapshots when some IDs already exist in DB", async () => {
-        const existingSnapshot: DiscordMessageSnapshot = {
+        const existingMsg: IChatClientMessage = {
+            ...makeMessage("old message"),
             id: "snap-existing",
-            content: "old message",
-            authorId: "user-1",
-            authorUsername: "user1",
-            authorDisplayName: "User One",
-            isBot: false,
-            isOwnBot: false,
-            attachments: [],
             referencedMessageId: null,
-            channelId: "ch-1",
-            guildId: "guild-1",
-            createdAt: new Date(),
         };
-        const newSnapshot: DiscordMessageSnapshot = {
+        const newMsg: IChatClientMessage = {
+            ...makeMessage("new message"),
             id: "snap-new",
-            content: "new message",
-            authorId: "user-2",
-            authorUsername: "user2",
-            authorDisplayName: "User Two",
-            isBot: false,
-            isOwnBot: false,
-            attachments: [],
             referencedMessageId: "snap-existing",
-            channelId: "ch-1",
-            guildId: "guild-1",
-            createdAt: new Date(),
         };
 
         // repo returns empty initial chain (triggers fallback), then non-empty after batch save
@@ -529,7 +570,7 @@ describe("HandleDiscordMention.handle", () => {
             .mockImplementationOnce(async () => [])
             .mockImplementation(async () => [baseMessage]);
 
-        const chatMessageService = makeChatMessageService([existingSnapshot, newSnapshot]);
+        const chatMessageService = makeChatMessageService([existingMsg, newMsg]);
 
         const handler = new HandleDiscordMessageUseCase(
             repo,
@@ -549,7 +590,9 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            botUserId: BOT_USER_ID,
+            message: makeMessage("Hello"),
+            strippedContent: "Hello",
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });
@@ -586,7 +629,9 @@ describe("HandleDiscordMention.handle", () => {
             channelId: "ch-1",
             guildId: "guild-1",
             discordAuthorId: "user-123",
-            userContent: "Hello",
+            botUserId: BOT_USER_ID,
+            message: makeMessage("Hello"),
+            strippedContent: "Hello",
             attachments: [],
             intent: MessageIntent.UNKNOWN,
         });

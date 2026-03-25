@@ -1,13 +1,13 @@
 import { describe, expect, mock, test } from "bun:test";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
-import type { DiscordAttachmentInfo } from "../../../src/application/ports/IAttachmentDownloader.ts";
+import type { IChatClientMessageAttachment } from "../../../src/application/ports/chat/IChatClient.ts";
 import type { IDiscordMediaService } from "../../../src/application/ports/IDiscordMediaService.ts";
 import type { IDiskAttachmentDownloader } from "../../../src/application/ports/IDiskAttachmentDownloader.ts";
 import type { IGeminiFileRepository } from "../../../src/application/ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploader } from "../../../src/application/ports/IGeminiFileUploader.ts";
 import type { IGeminiFileUploaderRegistry } from "../../../src/application/ports/IGeminiFileUploaderRegistry.ts";
-import { GeminiFileRefreshService } from "../../../src/application/services/GeminiFileRefreshService.ts";
+import { GeminiFileRefreshService } from "../../../src/application/services/GeminiFileRefresh.ts";
 import type { GeminiFile } from "../../../src/domain/message/GeminiFile.ts";
 import type { GeminiFileUpload } from "../../../src/domain/message/GeminiFileUpload.ts";
 
@@ -32,12 +32,18 @@ const testConfig = {
             disk: { maxSizeMB: 1_000 },
         },
         globalModelTimeoutMs: 600_000,
-        geminiFileApi: { pollIntervalMs: 5_000, maxPollWaitMs: 120_000, fileStaleBeforeExpiryMinutes: 60 },
+        geminiFileApi: {
+            pollIntervalMs: 5_000,
+            maxPollWaitMs: 120_000,
+            fileStaleBeforeExpiryMinutes: 60,
+            fileStaleBeforeExpiryMs: 60 * 60 * 1000,
+        },
         discord: { defaultChainLimit: 100, defaultRetriesLeft: 3 },
         geminiModels: { includeThoughts: false },
         agent: {
             uploadAttachmentMode: "upload" as const,
             maxInlineAttachmentSizeMB: 100,
+            maxInlineAttachmentSizeBytes: 100 * 1024 * 1024,
             nodes: {
                 triage: { model: "gemini-test", timeoutMs: 60_000, thinkingLevel: "LOW" as const },
                 general: { model: "gemini-test", timeoutMs: 120_000 },
@@ -133,7 +139,7 @@ function makeDiskDownloader(): IDiskAttachmentDownloader {
     };
 }
 
-const freshDiscordAttachment: DiscordAttachmentInfo = {
+const freshDiscordAttachment: IChatClientMessageAttachment = {
     id: "att-001",
     url: "https://cdn.discord.com/img.png",
     proxyURL: "https://proxy/img.png",
@@ -143,7 +149,7 @@ const freshDiscordAttachment: DiscordAttachmentInfo = {
 };
 
 function makeAttachmentFetcher(
-    attachment: DiscordAttachmentInfo | null = freshDiscordAttachment,
+    attachment: IChatClientMessageAttachment | null = freshDiscordAttachment,
 ): IDiscordMediaService {
     return {
         fetchAttachment: mock(async () => attachment),
