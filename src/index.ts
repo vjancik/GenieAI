@@ -15,7 +15,6 @@
 import * as Sentry from "@sentry/bun";
 import { ConfigProvider } from "./application/config/AppConfig.ts";
 import { sanitizeForLog } from "./application/helpers/errorHelpers.ts";
-import { AgentMessageBuilder } from "./application/services/AgentMessageBuilder.ts";
 import { GeminiApiKeySyncService } from "./application/services/GeminiApiKeySync.ts";
 import { GeminiMediaNormalizer } from "./application/services/GeminiMediaNormalizer.ts";
 import { InlineMediaNormalizer } from "./application/services/InlineMediaNormalizer.ts";
@@ -206,8 +205,6 @@ const htmlToImage = new HtmlToImageRenderer();
 // Discord gateway
 const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
 const discordClientBot = new DiscordClientBot(discordClient.client);
-// TODO: change to module of functions
-const agentMessageBuilder = new AgentMessageBuilder(logger.child({ module: "agent-message-builder" }));
 const handleChatMessageUseCase = new HandleChatMessageUseCase(
     agentOrchestrator,
     messageRepository,
@@ -218,7 +215,6 @@ const handleChatMessageUseCase = new HandleChatMessageUseCase(
     messagePageRepository,
     config.file.discord.retries,
     config.file.agent.nodes.search.mode,
-    agentMessageBuilder,
     discordChatMessageService,
     config.file.discord.enableInDMs,
     isInlineMode ? inlineMediaNormalizer : undefined,

@@ -11,6 +11,7 @@ import { agentStatusLabel } from "../formatters/agentStatus.ts";
 import { extractWebGroundingChunks, formatGroundingSources } from "../formatters/groundingSources.ts";
 import { splitMarkdown } from "../formatters/markdownSplitter.ts";
 import { discordMessageToLlmText, llmTextToDiscordText } from "../formatters/textTransformers.ts";
+import { buildLangchainMessage } from "../helpers/buildLangchainMessage.ts";
 import { extractUserContent } from "../helpers/extractUserContent.ts";
 import { hasExtendedMarkdown } from "../helpers/hasExtendedMarkdown.ts";
 import { parseMessageIntent } from "../helpers/parseMessageIntent.ts";
@@ -24,7 +25,6 @@ import type {
 import type { IAgentOrchestrator } from "../ports/IAgentOrchestrator.ts";
 import type { IChatMessageService } from "../ports/IChatMessageService.ts";
 import type { IInlineMediaNormalizer } from "../ports/IInlineMediaNormalizer.ts";
-import type { AgentMessageBuilder } from "../services/AgentMessageBuilder.ts";
 import type { StatusMessageUpdater } from "../services/StatusMessageUpdater.ts";
 import type { OnStatusUpdate } from "../types/AgentStatus.ts";
 import type { Logger } from "../types/Logger.ts";
@@ -80,7 +80,6 @@ export class HandleChatMessageUseCase {
         private readonly messagePageRepo: IMessagePageRepository,
         private readonly retries: number,
         private readonly searchMode: SearchMode,
-        private readonly messageBuilder: AgentMessageBuilder,
         private readonly chatMessageService?: IChatMessageService,
         private readonly enableInDMs: boolean = false,
         /** Required in inline attachment mode: resolves discord:// token URLs to base64 data blocks. */
@@ -500,7 +499,7 @@ export class HandleChatMessageUseCase {
                             );
                         }
 
-                        const { msg: builtMsg } = this.messageBuilder.buildMessage({
+                        const builtMsg = buildLangchainMessage({
                             role: "human",
                             content:
                                 params.message !== null
@@ -939,7 +938,7 @@ export class HandleChatMessageUseCase {
                         const content = ownBot ? liveMsg.cleanContent : discordMessageToLlmText(liveMsg);
 
                         const attachments = [...liveMsg.attachments, ...(liveMsg.forwardedSnapshot?.attachments ?? [])];
-                        const { msg } = this.messageBuilder.buildMessage({
+                        const msg = buildLangchainMessage({
                             role: ownBot ? "assistant" : "human",
                             content,
                             attachments,
