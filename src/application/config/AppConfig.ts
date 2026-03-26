@@ -64,7 +64,7 @@ const fileConfigDefaults = {
     attachmentDownloader: {
         /** Timeout in ms for receiving the initial HTTP response when downloading Discord attachments. */
         timeoutMs: 10_000,
-        /** Per-download size limit for the in-memory (base64) downloader. */
+        /** Per-download size limit for the in-memory downloader. */
         memory: { maxSizeMB: 100 },
     },
     /**

@@ -5,7 +5,7 @@ import {
     type AttachmentMode,
     AttachmentMode as AttachmentModeValues,
 } from "../../application/config/AppConfig.ts";
-import type { IGeminiFileRefreshService } from "../../application/ports/IGeminiFileRefreshService.ts";
+import type { IGeminiMediaNormalizer } from "../../application/ports/IGeminiMediaNormalizer.ts";
 import type {
     IInvokableModel,
     IResilientModelInvoker,
@@ -34,7 +34,7 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
         private readonly maxInlineBytes: number,
         private readonly globalTimeoutMs: number,
         private readonly logger: Logger,
-        private readonly fileRefreshService?: IGeminiFileRefreshService,
+        private readonly fileRefreshService?: IGeminiMediaNormalizer,
     ) {}
 
     invokeWithFreeKeys(
@@ -103,11 +103,12 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
 
                     let filtered: BaseMessage[] = [];
                     try {
-                        // Refresh Gemini file uploads for this specific API key before invoking
-                        // TODO: make a mandatory dependency until there's a way to make this work in inline mode
-                        // with pre-existing gemini file URLs in history
+                        // Normalize all media blocks before invoking:
+                        // - discord:// token blocks → upload to Gemini (or use cached fileUri)
+                        // - existing fileUri blocks → validate freshness, re-upload if stale
+                        // In inline mode this is a no-op (fileRefreshService is not wired).
                         const refreshed = this.fileRefreshService
-                            ? await this.fileRefreshService.refreshHistory(messages, key.id)
+                            ? await this.fileRefreshService.normalize(messages, key.id)
                             : messages;
 
                         filtered =

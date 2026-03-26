@@ -280,15 +280,15 @@ describe("uploadStreamSingleRequest", () => {
         globalThis.setTimeout = originalSetTimeout;
     });
 
-    test("POSTs to the correct URL with no resumable protocol headers", async () => {
+    test("POSTs to the correct URL with multipart protocol headers", async () => {
         const calls = mockFetch([makeResponse({}, { file: FILE_RESOURCE })]);
 
         await uploadStreamSingleRequest("my-api-key", makeStream(bytes(100)), { ...BASE_CONFIG, byteLength: 100 });
 
         expect(calls[0]?.url).toBe("https://generativelanguage.googleapis.com/upload/v1beta/files?key=my-api-key");
-        expect(calls[0]?.headers["content-length"]).toBe("100");
+        expect(calls[0]?.headers["content-type"]).toContain("multipart/related");
+        expect(calls[0]?.headers["x-goog-upload-protocol"]).toBe("multipart");
         expect(calls[0]?.headers["x-goog-upload-command"]).toBeUndefined();
-        expect(calls[0]?.headers["x-goog-upload-protocol"]).toBeUndefined();
         expect(calls[0]?.headers["x-goog-upload-offset"]).toBeUndefined();
     });
 
@@ -303,13 +303,30 @@ describe("uploadStreamSingleRequest", () => {
         expect(result).toEqual(FILE_RESOURCE);
     });
 
-    test("sends correct byte content", async () => {
+    test("embeds file bytes in multipart body", async () => {
         const calls = mockFetch([makeResponse({}, { file: FILE_RESOURCE })]);
         const data = bytes(64, 0xab);
 
         await uploadStreamSingleRequest("key", makeStream(data), { ...BASE_CONFIG, byteLength: 64 });
 
-        expect(calls[0]?.body).toEqual(data);
+        // Body is a multipart envelope — file bytes must appear somewhere within it
+        const body = calls[0]?.body;
+        expect(body).not.toBeNull();
+        // Find the file bytes subsequence inside the multipart body
+        const dataStr = String.fromCharCode(...data);
+        const bodyStr = String.fromCharCode(...(body as Uint8Array));
+        expect(bodyStr).toContain(dataStr);
+    });
+
+    test("includes file metadata (name, displayName) in multipart body", async () => {
+        const calls = mockFetch([makeResponse({}, { file: FILE_RESOURCE })]);
+
+        await uploadStreamSingleRequest("key", makeStream(bytes(16)), { ...BASE_CONFIG, byteLength: 16 });
+
+        const bodyStr = new TextDecoder().decode(calls[0]?.body as Uint8Array);
+        expect(bodyStr).toContain('"name":"files/test123"');
+        expect(bodyStr).toContain('"displayName":"test.png"');
+        expect(bodyStr).toContain('"mimeType":"image/png"');
     });
 
     test("retries on failure then succeeds", async () => {

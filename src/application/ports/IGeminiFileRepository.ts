@@ -13,17 +13,36 @@ import type { GeminiFileUpload } from "../../domain/message/GeminiFileUpload.ts"
  */
 export interface IGeminiFileRepository {
     /**
-     * LEFT JOINs `gemini_files` with `gemini_file_uploads` for the given original
-     * URLs and API key. Always returns a GeminiFile entry (discord context); the
-     * upload field is null if no upload record exists for the specified API key
-     * (e.g. first use of this key, or trigger-cleaned stale rows).
+     * Looks up gemini_files anchors by their stable `original_gemini_url` (discord:// token URLs)
+     * and LEFT JOINs the upload record for the given API key.
      *
-     * @param originalUrls - The stable lookup keys stored in LangChain content blocks
-     * @param apiKeyId - The API key whose upload records to join against
-     * @returns Map from originalGeminiUrl to { file, upload } pair
+     * Used for the token block path in normalization — the common case.
+     * Upload is null when no record exists for the given API key.
+     *
+     * @param originalUrls - discord:// stable anchor keys from token blocks
+     * @param apiKeyId - The API key whose upload record to join
+     * @returns Map keyed by `original_gemini_url`
      */
-    findWithUploadStateForKey(
+    findByOriginalUrl(
         originalUrls: string[],
+        apiKeyId: string,
+    ): Promise<Map<string, { file: GeminiFile; upload: GeminiFileUpload | null }>>;
+
+    /**
+     * Looks up gemini_files anchors by a known Gemini upload URL, and LEFT JOINs the
+     * upload record for the given API key (which may differ from the key that produced
+     * the URL being looked up).
+     *
+     * Used for the fileUri block path — already-resolved blocks whose anchor key is
+     * unknown, only the Gemini URL is available. The url-match join is not filtered by
+     * apiKeyId so the anchor can be found regardless of which key originally uploaded it.
+     *
+     * @param geminiUrls - raw Gemini URIs from already-resolved fileUri blocks
+     * @param apiKeyId - The API key whose current upload record to join (may be null)
+     * @returns Map keyed by the matched `gemini_url`
+     */
+    findByUploadUrl(
+        geminiUrls: string[],
         apiKeyId: string,
     ): Promise<Map<string, { file: GeminiFile; upload: GeminiFileUpload | null }>>;
 

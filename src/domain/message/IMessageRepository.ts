@@ -115,6 +115,20 @@ export interface IMessageRepository {
     }): Promise<boolean>;
 
     /**
+     * Returns the UUID primary key of a message row by its Discord snowflake triple,
+     * or `null` if not found. Fetches only the `id` column.
+     *
+     * @param lookup.discordMessageId - The Discord snowflake ID of the message
+     * @param lookup.channelId - The Discord channel snowflake
+     * @param lookup.guildId - The Discord guild snowflake, or `"@me"` for DMs
+     */
+    getIdByDiscordMessageId(lookup: {
+        discordMessageId: string;
+        channelId: string;
+        guildId: string;
+    }): Promise<string | null>;
+
+    /**
      * Delete a single message row by its Discord message ID, guild, and channel.
      * Cascades to message_pages and gemini_files rows via DB foreign keys.
      * No-ops silently if the row does not exist.

@@ -16,8 +16,9 @@ import { AppError } from "../../domain/errors/AppError.ts";
  * Size limits from inline config are intentionally not enforced here.
  *
  * Resolution order for MIME type:
- * 1. HTTP response `Content-Type` header
- * 2. Discord-provided `contentType` metadata
+ * 1. Discord-provided `contentType` metadata (authoritative — Discord's CDN may transcode
+ *    and return a different Content-Type header, e.g. image/webp for a PNG attachment)
+ * 2. HTTP response `Content-Type` header (fallback for embed media where metadata is null)
  * 3. `application/octet-stream` (generic binary fallback)
  *
  * Primary URL is attempted first; on failure the proxy URL is tried.
@@ -45,7 +46,7 @@ export class FetchStreamingAttachmentDownloader implements IStreamingAttachmentD
             },
             async (span) => {
                 const result = await this.fetchWithFallback(attachment, acceptTypes);
-                const mimeType = result.mimeType ?? attachment.contentType ?? "application/octet-stream";
+                const mimeType = attachment.contentType ?? result.mimeType ?? "application/octet-stream";
 
                 span.setAttributes({
                     "attachment.mime_type": mimeType,

@@ -101,13 +101,9 @@ function makeOrchestrator(
 
 function makeAgentMessageBuilder(): AgentMessageBuilder {
     return {
-        buildMessage: mock(async ({ content }: { content: string }) => ({
+        buildMessage: mock(({ content }: { content: string }) => ({
             msg: new HumanMessage(content),
-            pendingRecords: [],
         })),
-        persistPendingGeminiRecords: mock(async () => {}),
-        maxInlineAttachmentBytes: 10 * 1024 * 1024,
-        mode: "inline",
     } as unknown as AgentMessageBuilder;
 }
 

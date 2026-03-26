@@ -17,7 +17,8 @@ import { ConfigProvider } from "./application/config/AppConfig.ts";
 import { sanitizeForLog } from "./application/helpers/errorHelpers.ts";
 import { AgentMessageBuilder } from "./application/services/AgentMessageBuilder.ts";
 import { GeminiApiKeySyncService } from "./application/services/GeminiApiKeySync.ts";
-import { GeminiFileRefreshService } from "./application/services/GeminiFileRefresh.ts";
+import { GeminiMediaNormalizer } from "./application/services/GeminiMediaNormalizer.ts";
+import { InlineMediaNormalizer } from "./application/services/InlineMediaNormalizer.ts";
 import { StatusMessageUpdater } from "./application/services/StatusMessageUpdater.ts";
 import { HandleChatMessageUseCase } from "./application/use-cases/HandleChatMessage.ts";
 import { HandleExportUseCase } from "./application/use-cases/HandleMessageExport.ts";
@@ -40,7 +41,6 @@ import { DiscordCommandRegistry } from "./infrastructure/discord/DiscordCommandR
 import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
 import { DiscordMediaService } from "./infrastructure/discord/DiscordMediaService.ts";
 import { InteractionLock } from "./infrastructure/discord/InteractionLock.ts";
-import { normalizeInlineMediaBlocks } from "./infrastructure/discord/inlineMediaNormalizer.ts";
 import { RateLimiter } from "./infrastructure/discord/RateLimiter.ts";
 import { HtmlToImageRenderer } from "./infrastructure/exporters/HtmlToImageRenderer.ts";
 import { MarkdownToHtmlRenderer } from "./infrastructure/exporters/MarkdownToHtmlRenderer.ts";
@@ -143,34 +143,35 @@ const commandRegistry = new DiscordCommandRegistry(
     logger.child({ module: "discord-commands" }),
 );
 
-// Gemini file refresh service — depends on discordMediaService for re-fetching expired CDN URLs
 const discordMediaService = new DiscordMediaService(discordClient);
-// Inline media normalizer — resolves discord:// token URLs to base64 data blocks before LLM calls
-const inlineMediaNormalizer = (messages: Parameters<typeof normalizeInlineMediaBlocks>[0]) =>
-    normalizeInlineMediaBlocks(
-        messages,
-        discordMediaService,
-        attachmentDownloader,
-        logger.child({ module: "inline-normalizer" }),
-    );
-const geminiFileRefreshService = new GeminiFileRefreshService(
+
+const inlineMediaNormalizer = new InlineMediaNormalizer(
+    discordMediaService,
+    attachmentDownloader,
+    logger.child({ module: "attachments:inline-normalizer" }),
+);
+
+const geminiMediaNormalizer = new GeminiMediaNormalizer(
     geminiFileRepository,
+    messageRepository,
     uploaderRegistry,
     streamingDownloader,
     discordMediaService,
-    logger.child({ module: "attachments:refresh" }),
+    logger.child({ module: "attachments:gemini-normalizer" }),
     config,
 );
 
-// Resilient invoker — owns key rotation, file refresh, attachment filtering, and fallback policy
+const isInlineMode = config.file.agent.uploadAttachmentMode === "inline";
+
+// Resilient invoker — owns key rotation, Gemini file normalization, attachment filtering, and fallback policy
 const resilientInvoker = new ResilientModelInvoker(
     freeKeyProvider,
     paidKeyProvider,
     config.file.agent.uploadAttachmentMode,
     config.file.agent.maxInlineAttachmentSizeBytes,
     config.file.globalModelTimeoutMs,
-    logger.child({ module: "resilient-invoker" }),
-    geminiFileRefreshService,
+    logger.child({ module: "llm:resilient-invoker" }),
+    isInlineMode ? undefined : geminiMediaNormalizer,
 );
 
 // Orchestrator
@@ -205,14 +206,8 @@ const htmlToImage = new HtmlToImageRenderer();
 // Discord gateway
 const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
 const discordClientBot = new DiscordClientBot(discordClient.client);
-const agentMessageBuilder = new AgentMessageBuilder(
-    logger.child({ module: "agent-message-builder" }),
-    config,
-    streamingDownloader,
-    uploaderRegistry,
-    freeKeyProvider,
-    geminiFileRepository,
-);
+// TODO: change to module of functions
+const agentMessageBuilder = new AgentMessageBuilder(logger.child({ module: "agent-message-builder" }));
 const handleChatMessageUseCase = new HandleChatMessageUseCase(
     agentOrchestrator,
     messageRepository,
@@ -226,7 +221,8 @@ const handleChatMessageUseCase = new HandleChatMessageUseCase(
     agentMessageBuilder,
     discordChatMessageService,
     config.file.discord.enableInDMs,
-    inlineMediaNormalizer,
+    isInlineMode ? inlineMediaNormalizer : undefined,
+    isInlineMode ? config.file.agent.maxInlineAttachmentSizeBytes : null,
 );
 
 // Shared interaction lock — one instance reused across all use cases that need locking

@@ -349,15 +349,23 @@ export class PgMessageRepository implements IMessageRepository {
         channelId: string;
         guildId: string;
     }): Promise<boolean> {
+        return (await this.getIdByDiscordMessageId(lookup)) !== null;
+    }
+
+    async getIdByDiscordMessageId(lookup: {
+        discordMessageId: string;
+        channelId: string;
+        guildId: string;
+    }): Promise<string | null> {
         try {
             const [result] = await this.stmtExistsByDiscordMessageId.execute({
                 guildId: lookup.guildId,
                 channelId: lookup.channelId,
                 discordMessageId: lookup.discordMessageId,
             });
-            return result !== undefined;
+            return result?.id ?? null;
         } catch (err) {
-            throw new DatabaseError("Failed to check message existence by Discord ID", err);
+            throw new DatabaseError("Failed to look up message ID by Discord ID", err);
         }
     }
 

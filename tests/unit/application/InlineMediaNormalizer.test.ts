@@ -3,9 +3,9 @@ import type { ContentBlock } from "@langchain/core/messages";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import type { IAttachmentDownloader } from "../../../src/application/ports/IAttachmentDownloader.ts";
 import type { IDiscordMediaService } from "../../../src/application/ports/IDiscordMediaService.ts";
+import { InlineMediaNormalizer } from "../../../src/application/services/InlineMediaNormalizer.ts";
 import type { Logger } from "../../../src/application/types/Logger.ts";
 import { buildAttachmentTokenUrl, buildEmbedTokenUrl } from "../../../src/infrastructure/discord/discordTokenUrl.ts";
-import { normalizeInlineMediaBlocks } from "../../../src/infrastructure/discord/inlineMediaNormalizer.ts";
 
 const noopLogger = {
     debug: () => {},
@@ -43,13 +43,17 @@ function humanWithData(data: string, mimeType = "image/jpeg"): HumanMessage {
     ]);
 }
 
-describe("normalizeInlineMediaBlocks", () => {
+function makeNormalizer(mediaService: IDiscordMediaService, downloader: IAttachmentDownloader) {
+    return new InlineMediaNormalizer(mediaService, downloader, noopLogger);
+}
+
+describe("InlineMediaNormalizer", () => {
     test("passes through messages with no token blocks unchanged", async () => {
         const msg = humanWithData("base64data");
         const mediaService = { fetchAttachment: mock(), fetchEmbedMedia: mock() } as unknown as IDiscordMediaService;
         const downloader = { download: mock() } as unknown as IAttachmentDownloader;
 
-        const result = await normalizeInlineMediaBlocks([msg], mediaService, downloader, noopLogger);
+        const result = await makeNormalizer(mediaService, downloader).normalize([msg]);
 
         expect(result).toHaveLength(1);
         expect(result[0]).toBe(msg); // exact same reference — no copy
@@ -61,7 +65,7 @@ describe("normalizeInlineMediaBlocks", () => {
         const mediaService = { fetchAttachment: mock(), fetchEmbedMedia: mock() } as unknown as IDiscordMediaService;
         const downloader = { download: mock() } as unknown as IAttachmentDownloader;
 
-        const result = await normalizeInlineMediaBlocks([ai], mediaService, downloader, noopLogger);
+        const result = await makeNormalizer(mediaService, downloader).normalize([ai]);
 
         expect(result[0]).toBe(ai);
     });
@@ -76,7 +80,7 @@ describe("normalizeInlineMediaBlocks", () => {
             download: mock(() => Promise.resolve({ data: "resolvedBase64", mimeType: "image/jpeg", name: "file.jpg" })),
         } as unknown as IAttachmentDownloader;
 
-        const result = await normalizeInlineMediaBlocks([msg], mediaService, downloader, noopLogger);
+        const result = await makeNormalizer(mediaService, downloader).normalize([msg]);
 
         expect(result).toHaveLength(1);
         const content = (result[0] as HumanMessage).content as ContentBlock[];
@@ -98,7 +102,7 @@ describe("normalizeInlineMediaBlocks", () => {
             download: mock(() => Promise.resolve({ data: "embedBase64", mimeType: "image/png", name: "embed.png" })),
         } as unknown as IAttachmentDownloader;
 
-        const result = await normalizeInlineMediaBlocks([msg], mediaService, downloader, noopLogger);
+        const result = await makeNormalizer(mediaService, downloader).normalize([msg]);
 
         const content = (result[0] as HumanMessage).content as ContentBlock[];
         expect(content[1]).toEqual({ type: "media", mimeType: "image/png", data: "embedBase64" });
@@ -113,7 +117,7 @@ describe("normalizeInlineMediaBlocks", () => {
         } as unknown as IDiscordMediaService;
         const downloader = { download: mock() } as unknown as IAttachmentDownloader;
 
-        const result = await normalizeInlineMediaBlocks([msg], mediaService, downloader, noopLogger);
+        const result = await makeNormalizer(mediaService, downloader).normalize([msg]);
 
         const content = (result[0] as HumanMessage).content as ContentBlock[];
         // Only the text block remains; media block was dropped
@@ -131,7 +135,7 @@ describe("normalizeInlineMediaBlocks", () => {
             download: mock(() => Promise.reject(new Error("network error"))),
         } as unknown as IAttachmentDownloader;
 
-        const result = await normalizeInlineMediaBlocks([msg], mediaService, downloader, noopLogger);
+        const result = await makeNormalizer(mediaService, downloader).normalize([msg]);
 
         const content = (result[0] as HumanMessage).content as ContentBlock[];
         expect(content).toHaveLength(1);
@@ -146,7 +150,7 @@ describe("normalizeInlineMediaBlocks", () => {
         const mediaService = { fetchAttachment: mock(), fetchEmbedMedia: mock() } as unknown as IDiscordMediaService;
         const downloader = { download: mock() } as unknown as IAttachmentDownloader;
 
-        const result = await normalizeInlineMediaBlocks([msg], mediaService, downloader, noopLogger);
+        const result = await makeNormalizer(mediaService, downloader).normalize([msg]);
 
         const content = (result[0] as HumanMessage).content as ContentBlock[];
         expect(content).toHaveLength(1);
@@ -173,7 +177,7 @@ describe("normalizeInlineMediaBlocks", () => {
             ),
         } as unknown as IAttachmentDownloader;
 
-        const result = await normalizeInlineMediaBlocks([msg], mediaService, downloader, noopLogger);
+        const result = await makeNormalizer(mediaService, downloader).normalize([msg]);
 
         const content = (result[0] as HumanMessage).content as ContentBlock[];
         expect(content).toHaveLength(3);
@@ -193,7 +197,7 @@ describe("normalizeInlineMediaBlocks", () => {
             download: mock(() => Promise.resolve({ data: "resolved", mimeType: "image/jpeg", name: "f.jpg" })),
         } as unknown as IAttachmentDownloader;
 
-        const result = await normalizeInlineMediaBlocks([msg1, msg2], mediaService, downloader, noopLogger);
+        const result = await makeNormalizer(mediaService, downloader).normalize([msg1, msg2]);
 
         expect(result).toHaveLength(2);
         // msg1 resolved
@@ -218,7 +222,7 @@ describe("normalizeInlineMediaBlocks", () => {
             download: mock(() => Promise.resolve({ data: "newlyResolved", mimeType: "image/png", name: "f.png" })),
         } as unknown as IAttachmentDownloader;
 
-        const result = await normalizeInlineMediaBlocks([msg], mediaService, downloader, noopLogger);
+        const result = await makeNormalizer(mediaService, downloader).normalize([msg]);
 
         const content = (result[0] as HumanMessage).content as ContentBlock[];
         expect(content).toHaveLength(3);

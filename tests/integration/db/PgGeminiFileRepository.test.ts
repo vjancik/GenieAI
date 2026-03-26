@@ -117,16 +117,15 @@ async function insertTestFile(
     return row;
 }
 
-// ─── findWithUploadStateForKey ──────────────────────────────────────────────
+// ─── findByOriginalUrl ───────────────────────────────────────────────────────
 
-describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
+describe("PgGeminiFileRepository.findByOriginalUrl", () => {
     test("returns upload: null when no upload exists for the given API key", async () => {
         const msg = await insertTestMessage();
         const apiKeyId = await insertTestApiKey();
         const savedFile = await insertTestFile(filePayload(msg.id));
 
-        // No upload row inserted — LEFT JOIN should yield upload: null
-        const result = await repo.findWithUploadStateForKey([savedFile.originalGeminiUrl], apiKeyId);
+        const result = await repo.findByOriginalUrl([savedFile.originalGeminiUrl], apiKeyId);
 
         expect(result.size).toBe(1);
         const entry = result.get(savedFile.originalGeminiUrl);
@@ -149,7 +148,7 @@ describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
             }),
         );
 
-        const result = await repo.findWithUploadStateForKey([savedFile.originalGeminiUrl], apiKeyId);
+        const result = await repo.findByOriginalUrl([savedFile.originalGeminiUrl], apiKeyId);
 
         expect(result.size).toBe(1);
         const entry = result.get(savedFile.originalGeminiUrl);
@@ -165,7 +164,6 @@ describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
         const keyId2 = await insertTestApiKey("key-2");
         const savedFile = await insertTestFile(filePayload(msg.id));
 
-        // Upload exists only for key1
         await repo.upsertUpload(
             uploadPayload({
                 geminiFileId: savedFile.id,
@@ -175,29 +173,25 @@ describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
             }),
         );
 
-        // Query for key2 — no upload should be found
-        const result = await repo.findWithUploadStateForKey([savedFile.originalGeminiUrl], keyId2);
+        const result = await repo.findByOriginalUrl([savedFile.originalGeminiUrl], keyId2);
 
-        const entry = result.get(savedFile.originalGeminiUrl);
-        expect(entry?.upload).toBeNull();
+        expect(result.get(savedFile.originalGeminiUrl)?.upload).toBeNull();
     });
 
-    test("returns an empty map when no gemini_files rows match the requested URLs", async () => {
-        const result = await repo.findWithUploadStateForKey(
+    test("returns empty map for empty URL list", async () => {
+        const result = await repo.findByOriginalUrl([], "any-key-id");
+        expect(result.size).toBe(0);
+    });
+
+    test("returns empty map when no rows match", async () => {
+        const result = await repo.findByOriginalUrl(
             ["https://generativelanguage.googleapis.com/v1beta/files/nonexistent"],
-            // any valid uuid
             "6e32a57f-6f48-411d-a4e4-e81d86cbf508",
         );
-
         expect(result.size).toBe(0);
     });
 
-    test("returns an empty map for an empty URL list", async () => {
-        const result = await repo.findWithUploadStateForKey([], "any-key-id");
-        expect(result.size).toBe(0);
-    });
-
-    test("returns multiple entries when multiple URLs are requested", async () => {
+    test("returns multiple entries for multiple URLs", async () => {
         const msg = await insertTestMessage();
         const apiKeyId = await insertTestApiKey();
 
@@ -213,7 +207,6 @@ describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
             }),
         );
 
-        // Upload only file1
         await repo.upsertUpload(
             uploadPayload({
                 geminiFileId: file1.id,
@@ -223,14 +216,72 @@ describe("PgGeminiFileRepository.findWithUploadStateForKey", () => {
             }),
         );
 
-        const result = await repo.findWithUploadStateForKey(
-            [file1.originalGeminiUrl, file2.originalGeminiUrl],
-            apiKeyId,
-        );
+        const result = await repo.findByOriginalUrl([file1.originalGeminiUrl, file2.originalGeminiUrl], apiKeyId);
 
         expect(result.size).toBe(2);
         expect(result.get(file1.originalGeminiUrl)?.upload).not.toBeNull();
         expect(result.get(file2.originalGeminiUrl)?.upload).toBeNull();
+    });
+});
+
+// ─── findByUploadUrl ─────────────────────────────────────────────────────────
+
+describe("PgGeminiFileRepository.findByUploadUrl", () => {
+    test("returns entry keyed by gemini_url with current-key upload state", async () => {
+        const msg = await insertTestMessage();
+        const apiKeyId = await insertTestApiKey();
+        const savedFile = await insertTestFile(filePayload(msg.id));
+        const geminiUrl = "https://generativelanguage.googleapis.com/v1beta/files/fileuri-lookup";
+
+        await repo.upsertUpload(
+            uploadPayload({ geminiFileId: savedFile.id, apiKeyId, geminiFileName: "files/fileuri-lookup", geminiUrl }),
+        );
+
+        const result = await repo.findByUploadUrl([geminiUrl], apiKeyId);
+
+        const entry = result.get(geminiUrl);
+        expect(entry).toBeDefined();
+        expect(entry?.file.id).toBe(savedFile.id);
+        expect(entry?.upload?.geminiUrl).toBe(geminiUrl);
+    });
+
+    test("finds anchor even when upload was created under a different key", async () => {
+        const msg = await insertTestMessage();
+        const keyId1 = await insertTestApiKey("key-1");
+        const keyId2 = await insertTestApiKey("key-2");
+        const savedFile = await insertTestFile(filePayload(msg.id));
+        const geminiUrl = "https://generativelanguage.googleapis.com/v1beta/files/other-key-upload";
+
+        // Uploaded under key1 only
+        await repo.upsertUpload(
+            uploadPayload({
+                geminiFileId: savedFile.id,
+                apiKeyId: keyId1,
+                geminiFileName: "files/other-key-upload",
+                geminiUrl,
+            }),
+        );
+
+        // Query with key2 — should still find the anchor, but upload is null (no key2 record)
+        const result = await repo.findByUploadUrl([geminiUrl], keyId2);
+
+        const entry = result.get(geminiUrl);
+        expect(entry).toBeDefined();
+        expect(entry?.file.id).toBe(savedFile.id);
+        expect(entry?.upload).toBeNull();
+    });
+
+    test("returns empty map for empty URL list", async () => {
+        const result = await repo.findByUploadUrl([], "any-key-id");
+        expect(result.size).toBe(0);
+    });
+
+    test("returns empty map when no upload row matches", async () => {
+        const result = await repo.findByUploadUrl(
+            ["https://generativelanguage.googleapis.com/v1beta/files/nonexistent"],
+            "6e32a57f-6f48-411d-a4e4-e81d86cbf508",
+        );
+        expect(result.size).toBe(0);
     });
 });
 
