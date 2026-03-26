@@ -16,6 +16,8 @@ import { parseDiscordTokenUrl } from "../../infrastructure/discord/discordTokenU
 import type { IAttachmentDownloader } from "../ports/IAttachmentDownloader.ts";
 import type { IDiscordMediaService } from "../ports/IDiscordMediaService.ts";
 import type { IInlineMediaNormalizer } from "../ports/IInlineMediaNormalizer.ts";
+import type { OnStatusUpdate } from "../types/AgentStatus.ts";
+import { AgentStatusType } from "../types/AgentStatus.ts";
 import type { Logger } from "../types/Logger.ts";
 
 /**
@@ -53,8 +55,10 @@ export class InlineMediaNormalizer implements IInlineMediaNormalizer {
      * Blocks that cannot be resolved are dropped with a warning rather than throwing,
      * so a single unavailable attachment does not abort the entire request.
      */
-    async normalize(messages: BaseMessage[]): Promise<BaseMessage[]> {
+    async normalize(messages: BaseMessage[], onStatusUpdate?: OnStatusUpdate): Promise<BaseMessage[]> {
         const result: BaseMessage[] = [];
+        // Fired at most once — only when the first real download is about to begin.
+        let statusFired = false;
 
         for (const msg of messages) {
             if (!(msg instanceof HumanMessage) || !Array.isArray(msg.content)) {
@@ -70,6 +74,12 @@ export class InlineMediaNormalizer implements IInlineMediaNormalizer {
             if (!hasTokens) {
                 result.push(msg);
                 continue;
+            }
+
+            // Fire the status update once, just before the first download starts.
+            if (!statusFired) {
+                onStatusUpdate?.({ type: AgentStatusType.DOWNLOADING_ATTACHMENTS });
+                statusFired = true;
             }
 
             // Resolve all token blocks concurrently — each token is an independent network call.

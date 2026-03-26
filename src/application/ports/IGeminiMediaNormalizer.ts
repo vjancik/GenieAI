@@ -1,4 +1,5 @@
 import type { BaseMessage } from "@langchain/core/messages";
+import type { OnStatusUpdate } from "../types/AgentStatus.ts";
 
 /**
  * Port interface for resolving Discord token URL media blocks in LangChain messages
@@ -24,5 +25,5 @@ export interface IGeminiMediaNormalizer {
      * @param apiKeyId - The DB UUID of the API key currently being used for LLM invocation
      * @returns New message array with token blocks replaced by resolved Gemini fileUri blocks
      */
-    normalize(messages: BaseMessage[], apiKeyId: string): Promise<BaseMessage[]>;
+    normalize(messages: BaseMessage[], apiKeyId: string, onStatusUpdate?: OnStatusUpdate): Promise<BaseMessage[]>;
 }

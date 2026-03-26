@@ -12,6 +12,7 @@ import type {
     ModelInvocationResult,
 } from "../../application/ports/IResilientModelInvoker.ts";
 import type { IRoundRobinKeyProvider } from "../../application/ports/IRoundRobinKeyProvider.ts";
+import type { AgentStatusType, OnStatusUpdate } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import { AllFreeKeysExhaustedError, PaidKeyExhaustedError } from "../../domain/errors/AppError.ts";
 import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
@@ -42,8 +43,19 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
         getFallbackModel: ((key: GeminiApiKey) => IInvokableModel | undefined) | undefined,
         messages: BaseMessage[],
         timeoutMs?: number,
+        onStatusUpdate?: OnStatusUpdate,
+        beforeInvokeStatus?: AgentStatusType,
     ): Promise<ModelInvocationResult> {
-        return this.invokeWithKeyRotation(getModel, getFallbackModel, messages, timeoutMs, this.freeKeyProvider, false);
+        return this.invokeWithKeyRotation(
+            getModel,
+            getFallbackModel,
+            messages,
+            timeoutMs,
+            this.freeKeyProvider,
+            false,
+            onStatusUpdate,
+            beforeInvokeStatus,
+        );
     }
 
     invokeWithPaidKey(
@@ -51,8 +63,19 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
         getFallbackModel: ((key: GeminiApiKey) => IInvokableModel | undefined) | undefined,
         messages: BaseMessage[],
         timeoutMs?: number,
+        onStatusUpdate?: OnStatusUpdate,
+        beforeInvokeStatus?: AgentStatusType,
     ): Promise<ModelInvocationResult> {
-        return this.invokeWithKeyRotation(getModel, getFallbackModel, messages, timeoutMs, this.paidKeyProvider, true);
+        return this.invokeWithKeyRotation(
+            getModel,
+            getFallbackModel,
+            messages,
+            timeoutMs,
+            this.paidKeyProvider,
+            true,
+            onStatusUpdate,
+            beforeInvokeStatus,
+        );
     }
 
     invoke(
@@ -61,10 +84,26 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
         getFallbackModel: ((key: GeminiApiKey) => IInvokableModel | undefined) | undefined,
         messages: BaseMessage[],
         timeoutMs?: number,
+        onStatusUpdate?: OnStatusUpdate,
+        beforeInvokeStatus?: AgentStatusType,
     ): Promise<ModelInvocationResult> {
         return keyType === ApiKeyType.paid
-            ? this.invokeWithPaidKey(getModel, getFallbackModel, messages, timeoutMs)
-            : this.invokeWithFreeKeys(getModel, getFallbackModel, messages, timeoutMs);
+            ? this.invokeWithPaidKey(
+                  getModel,
+                  getFallbackModel,
+                  messages,
+                  timeoutMs,
+                  onStatusUpdate,
+                  beforeInvokeStatus,
+              )
+            : this.invokeWithFreeKeys(
+                  getModel,
+                  getFallbackModel,
+                  messages,
+                  timeoutMs,
+                  onStatusUpdate,
+                  beforeInvokeStatus,
+              );
     }
 
     /**
@@ -85,6 +124,8 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
         timeoutMs: number | undefined,
         keyProvider: IRoundRobinKeyProvider,
         isPaid: boolean,
+        onStatusUpdate?: OnStatusUpdate,
+        beforeInvokeStatus?: AgentStatusType,
     ): Promise<ModelInvocationResult> {
         return Sentry.startSpan(
             {
@@ -108,13 +149,18 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
                         // - existing fileUri blocks → validate freshness, re-upload if stale
                         // In inline mode this is a no-op (fileRefreshService is not wired).
                         const refreshed = this.fileRefreshService
-                            ? await this.fileRefreshService.normalize(messages, key.id)
+                            ? await this.fileRefreshService.normalize(messages, key.id, onStatusUpdate)
                             : messages;
 
                         filtered =
                             this.attachmentMode === AttachmentModeValues.inline
                                 ? filterHistoryForInlineSize(refreshed, this.maxInlineBytes)
                                 : refreshed;
+
+                        // Restore the node's phase label after any attachment status update
+                        if (beforeInvokeStatus !== undefined) {
+                            onStatusUpdate?.({ type: beforeInvokeStatus });
+                        }
 
                         const result = await getModel(key).invoke(filtered, {
                             timeout: timeoutMs ?? this.globalTimeoutMs,

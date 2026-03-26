@@ -13,6 +13,8 @@ import type { IGeminiFileRepository } from "../ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploaderRegistry } from "../ports/IGeminiFileUploaderRegistry.ts";
 import type { IGeminiMediaNormalizer } from "../ports/IGeminiMediaNormalizer.ts";
 import type { IStreamingAttachmentDownloader } from "../ports/IStreamingAttachmentDownloader.ts";
+import type { OnStatusUpdate } from "../types/AgentStatus.ts";
+import { AgentStatusType } from "../types/AgentStatus.ts";
 import type { Logger } from "../types/Logger.ts";
 
 /**
@@ -96,7 +98,11 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
      * Resolves all `discord://` token URL blocks in `messages` to Gemini `fileUri` blocks.
      * Messages with no token blocks pass through unchanged.
      */
-    async normalize(messages: BaseMessage[], apiKeyId: string): Promise<BaseMessage[]> {
+    async normalize(
+        messages: BaseMessage[],
+        apiKeyId: string,
+        onStatusUpdate?: OnStatusUpdate,
+    ): Promise<BaseMessage[]> {
         return Sentry.startSpan(
             {
                 name: "Normalize Gemini media blocks",
@@ -142,6 +148,15 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                     ...[...fileUris].map((fileUri) => ({ key: fileUri, kind: "fileUri" as const })),
                 ];
 
+                // Fired at most once — only when the first actual download/upload is about to begin.
+                let statusFired = false;
+                const fireStatus = () => {
+                    if (!statusFired) {
+                        onStatusUpdate?.({ type: AgentStatusType.DOWNLOADING_ATTACHMENTS });
+                        statusFired = true;
+                    }
+                };
+
                 const results = await Promise.all(
                     entries.map(async ({ key, kind }) => {
                         const state = kind === "token" ? byAnchorUrl.get(key) : byGeminiUrl.get(key);
@@ -149,11 +164,13 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                         if (kind === "token") {
                             if (!state) {
                                 // No DB anchor yet — new file, upload for the first time
+                                fireStatus();
                                 return { key, fileUri: await this.uploadNew(key, apiKeyId) };
                             }
                             const { file, upload } = state;
                             if (upload === null) {
                                 // Anchor exists but no upload for this key (new key or trigger-cleaned)
+                                fireStatus();
                                 return { key, fileUri: await this.reupload(key, file, null, apiKeyId) };
                             }
                             if (now - upload.uploadedAt.getTime() >= this.staleThresholdMs) {
@@ -161,6 +178,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                                     { tokenUrl: key, apiKeyId, uploadedAt: upload.uploadedAt },
                                     "Gemini file upload is stale; re-uploading",
                                 );
+                                fireStatus();
                                 return { key, fileUri: await this.reupload(key, file, upload, apiKeyId) };
                             }
                             // Fresh upload — use existing fileUri
@@ -184,6 +202,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                                     "Existing Gemini fileUri is stale; re-uploading",
                                 );
                             }
+                            fireStatus();
                             return { key, fileUri: await this.reupload(key, file, upload, apiKeyId) };
                         }
                         // Fresh — no substitution needed

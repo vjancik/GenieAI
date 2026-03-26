@@ -496,7 +496,6 @@ export class HandleChatMessageUseCase {
                                 params.referencedMessageId,
                                 params.channelId,
                                 params.guildId,
-                                params.onStatusUpdate,
                                 params.fetchHistory === false ? 1 : undefined,
                             );
                         }
@@ -509,7 +508,6 @@ export class HandleChatMessageUseCase {
                                     : "",
                             attachments: params.attachments,
                             embeds: params.embeds,
-                            onStatusUpdate: params.onStatusUpdate,
                             guildId: params.guildId,
                             channelId: params.channelId,
                             discordMessageId: params.discordMessageId,
@@ -572,7 +570,7 @@ export class HandleChatMessageUseCase {
                     // In inline mode, media blocks in history contain discord:// token URLs
                     // instead of raw base64. Resolve them to data blocks before sending to the LLM.
                     const llmHistory = this.inlineMediaNormalizer
-                        ? await this.inlineMediaNormalizer.normalize(history)
+                        ? await this.inlineMediaNormalizer.normalize(history, params.onStatusUpdate)
                         : history;
 
                     this.logger.debug(
@@ -892,7 +890,6 @@ export class HandleChatMessageUseCase {
         referencedMessageId: string,
         channelId: string,
         guildId: string,
-        onStatusUpdate?: OnStatusUpdate,
         limit?: number,
     ): Promise<DiscordMessage[]> {
         return Sentry.startSpan(
@@ -947,7 +944,6 @@ export class HandleChatMessageUseCase {
                             content,
                             attachments,
                             embeds: liveMsg.embeds,
-                            onStatusUpdate,
                             guildId: liveMsg.guildId ?? "@me",
                             channelId: liveMsg.channelId,
                             discordMessageId: liveMsg.id,

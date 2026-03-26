@@ -311,9 +311,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      */
     private async triageNode(state: GraphState, config: NodeConfig): Promise<Command> {
         return Sentry.startSpan({ name: "Triage node", op: "agent.node.triage" }, async (span) => {
-            config.context?.onStatusUpdate?.({
-                type: AgentStatusType.TRIAGE,
-            });
             // Triage only needs the last full turn to classify, not the full history.
             // "Last full turn" = the HumanMessage immediately before the last AIMessage, through
             // to the end of state (i.e. the prior exchange + all new human messages since).
@@ -353,6 +350,8 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 activeTriageProvider.getFallback.bind(activeTriageProvider),
                 messages,
                 this.nodeTimeoutsMs?.triage,
+                config.context?.onStatusUpdate,
+                AgentStatusType.TRIAGE,
             );
 
             const toolCalls = triageResponse.tool_calls ?? [];
@@ -532,9 +531,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         config: NodeConfig,
     ): Promise<{ messages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean }> {
         return Sentry.startSpan({ name: "General agent node", op: "agent.node.general" }, async (span) => {
-            config.context?.onStatusUpdate?.({
-                type: AgentStatusType.GENERATING,
-            });
             const lastMsg = state.messages.at(-1);
             const hasToolResult = lastMsg instanceof ToolMessage;
             const hasVideoCaptions = state.messages.some(
@@ -567,6 +563,8 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 this.generalProvider.getFallback.bind(this.generalProvider),
                 invokeMessages,
                 this.nodeTimeoutsMs?.general,
+                config.context?.onStatusUpdate,
+                AgentStatusType.GENERATING,
             );
             return { messages: [response], isRetryable: usedFallback, usedFallback };
         });
@@ -588,10 +586,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         config: NodeConfig,
     ): Promise<{ messages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean }> {
         return Sentry.startSpan({ name: "Search agent node", op: "agent.node.search" }, async () => {
-            config.context?.onStatusUpdate?.({
-                type: AgentStatusType.SEARCHING,
-            });
-
             const dateStr = new Date().toLocaleDateString("en-US", {
                 weekday: "long",
                 year: "numeric",
@@ -667,6 +661,8 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     this.searchProvider.getFallback.bind(this.searchProvider),
                     invokeMessages,
                     this.nodeTimeoutsMs?.search,
+                    config.context?.onStatusUpdate,
+                    AgentStatusType.SEARCHING,
                 );
 
                 Object.assign(result.additional_kwargs, tavilyGroundingKwargs);
@@ -688,6 +684,8 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 this.searchProvider.getFallback.bind(this.searchProvider),
                 messages,
                 this.nodeTimeoutsMs?.search,
+                config.context?.onStatusUpdate,
+                AgentStatusType.SEARCHING,
             );
             return { messages: [response], isRetryable: usedFallback, usedFallback };
         });

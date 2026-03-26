@@ -2,8 +2,6 @@ import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { EMBED_MEDIA_KEYS } from "../../domain/message/GeminiFile.ts";
 import { buildAttachmentTokenUrl, buildEmbedTokenUrl } from "../../infrastructure/discord/discordTokenUrl.ts";
 import type { IChatClientMessageAttachment, IChatClientMessageEmbed } from "../ports/chat/IChatClient.ts";
-import type { OnStatusUpdate } from "../types/AgentStatus.ts";
-import { AgentStatusType } from "../types/AgentStatus.ts";
 import type { Logger } from "../types/Logger.ts";
 
 /** Returns true if at least one embed contains a URL for any of the tracked media keys. */
@@ -48,7 +46,6 @@ export class AgentMessageBuilder {
         content: string;
         attachments: IChatClientMessageAttachment[];
         embeds?: IChatClientMessageEmbed[];
-        onStatusUpdate?: OnStatusUpdate;
         /** Encoded into discord:// token URLs. Required when attachments or embeds are present. */
         guildId?: string;
         /** Encoded into discord:// token URLs. Required when attachments or embeds are present. */
@@ -58,7 +55,7 @@ export class AgentMessageBuilder {
     }): {
         msg: R extends "human" ? HumanMessage : AIMessage;
     } {
-        const { role, content, attachments, embeds, onStatusUpdate, guildId, channelId, discordMessageId } = params;
+        const { role, content, attachments, embeds, guildId, channelId, discordMessageId } = params;
 
         // TYPE COERCION: TypeScript cannot narrow a conditional return type (R extends "human" ? ...)
         // from within the generic implementation body — the union HumanMessage | AIMessage is not
@@ -72,8 +69,6 @@ export class AgentMessageBuilder {
         if (!hasMedia) {
             return { msg: wrap(content) };
         }
-
-        onStatusUpdate?.({ type: AgentStatusType.DOWNLOADING_ATTACHMENTS });
 
         return {
             msg: wrap(this.buildTokenContentParts(content, attachments, embeds, guildId, channelId, discordMessageId)),
