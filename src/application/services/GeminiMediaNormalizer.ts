@@ -2,6 +2,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import { randomUUIDv7 } from "bun";
+import { LRUCache } from "lru-cache";
 import type { GeminiFile } from "../../domain/message/GeminiFile.ts";
 import { GeminiFileSourceType } from "../../domain/message/GeminiFile.ts";
 import type { GeminiFileUpload } from "../../domain/message/GeminiFileUpload.ts";
@@ -80,6 +81,18 @@ function isFileUriBlock(block: unknown): block is FileUriBlock {
 export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
     /** A file is stale when less than this many ms remain before Gemini deletes it. */
     private readonly staleThresholdMs: number;
+    /**
+     * Cache TTL: staleThresholdMs minus an additional 15-minute safety buffer, so cached
+     * entries are always evicted before the upload could go stale under any circumstances.
+     * Per-entry TTL for existing uploads is computed as `staleCacheThresholdMs - age`.
+     */
+    private readonly staleCacheThresholdMs: number;
+    /**
+     * In-process LRU cache mapping `${apiKeyId}:${originalUrl}` → resolved Gemini fileUri.
+     * Default TTL covers fresh uploads; existing uploads use per-entry TTL based on remaining
+     * lifetime. Only successful (non-null) resolutions are cached.
+     */
+    private readonly fileUriCache: LRUCache<string, string>;
 
     constructor(
         private readonly geminiFileRepo: IGeminiFileRepository,
@@ -90,8 +103,13 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
         private readonly logger: Logger,
         config: Pick<AppConfig, "file">,
     ) {
-        const geminiTtlMs = 48 * 60 * 60 * 1000;
+        const geminiTtlMs = 48 * 60 * 60 * 1000; // 48 hours
         this.staleThresholdMs = geminiTtlMs - config.file.geminiFileApi.fileStaleBeforeExpiryMs;
+        this.staleCacheThresholdMs = this.staleThresholdMs - 15 * 60 * 1000; // minus 15 minutes
+        this.fileUriCache = new LRUCache<string, string>({
+            max: config.file.cache.geminiFileUrls,
+            ttl: this.staleCacheThresholdMs,
+        });
     }
 
     /**
@@ -125,17 +143,44 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
 
                 if (tokenUrls.size === 0 && fileUris.size === 0) return messages;
 
+                // Short-circuit cache hits — populate resolvedUrls directly without a DB query.
+                // Only keys with no cache entry proceed to the DB + upload path.
+                const resolvedUrls = new Map<string, string | null>();
+                const uncachedTokenUrls = new Set<string>();
+                const uncachedFileUris = new Set<string>();
+
+                for (const key of tokenUrls) {
+                    const cached = this.fileUriCache.get(`${apiKeyId}:${key}`);
+                    if (cached !== undefined) resolvedUrls.set(key, cached);
+                    else uncachedTokenUrls.add(key);
+                }
+                for (const key of fileUris) {
+                    const cached = this.fileUriCache.get(`${apiKeyId}:${key}`);
+                    if (cached !== undefined) resolvedUrls.set(key, cached);
+                    else uncachedFileUris.add(key);
+                }
+
                 span.setAttributes({
                     "gemini.token_url_count": tokenUrls.size,
                     "gemini.file_uri_count": fileUris.size,
+                    "gemini.cache_hits": resolvedUrls.size,
                 });
 
+                if (uncachedTokenUrls.size === 0 && uncachedFileUris.size === 0) {
+                    return this.applyResolutions(messages, resolvedUrls);
+                }
+
                 // Two focused queries — each handles one block type.
-                // Ran concurrently when both sets are non-empty (transition histories);
-                // otherwise only one query executes.
+                // Only executed when the corresponding set is non-empty; skipped entirely on a
+                // full cache hit. Ran concurrently when both sets are non-empty (transition histories).
+                const emptyMap = new Map<string, { file: GeminiFile; upload: GeminiFileUpload | null }>();
                 const [byAnchorUrl, byGeminiUrl] = await Promise.all([
-                    this.geminiFileRepo.findByOriginalUrl([...tokenUrls], apiKeyId),
-                    this.geminiFileRepo.findByUploadUrl([...fileUris], apiKeyId),
+                    uncachedTokenUrls.size > 0
+                        ? this.geminiFileRepo.findByOriginalUrl([...uncachedTokenUrls], apiKeyId)
+                        : emptyMap,
+                    uncachedFileUris.size > 0
+                        ? this.geminiFileRepo.findByUploadUrl([...uncachedFileUris], apiKeyId)
+                        : emptyMap,
                 ]);
 
                 const now = Date.now();
@@ -144,8 +189,8 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                 // uploadNew/reupload handle all recoverable failures internally and return null;
                 // an unexpected throw is a genuine bug and should propagate.
                 const entries = [
-                    ...[...tokenUrls].map((tokenUrl) => ({ key: tokenUrl, kind: "token" as const })),
-                    ...[...fileUris].map((fileUri) => ({ key: fileUri, kind: "fileUri" as const })),
+                    ...[...uncachedTokenUrls].map((tokenUrl) => ({ key: tokenUrl, kind: "token" as const })),
+                    ...[...uncachedFileUris].map((fileUri) => ({ key: fileUri, kind: "fileUri" as const })),
                 ];
 
                 // Fired at most once — only when the first actual download/upload is about to begin.
@@ -181,8 +226,10 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                                 fireStatus();
                                 return { key, fileUri: await this.reupload(key, file, upload, apiKeyId) };
                             }
-                            // Fresh upload — use existing fileUri
-                            return { key, fileUri: upload.geminiUrl };
+                            // Fresh upload — use existing fileUri, with remaining TTL so the
+                            // cache entry expires at the same time the upload would go stale.
+                            const cacheTtl = this.staleCacheThresholdMs - (now - upload.uploadedAt.getTime());
+                            return { key, fileUri: upload.geminiUrl, cacheTtl };
                         }
 
                         // kind === "fileUri"
@@ -205,16 +252,29 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                             fireStatus();
                             return { key, fileUri: await this.reupload(key, file, upload, apiKeyId) };
                         }
-                        // Fresh — no substitution needed
-                        return { key, fileUri: undefined };
+                        // Fresh — no substitution needed, but cache with remaining TTL so future
+                        // invocations skip the DB lookup entirely.
+                        const cacheTtl = this.staleCacheThresholdMs - (now - upload.uploadedAt.getTime());
+                        return { key, fileUri: undefined, cacheTtl };
                     }),
                 );
 
-                // Maps original key → resolved fileUri (or null = drop block); undefined = pass through, not added
-                const resolvedUrls = new Map<string, string | null>();
-                for (const { key, fileUri } of results) {
+                // Merge results into resolvedUrls (cache hits already populated above).
+                // undefined = pass through unchanged (no anchor); null = drop block (media deleted).
+                // Populate cache for successful resolutions only — null is never cached.
+                // Per-entry TTL is set when we know the remaining lifetime of an existing upload;
+                // otherwise the cache default (staleThresholdMs) applies for fresh uploads.
+                for (const { key, fileUri, cacheTtl } of results) {
+                    const ttlOption = cacheTtl !== undefined ? { ttl: cacheTtl } : undefined;
                     if (fileUri !== undefined) {
                         resolvedUrls.set(key, fileUri);
+                        if (fileUri !== null) {
+                            this.fileUriCache.set(`${apiKeyId}:${key}`, fileUri, ttlOption);
+                        }
+                    } else if (cacheTtl !== undefined) {
+                        // Pass-through (fileUri kind, already fresh) — cache the key as its own value
+                        // so future normalize calls skip the DB lookup for this entry.
+                        this.fileUriCache.set(`${apiKeyId}:${key}`, key, ttlOption);
                     }
                 }
 

@@ -50,6 +50,7 @@ const testConfig = {
             },
         },
         ytDlp: { retries: 1 },
+        cache: { geminiFileUrls: 1000 },
         prompts: { basePrompt: "You are an AI assistant." },
     },
 };
