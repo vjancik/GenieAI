@@ -1,5 +1,4 @@
 import type { BaseMessage, MessageContent } from "@langchain/core/messages";
-import { HumanMessage } from "@langchain/core/messages";
 
 /**
  * A structured content block within a message's content array.
@@ -60,8 +59,6 @@ function attachmentBlockBytes(block: DataAttachmentBlock | TokenAttachmentBlock)
 export function getInlineAttachmentBytes(messages: BaseMessage[]): number {
     let total = 0;
     for (const msg of messages) {
-        // TODO: in the future AIMessages might have inline data too, so we may want to generalize this check beyond HumanMessage
-        if (!(msg instanceof HumanMessage)) continue;
         if (!Array.isArray(msg.content)) continue;
         // TYPE COERCION: after Array.isArray, msg.content is MessageContentComplex[] which
         // TypeScript won't implicitly widen to ContentBlock[] (our Record-based local type).
@@ -102,8 +99,7 @@ export function filterHistoryForInlineSize(messages: BaseMessage[], maxBytes: nu
 
     for (let msgIdx = 0; msgIdx < result.length && totalBytes > maxBytes; msgIdx++) {
         const msg = result[msgIdx];
-        // TODO: we should extend this to work on all message types
-        if (!(msg instanceof HumanMessage)) continue;
+        if (!msg) continue;
         if (!Array.isArray(msg.content)) continue;
 
         // TYPE COERCION: after Array.isArray, msg.content is MessageContentComplex[] which
@@ -124,11 +120,14 @@ export function filterHistoryForInlineSize(messages: BaseMessage[], maxBytes: nu
         }
 
         if (modified) {
-            // Replace the message with a filtered copy; preserve any other kwargs
-            // TODO: if extended to work on all message types, this class will need to be determined dynamically rather than hardcoding HumanMessage
-            // TYPE COERCION: ContentBlock[] (our local type) is not directly assignable to
-            // MessageContent (LangChain's union); the blocks are valid structured content at runtime.
-            result[msgIdx] = new HumanMessage({
+            // Reconstruct using the same subclass as the original message, preserving all
+            // other fields (id, name, additional_kwargs, response_metadata).
+            // TYPE COERCION: msg.constructor is typed as Function; cast to a newable signature
+            // matching BaseMessage's constructor so TypeScript allows the instantiation.
+            // ContentBlock[] (our local type) is not directly assignable to MessageContent
+            // (LangChain's union); the blocks are valid structured content at runtime.
+            result[msgIdx] = new (msg.constructor as new (fields: object) => BaseMessage)({
+                ...msg,
                 content: newBlocks as MessageContent,
             });
         }

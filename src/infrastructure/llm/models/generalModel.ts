@@ -5,22 +5,25 @@ import { ModelProvider } from "../ModelProvider.ts";
 import { SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
 import { blockHighSafetySettings, neverTool } from "./sharedGeminiSettings.ts";
 
-// TODO: rebuild only once a day, return cached otherwise
 /**
  * Builds the system prompt for the general-purpose agent.
  * Injects the current date so the model knows its base knowledge is outdated.
  *
- * @param dateStr - ISO date string representing today's date (e.g. "2026-03-14")
  * @param includeVideoCaptionHints - Whether to include video caption timestamp instructions.
  *   Only injected when a get_video_captions ToolMessage is present in history, to avoid
  *   triggering hallucinated tool calls on models that confuse timestamp hints with tool use.
  */
 export function buildGeneralSystemPrompt(
     basePrompt: string,
-    dateStr: string,
     includeVideoCaptionHints = false,
     hasToolResult = false,
 ): string {
+    const dateStr = new Date().toLocaleDateString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+    });
     return (
         basePrompt +
         "\n" +

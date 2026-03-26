@@ -537,23 +537,15 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 (msg) => msg instanceof ToolMessage && msg.name === "get_video_captions",
             );
 
-            const dateStr = new Date().toLocaleDateString("en-US", {
-                weekday: "long",
-                year: "numeric",
-                month: "long",
-                day: "numeric",
-            });
-
             span.setAttributes({
                 "agent.has_tool_result": hasToolResult,
-                "agent.general_node.date_str": dateStr,
                 "agent.general_node.has_video_captions": hasVideoCaptions,
             });
 
-            this.logger.debug({ dateStr, hasVideoCaptions, hasToolResult }, "General node prompt parameters");
+            this.logger.debug({ hasVideoCaptions, hasToolResult }, "General node prompt parameters");
 
             const invokeMessages: BaseMessage[] = [
-                new SystemMessage(buildGeneralSystemPrompt(this.basePrompt, dateStr, hasVideoCaptions, hasToolResult)),
+                new SystemMessage(buildGeneralSystemPrompt(this.basePrompt, hasVideoCaptions, hasToolResult)),
                 ...state.messages,
             ];
 
@@ -586,13 +578,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         config: NodeConfig,
     ): Promise<{ messages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean }> {
         return Sentry.startSpan({ name: "Search agent node", op: "agent.node.search" }, async () => {
-            const dateStr = new Date().toLocaleDateString("en-US", {
-                weekday: "long",
-                year: "numeric",
-                month: "long",
-                day: "numeric",
-            });
-
             if (this.searchMode === SearchMode.tavily) {
                 if (!this.tavilyTool) {
                     throw new AppError(
@@ -650,7 +635,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     : {};
 
                 const invokeMessages: BaseMessage[] = [
-                    new SystemMessage(buildSearchSystemPrompt(this.basePrompt, dateStr, this.searchMode)),
+                    new SystemMessage(buildSearchSystemPrompt(this.basePrompt, this.searchMode)),
                     ...state.messages,
                     tavilyResultMessage,
                 ];
@@ -675,7 +660,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             }
 
             const messages: BaseMessage[] = [
-                new SystemMessage(buildSearchSystemPrompt(this.basePrompt, dateStr, this.searchMode)),
+                new SystemMessage(buildSearchSystemPrompt(this.basePrompt, this.searchMode)),
                 ...state.messages,
             ];
             const { result: response, usedFallback } = await this.invoker.invoke(
