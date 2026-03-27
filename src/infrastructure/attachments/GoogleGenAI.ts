@@ -12,7 +12,7 @@ export interface UploadStreamConfig extends Pick<UploadFileConfig, "name" | "mim
     byteLength: number;
 }
 
-// Implementation methods were hoisted to module level for easier mocking
+// Implementation methods were hoisted to module level for easier testing
 
 /**
  * Step 1 of the resumable upload protocol: POST to the Files API to create a
