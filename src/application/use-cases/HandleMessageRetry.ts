@@ -147,7 +147,7 @@ export class HandleRetryUseCase {
                 const isSummaryCommand = botRecord?.interactionType === "summary_command";
                 const intent = isSummaryCommand ? MessageIntent.SUMMARY : parseMessageIntent(originalMessage.content);
 
-                // Mirror the self-reply logic from HandleSummarizeUseCase: if the invoker
+                // Mirror the self-reply logic from HandleMessageSummarize use-case: if the invoker
                 // is the same user as the message author, Discord's reply mechanism already pings
                 // them and allowedMentions.repliedUser suppression would strip an explicit prefix.
                 const isSelfReply =
@@ -179,29 +179,31 @@ export class HandleRetryUseCase {
                     return;
                 }
                 this.interactionLock.setLocked(interaction.message.id, interaction.customId);
+                const hasLangchainMessages = (botRecord?.langchainMessages.length ?? 0) > 0;
+
                 try {
-                    // Delete the old failed bot reply from Discord before sending a fresh response.
-                    // DB deletion happens later after retriesLeft has been read.
-                    interaction.message.delete().catch((err) => {
-                        this.logger.warn({ err }, "Failed to delete old failed bot reply from Discord on retry");
-                    });
+                    // For failure rows (no LangChain output), delete from Discord eagerly so the
+                    // broken message disappears immediately. For rows with real LLM output (e.g. a
+                    // retriable fallback response), keep the Discord message visible until the new
+                    // response is ready — deleted below after the agent finishes.
+                    if (!hasLangchainMessages) {
+                        interaction.message.delete().catch((err) => {
+                            this.logger.warn({ err }, "Failed to delete old failed bot reply from Discord on retry");
+                        });
 
-                    // If the deleted message had a sources follow-up, clean it up too.
-                    if (channel) {
-                        this.deleteDanglingSourcesMessageOptimistically(
-                            channel,
-                            interaction.message.id,
-                            originalMessage.channelId,
-                            guildId,
-                        );
-                    }
+                        // If the deleted message had a sources follow-up, clean it up too.
+                        if (channel) {
+                            this.deleteDanglingSourcesMessageOptimistically(
+                                channel,
+                                interaction.message.id,
+                                originalMessage.channelId,
+                                guildId,
+                            );
+                        }
 
-                    // Delete the old failed bot reply from DB now that retriesLeft has been read.
-                    // Only delete if langchainMessages is empty — that is the reliable signal that
-                    // this was a failure row with no real LLM output. Non-empty rows may have been
-                    // replied to by someone else and form part of another conversation chain.
-                    // Fire-and-forget — failure here doesn't block the retry from proceeding.
-                    if (botRecord?.langchainMessages.length === 0) {
+                        // Delete the failure row from DB — it has no real LLM output so it is safe
+                        // to remove without risking gaps in another conversation chain.
+                        // Fire-and-forget — failure here doesn't block the retry from proceeding.
                         this.messageRepo
                             .deleteByDiscordMessageId({
                                 discordMessageId: interaction.message.id,
@@ -241,6 +243,23 @@ export class HandleRetryUseCase {
                             retriesLeft,
                             interactionType: "message_create",
                         });
+                    }
+
+                    // For rows that had real LLM output, delete from Discord and DB only after the
+                    // new response has been sent, so the channel is never left with nothing to read.
+                    if (hasLangchainMessages) {
+                        interaction.message.delete().catch((err) => {
+                            this.logger.warn({ err }, "Failed to delete old bot reply from Discord on retry");
+                        });
+
+                        if (channel) {
+                            this.deleteDanglingSourcesMessageOptimistically(
+                                channel,
+                                interaction.message.id,
+                                originalMessage.channelId,
+                                guildId,
+                            );
+                        }
                     }
                 } finally {
                     this.interactionLock.clearLock(interaction.message.id, interaction.customId);
