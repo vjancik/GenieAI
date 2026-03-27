@@ -165,7 +165,7 @@ Migrations run automatically before the app starts.
 ```bash
 docker compose -f docker-compose.local.yml up -d --build
 # or equivalently:
-bun local:prod:up
+bun local:up
 ```
 
 To stop:
@@ -173,7 +173,7 @@ To stop:
 ```bash
 docker compose -f docker-compose.local.yml down
 # or equivalently:
-bun local:prod:down
+bun local:down
 ```
 
 ### Deploy to a cloud provider
