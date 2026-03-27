@@ -8,12 +8,12 @@ WORKDIR /usr/src/app
 FROM base AS base_with_playwright_deps
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    bunx playwright@1.58.2 install-deps chromium
+    bunx playwright@1.58.2 install-deps chromium-headless-shell
 
 FROM base_with_playwright_deps AS base_with_playwright
 # Install to a fixed path accessible by all users (including the 'bun' user at runtime)
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN bunx playwright@1.58.2 install chromium
+RUN bunx playwright@1.58.2 install --only-shell chromium-headless-shell
 # Load custom fonts into the system font cache
 COPY src/infrastructure/exporters/fonts /usr/local/share/fonts/genie
 RUN fc-cache -f -v
