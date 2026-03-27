@@ -20,21 +20,33 @@ ARG TARGETARCH
 
 RUN --mount=type=cache,id=apt-cache-$TARGETARCH,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib-$TARGETARCH,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends unzip
+    apt-get update && apt-get install -y --no-install-recommends unzip wget
 
-COPY ./scripts/docker/downloadFile.ts .
-RUN bun run downloadFile.ts \
-    https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17/yt-dlp_linux \
-    ./bin/yt-dlp \
-    && chmod +x ./bin/yt-dlp \
-    && chown bun:bun ./bin/yt-dlp
-RUN bun run downloadFile.ts \
-    https://github.com/denoland/deno/releases/download/v2.7.9/deno-x86_64-unknown-linux-gnu.zip \
-    ./bin/deno.zip \
-    && unzip ./bin/deno.zip -d ./bin \
-    && rm ./bin/deno.zip \
-    && chmod +x ./bin/deno \
-    && chown bun:bun ./bin/deno
+RUN --mount=type=cache,id=yt-dlp-2026-03-17-$TARGETARCH,target=/cache \
+    if [ "$TARGETARCH" = "amd64" ]; then \
+        YT_DLP_URL="https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17/yt-dlp_linux"; \
+    elif [ "$TARGETARCH" = "arm64" ]; then \
+        YT_DLP_URL="https://github.com/yt-dlp/yt-dlp/releases/download/2026.03.17/yt-dlp_linux_aarch64"; \
+    else \
+        echo "Unsupported TARGETARCH: $TARGETARCH" && exit 1; \
+    fi \
+    && ( [ -f /cache/yt-dlp-2026-03-17 ] || wget -q --show-progress --progress=bar:force -O /cache/yt-dlp-2026-03-17 "$YT_DLP_URL" ) \
+    && cp /cache/yt-dlp-2026-03-17 ./bin/yt-dlp \
+    && chmod +x ./bin/yt-dlp
+RUN --mount=type=cache,id=deno-v2-7-9-$TARGETARCH,target=/cache \
+    if [ "$TARGETARCH" = "amd64" ]; then \
+        DENO_URL="https://github.com/denoland/deno/releases/download/v2.7.9/deno-x86_64-unknown-linux-gnu.zip"; \
+    elif [ "$TARGETARCH" = "arm64" ]; then \
+        DENO_URL="https://github.com/denoland/deno/releases/download/v2.7.9/deno-aarch64-unknown-linux-gnu.zip"; \
+    else \
+        echo "Unsupported TARGETARCH: $TARGETARCH" && exit 1; \
+    fi \
+    && ( [ -f /cache/deno-v2-7-9 ] || ( wget -q --show-progress --progress=bar:force -O /cache/deno-v2-7-9.zip "$DENO_URL" \
+        && unzip /cache/deno-v2-7-9.zip deno -d /cache \
+        && mv /cache/deno /cache/deno-v2-7-9 \
+        && rm /cache/deno-v2-7-9.zip ) ) \
+    && cp /cache/deno-v2-7-9 ./bin/deno \
+    && chmod +x ./bin/deno
 
 FROM base AS install
 # install with --production (exclude devDependencies)
