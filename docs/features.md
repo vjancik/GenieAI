@@ -26,8 +26,8 @@ A Discord AI assistant powered by Google Gemini. This document covers all user-f
 You can attach files directly to your message:
 
 - **Images, PDFs, and other file types** are passed to the AI along with your text.
-- Maximum attachment size: 100 MB.
-- File download has a 10-second timeout.
+- Maximum attachment size per message (and per file): 100 MB in `inline` mode; 2GB in `upload` mode.
+- Maximum attachment size per conversation (whole history): 100 MB in `inline` mode; unlimited in `upload` mode (Unchecked context window limit + 20GB per API key upload limit).
 
 **Embedded content**: Embeds, forwarded messages, and embedded media from other channels are also extracted and made available to the AI.
 
