@@ -11,7 +11,7 @@ import {
     uniqueIndex,
     uuid,
 } from "drizzle-orm/pg-core";
-import type { PersistedChatMessage } from "../../domain/message/Message.ts";
+import type { PersistedChatMessage } from "../../domain/entities/Message.ts";
 
 /**
  * Discriminates between a Discord attachment and an embed media property

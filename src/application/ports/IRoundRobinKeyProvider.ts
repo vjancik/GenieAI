@@ -1,4 +1,4 @@
-import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
+import type { GeminiApiKey } from "../../domain/entities/GeminiApiKey.ts";
 
 /**
  * Port for managing round-robin rotation of free-tier Google API keys.

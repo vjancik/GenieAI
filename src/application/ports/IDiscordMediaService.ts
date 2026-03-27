@@ -1,4 +1,4 @@
-import type { EmbedMediaKey } from "../../domain/message/GeminiFile.ts";
+import type { EmbedMediaKey } from "../../domain/entities/GeminiFile.ts";
 import type { IChatClientMessageAttachment } from "./chat/IChatClientMessageMedia.ts";
 
 /**

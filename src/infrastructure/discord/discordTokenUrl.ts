@@ -11,7 +11,7 @@
  *   Embed media: discord://guildId/channelId/messageId/embed/embedIndex/mediaKey
  */
 
-import type { EmbedMediaKey } from "../../domain/message/GeminiFile.ts";
+import type { EmbedMediaKey } from "../../domain/entities/GeminiFile.ts";
 
 /** Protocol prefix used for all Discord token URLs. */
 const DISCORD_PROTOCOL = "discord:";

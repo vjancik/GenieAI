@@ -2,8 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { AIMessage, ChatMessage, FunctionMessage, HumanMessage, RemoveMessage } from "@langchain/core/messages";
 import pino from "pino";
 import { dbMessagesToLangchain } from "../../../src/application/helpers/messageTransformers.ts";
+import type { PersistedChatMessage } from "../../../src/domain/entities/Message.ts";
 import { AppError } from "../../../src/domain/errors/AppError.ts";
-import type { PersistedChatMessage } from "../../../src/domain/message/Message.ts";
 
 const logger = pino({ level: "silent" });
 

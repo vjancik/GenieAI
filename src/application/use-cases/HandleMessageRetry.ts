@@ -1,6 +1,6 @@
 import * as Sentry from "@sentry/bun";
-import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
-import { MessageIntent } from "../../domain/message/MessageIntent.ts";
+import { MessageIntent } from "../../domain/entities/MessageIntent.ts";
+import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
 import { parseMessageIntent } from "../helpers/parseMessageIntent.ts";
 import type {
     IChatClientBot,
@@ -334,7 +334,7 @@ export class HandleRetryUseCase {
         retriesLeft?: number | null;
         pingUser?: boolean;
         replyPrefix?: string;
-        interactionType?: import("../../domain/message/Message.ts").MessageInteractionType;
+        interactionType?: import("../../domain/entities/Message.ts").MessageInteractionType;
         interactionAuthorDiscordId?: string;
         thinkingText?: string;
         reuseHumanMessage?: boolean;

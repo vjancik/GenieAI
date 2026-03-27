@@ -4,8 +4,8 @@ import pino from "pino";
 import { AttachmentMode } from "../../../src/application/config/AppConfig.ts";
 import type { IInvokableModel } from "../../../src/application/ports/IResilientModelInvoker.ts";
 import type { IRoundRobinKeyProvider } from "../../../src/application/ports/IRoundRobinKeyProvider.ts";
+import type { GeminiApiKey } from "../../../src/domain/entities/GeminiApiKey.ts";
 import { AllFreeKeysExhaustedError, PaidKeyExhaustedError } from "../../../src/domain/errors/AppError.ts";
-import type { GeminiApiKey } from "../../../src/domain/message/GeminiApiKey.ts";
 import { ResilientModelInvoker } from "../../../src/infrastructure/llm/ResilientModelInvoker.ts";
 
 const logger = pino({ level: "silent" });

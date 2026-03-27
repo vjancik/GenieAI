@@ -1,5 +1,5 @@
-import type { GeminiFile } from "../../domain/message/GeminiFile.ts";
-import type { GeminiFileUpload } from "../../domain/message/GeminiFileUpload.ts";
+import type { GeminiFile } from "../entities/GeminiFile.ts";
+import type { GeminiFileUpload } from "../entities/GeminiFileUpload.ts";
 
 /**
  * Port interface for persisting Gemini file anchors and per-key upload records.
@@ -59,7 +59,9 @@ export interface IGeminiFileRepository {
      * @param records - All fields except `id` (assigned by the database)
      * @returns The DB-assigned UUIDs, index-aligned with the input array
      */
-    saveFiles(records: Omit<GeminiFile, "id" | "discordMessageId" | "discordChannelId">[]): Promise<{ id: string }[]>;
+    saveFiles(
+        records: Omit<GeminiFile, "id" | "discordMessageId" | "discordChannelId">[],
+    ): Promise<Pick<GeminiFile, "id">[]>;
 
     /**
      * Inserts or updates the upload record for a (geminiFileId, apiKeyId) pair.

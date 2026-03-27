@@ -1,5 +1,5 @@
-import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
-import type { IGeminiApiKeyRepository } from "../ports/IGeminiApiKeyRepository.ts";
+import type { GeminiApiKey } from "../../domain/entities/GeminiApiKey.ts";
+import type { IGeminiApiKeyRepository } from "../../domain/ports/IGeminiApiKeyRepository.ts";
 import type { Logger } from "../types/Logger.ts";
 
 /**

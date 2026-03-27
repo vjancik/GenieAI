@@ -1,10 +1,10 @@
 import * as Sentry from "@sentry/bun";
 import { and, eq, sql } from "drizzle-orm";
-import type { IGeminiFileRepository } from "../../../application/ports/IGeminiFileRepository.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
+import type { GeminiFile } from "../../../domain/entities/GeminiFile.ts";
+import type { GeminiFileUpload } from "../../../domain/entities/GeminiFileUpload.ts";
 import { DatabaseError } from "../../../domain/errors/AppError.ts";
-import type { GeminiFile } from "../../../domain/message/GeminiFile.ts";
-import type { GeminiFileUpload } from "../../../domain/message/GeminiFileUpload.ts";
+import type { IGeminiFileRepository } from "../../../domain/ports/IGeminiFileRepository.ts";
 import type { Db } from "../connection.ts";
 import { pgTextArray } from "../pgTextArray.ts";
 import { geminiFiles, geminiFileUploads, messages } from "../schema.ts";
@@ -238,7 +238,7 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
      */
     async saveFiles(
         records: Omit<GeminiFile, "id" | "discordMessageId" | "discordChannelId">[],
-    ): Promise<{ id: string }[]> {
+    ): Promise<Pick<GeminiFile, "id">[]> {
         if (records.length === 0) return [];
         return Sentry.startSpan(
             {
@@ -250,17 +250,7 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                 try {
                     const rows = await this.db
                         .insert(geminiFiles)
-                        .values(
-                            records.map((r) => ({
-                                originalGeminiUrl: r.originalGeminiUrl,
-                                sourceType: r.sourceType,
-                                discordAttachmentId: r.discordAttachmentId,
-                                discordFilename: r.discordFilename,
-                                embedIndex: r.embedIndex,
-                                embedMediaKey: r.embedMediaKey,
-                                messageId: r.messageId,
-                            })),
-                        )
+                        .values(records)
                         .onConflictDoUpdate({
                             target: geminiFiles.originalGeminiUrl,
                             // No-op update: id = id forces Postgres to include the existing row
@@ -371,13 +361,7 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
             },
             async () => {
                 try {
-                    await this.stmtUpsertUpload.execute({
-                        geminiFileId: record.geminiFileId,
-                        apiKeyId: record.apiKeyId,
-                        geminiFileName: record.geminiFileName,
-                        geminiUrl: record.geminiUrl,
-                        uploadedAt: record.uploadedAt,
-                    });
+                    await this.stmtUpsertUpload.execute(record);
 
                     this.logger.debug(
                         {
@@ -412,15 +396,7 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
                 try {
                     await this.db
                         .insert(geminiFileUploads)
-                        .values(
-                            records.map((r) => ({
-                                geminiFileId: r.geminiFileId,
-                                apiKeyId: r.apiKeyId,
-                                geminiFileName: r.geminiFileName,
-                                geminiUrl: r.geminiUrl,
-                                uploadedAt: r.uploadedAt,
-                            })),
-                        )
+                        .values(records)
                         .onConflictDoUpdate({
                             target: [geminiFileUploads.geminiFileId, geminiFileUploads.apiKeyId],
                             set: {

@@ -9,7 +9,7 @@ import type { IImageRenderer } from "../../../src/application/ports/IImageRender
 import type { IInteractionLock } from "../../../src/application/ports/IInteractionLock.ts";
 import type { IMarkdownRenderer } from "../../../src/application/ports/IMarkdownRenderer.ts";
 import { HandleExportUseCase } from "../../../src/application/use-cases/HandleMessageExport.ts";
-import type { IMessageRepository } from "../../../src/domain/message/IMessageRepository.ts";
+import type { IMessageRepository } from "../../../src/domain/ports/IMessageRepository.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers

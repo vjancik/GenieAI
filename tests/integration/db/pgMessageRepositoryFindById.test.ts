@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { HumanMessage } from "@langchain/core/messages";
 import { sql } from "drizzle-orm";
 import pino from "pino";
-import type { SaveMessageParams } from "../../../src/domain/message/IMessageRepository.ts";
+import type { SaveMessageParams } from "../../../src/domain/ports/IMessageRepository.ts";
 import { createDb } from "../../../src/infrastructure/db/connection.ts";
 import { PgMessageRepository } from "../../../src/infrastructure/db/repositories/PgMessageRepository.ts";
 

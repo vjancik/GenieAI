@@ -1,4 +1,4 @@
-import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
+import type { GeminiApiKey } from "../../domain/entities/GeminiApiKey.ts";
 import type { IInvokableModel } from "./IResilientModelInvoker.ts";
 
 /**

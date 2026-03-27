@@ -1,5 +1,5 @@
 import type { AIMessageChunk, BaseMessage } from "@langchain/core/messages";
-import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
+import type { GeminiApiKey } from "../../domain/entities/GeminiApiKey.ts";
 import type { ApiKeyType } from "../config/AppConfig.ts";
 import type { AgentStatusType, OnStatusUpdate } from "../types/AgentStatus.ts";
 

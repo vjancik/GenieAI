@@ -3,14 +3,14 @@ import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
 import type { IChatClientMessageAttachment } from "../../../src/application/ports/chat/IChatClient.ts";
 import type { IDiscordMediaService } from "../../../src/application/ports/IDiscordMediaService.ts";
-import type { IGeminiFileRepository } from "../../../src/application/ports/IGeminiFileRepository.ts";
 import type { IGeminiFileUploader } from "../../../src/application/ports/IGeminiFileUploader.ts";
 import type { IGeminiFileUploaderRegistry } from "../../../src/application/ports/IGeminiFileUploaderRegistry.ts";
 import type { IStreamingAttachmentDownloader } from "../../../src/application/ports/IStreamingAttachmentDownloader.ts";
 import { GeminiMediaNormalizer } from "../../../src/application/services/GeminiMediaNormalizer.ts";
-import type { GeminiFile } from "../../../src/domain/message/GeminiFile.ts";
-import type { GeminiFileUpload } from "../../../src/domain/message/GeminiFileUpload.ts";
-import type { IMessageRepository } from "../../../src/domain/message/IMessageRepository.ts";
+import type { GeminiFile } from "../../../src/domain/entities/GeminiFile.ts";
+import type { GeminiFileUpload } from "../../../src/domain/entities/GeminiFileUpload.ts";
+import type { IGeminiFileRepository } from "../../../src/domain/ports/IGeminiFileRepository.ts";
+import type { IMessageRepository } from "../../../src/domain/ports/IMessageRepository.ts";
 
 const testLogger = pino({ level: "silent" });
 

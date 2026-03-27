@@ -1,4 +1,4 @@
-import type { PersistedChatMessage } from "../../domain/message/Message.ts";
+import type { PersistedChatMessage } from "../../domain/entities/Message.ts";
 
 /**
  * Read model returned by {@link IGetNextPageQuery}.

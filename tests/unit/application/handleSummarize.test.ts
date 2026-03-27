@@ -8,7 +8,7 @@ import type {
 } from "../../../src/application/ports/chat/IChatClient.ts";
 import type { HandleChatMessageUseCase } from "../../../src/application/use-cases/HandleChatMessage.ts";
 import { HandleSummarizeUseCase } from "../../../src/application/use-cases/HandleMessageSummarize.ts";
-import type { IMessageRepository } from "../../../src/domain/message/IMessageRepository.ts";
+import type { IMessageRepository } from "../../../src/domain/ports/IMessageRepository.ts";
 
 const logger = pino({ level: "silent" });
 

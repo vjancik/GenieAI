@@ -1,7 +1,7 @@
-import type { IGeminiApiKeyRepository } from "../../application/ports/IGeminiApiKeyRepository.ts";
 import type { IRoundRobinKeyProvider } from "../../application/ports/IRoundRobinKeyProvider.ts";
+import type { GeminiApiKey } from "../../domain/entities/GeminiApiKey.ts";
 import { ConfigError } from "../../domain/errors/AppError.ts";
-import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
+import type { IGeminiApiKeyRepository } from "../../domain/ports/IGeminiApiKeyRepository.ts";
 
 /**
  * Round-robin implementation of {@link IRoundRobinKeyProvider}.

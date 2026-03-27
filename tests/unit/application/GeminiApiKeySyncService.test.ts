@@ -1,8 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 import pino from "pino";
-import type { IGeminiApiKeyRepository } from "../../../src/application/ports/IGeminiApiKeyRepository.ts";
 import { GeminiApiKeySyncService } from "../../../src/application/services/GeminiApiKeySync.ts";
-import type { GeminiApiKey } from "../../../src/domain/message/GeminiApiKey.ts";
+import type { GeminiApiKey } from "../../../src/domain/entities/GeminiApiKey.ts";
+import type { IGeminiApiKeyRepository } from "../../../src/domain/ports/IGeminiApiKeyRepository.ts";
 
 const testLogger = pino({ level: "silent" });
 

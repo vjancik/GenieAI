@@ -4,9 +4,9 @@ import { AIMessage, ChatMessage, HumanMessage, SystemMessage, ToolMessage } from
 import pino from "pino";
 import type { AgentStatusUpdate } from "../../../src/application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
+import type { PersistedChatMessage } from "../../../src/domain/entities/Message.ts";
+import { MessageIntent } from "../../../src/domain/entities/MessageIntent.ts";
 import { AllFreeKeysExhaustedError, AppError } from "../../../src/domain/errors/AppError.ts";
-import type { PersistedChatMessage } from "../../../src/domain/message/Message.ts";
-import { MessageIntent } from "../../../src/domain/message/MessageIntent.ts";
 import { AgentOrchestrator } from "../../../src/infrastructure/llm/agents/agentOrchestrator.ts";
 import { ResilientModelInvoker } from "../../../src/infrastructure/llm/ResilientModelInvoker.ts";
 import type { WebsiteResultEntry } from "../../../src/infrastructure/llm/tools/getWebsiteTool.ts";

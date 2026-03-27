@@ -1,5 +1,5 @@
 import type { IRoundRobinKeyProvider } from "../../application/ports/IRoundRobinKeyProvider.ts";
-import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
+import type { GeminiApiKey } from "../../domain/entities/GeminiApiKey.ts";
 
 /**
  * {@link IRoundRobinKeyProvider} adapter for a single paid API key.

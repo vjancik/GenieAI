@@ -1,6 +1,6 @@
 import type { IModelProvider } from "../../application/ports/IModelProvider.ts";
 import type { IInvokableModel } from "../../application/ports/IResilientModelInvoker.ts";
-import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
+import type { GeminiApiKey } from "../../domain/entities/GeminiApiKey.ts";
 
 /**
  * Cache key tuple: `[apiKey, modelName]`.

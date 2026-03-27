@@ -2,8 +2,8 @@ import * as Sentry from "@sentry/bun";
 import { and, eq, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { IGetNextPageQuery, NextPageData } from "../../../application/ports/IGetNextPageQuery.ts";
+import type { PersistedChatMessage } from "../../../domain/entities/Message.ts";
 import { DatabaseError } from "../../../domain/errors/AppError.ts";
-import type { PersistedChatMessage } from "../../../domain/message/Message.ts";
 import type { Db } from "../connection.ts";
 import { messagePages, messages } from "../schema.ts";
 

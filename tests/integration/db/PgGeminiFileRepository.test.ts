@@ -1,8 +1,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { eq, sql } from "drizzle-orm";
 import pino from "pino";
-import type { GeminiFile } from "../../../src/domain/message/GeminiFile.ts";
-import type { GeminiFileUpload } from "../../../src/domain/message/GeminiFileUpload.ts";
+import type { GeminiFile } from "../../../src/domain/entities/GeminiFile.ts";
+import type { GeminiFileUpload } from "../../../src/domain/entities/GeminiFileUpload.ts";
 import { createDb } from "../../../src/infrastructure/db/connection.ts";
 import { PgGeminiApiKeyRepository } from "../../../src/infrastructure/db/repositories/PgGeminiApiKeyRepository.ts";
 import { PgGeminiFileRepository } from "../../../src/infrastructure/db/repositories/PgGeminiFileRepository.ts";

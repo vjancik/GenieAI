@@ -1,9 +1,9 @@
 import * as Sentry from "@sentry/bun";
 import { and, eq, sql } from "drizzle-orm";
 import type { Logger } from "../../../application/types/Logger.ts";
+import type { MessageInteractionType, PersistedChatMessage } from "../../../domain/entities/Message.ts";
 import { DatabaseError } from "../../../domain/errors/AppError.ts";
-import type { DiscordIds, IMessageRepository, SaveMessageParams } from "../../../domain/message/IMessageRepository.ts";
-import type { MessageInteractionType, PersistedChatMessage } from "../../../domain/message/Message.ts";
+import type { DiscordIds, IMessageRepository, SaveMessageParams } from "../../../domain/ports/IMessageRepository.ts";
 import type { Db } from "../connection.ts";
 import { pgTextArray } from "../pgTextArray.ts";
 import { messages } from "../schema.ts";

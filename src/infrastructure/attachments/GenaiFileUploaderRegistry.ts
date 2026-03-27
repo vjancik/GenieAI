@@ -1,8 +1,8 @@
 import type { FileConfig } from "../../application/config/AppConfig.ts";
 import type { IGeminiFileUploaderRegistry } from "../../application/ports/IGeminiFileUploaderRegistry.ts";
 import type { Logger } from "../../application/types/Logger.ts";
+import type { GeminiApiKey } from "../../domain/entities/GeminiApiKey.ts";
 import { AppError } from "../../domain/errors/AppError.ts";
-import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
 import { GenaiFileUploader } from "./GenaiFileUploader.ts";
 
 /**

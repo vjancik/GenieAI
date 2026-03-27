@@ -1,8 +1,9 @@
 import * as Sentry from "@sentry/bun";
 import { eq, sql } from "drizzle-orm";
 import type { Logger } from "../../../application/types/Logger.ts";
+import type { MessagePage } from "../../../domain/entities/MessagePage.ts";
 import { DatabaseError } from "../../../domain/errors/AppError.ts";
-import type { IMessagePageRepository, MessagePage } from "../../../domain/message/MessagePage.ts";
+import type { IMessagePageRepository } from "../../../domain/ports/IMessagePageRepository.ts";
 import type { Db } from "../connection.ts";
 import { messagePages } from "../schema.ts";
 
@@ -68,15 +69,7 @@ export class PgMessagePageRepository implements IMessagePageRepository {
             },
             async () => {
                 try {
-                    const [result] = await this.stmtInsertPage.execute({
-                        messageId: page.messageId,
-                        firstPageMessageId: page.firstPageMessageId,
-                        endOffset: page.endOffset,
-                        currentPage: page.currentPage,
-                        totalPages: page.totalPages,
-                        endedInCodeBlock: page.endedInCodeBlock,
-                        codeBlockType: page.codeBlockType,
-                    });
+                    const [result] = await this.stmtInsertPage.execute(page);
 
                     if (!result) {
                         throw new DatabaseError("message_pages insert returned no result");
@@ -100,7 +93,7 @@ export class PgMessagePageRepository implements IMessagePageRepository {
         );
     }
 
-    async findByMessageId(messageId: string): Promise<MessagePage | null> {
+    async findByMessageId(messageId: MessagePage["id"]): Promise<MessagePage | null> {
         return Sentry.startSpan(
             {
                 name: "Find message page by message ID",

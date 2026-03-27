@@ -1,6 +1,6 @@
 import * as Sentry from "@sentry/bun";
-import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
-import type { IMessagePageRepository } from "../../domain/message/MessagePage.ts";
+import type { IMessagePageRepository } from "../../domain/ports/IMessagePageRepository.ts";
+import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
 import { splitMarkdown } from "../formatters/markdownSplitter.ts";
 import { llmTextToDiscordText } from "../formatters/textTransformers.ts";
 import type {

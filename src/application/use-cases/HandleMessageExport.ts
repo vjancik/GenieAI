@@ -1,5 +1,5 @@
 import { DiscordError, isMissingPermissionsError } from "../../domain/errors/AppError.ts";
-import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
+import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
 import { sanitizeForLog } from "../helpers/errorHelpers.ts";
 import { dbMessagesToLangchain, extractContent } from "../helpers/messageTransformers.ts";
 import type {

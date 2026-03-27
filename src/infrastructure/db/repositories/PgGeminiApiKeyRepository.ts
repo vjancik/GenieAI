@@ -1,8 +1,8 @@
 import { eq, ne, sql } from "drizzle-orm";
-import type { IGeminiApiKeyRepository } from "../../../application/ports/IGeminiApiKeyRepository.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
+import type { GeminiApiKey } from "../../../domain/entities/GeminiApiKey.ts";
 import { DatabaseError } from "../../../domain/errors/AppError.ts";
-import type { GeminiApiKey } from "../../../domain/message/GeminiApiKey.ts";
+import type { IGeminiApiKeyRepository } from "../../../domain/ports/IGeminiApiKeyRepository.ts";
 import type { Db } from "../connection.ts";
 import { pgTextArray } from "../pgTextArray.ts";
 import { geminiApiKeys } from "../schema.ts";
@@ -103,10 +103,7 @@ export class PgGeminiApiKeyRepository implements IGeminiApiKeyRepository {
      */
     async upsert(key: Pick<GeminiApiKey, "apiKey" | "isPaid">): Promise<GeminiApiKey> {
         try {
-            const [result] = await this.stmtUpsertKey.execute({
-                apiKey: key.apiKey,
-                isPaid: key.isPaid,
-            });
+            const [result] = await this.stmtUpsertKey.execute(key);
 
             if (!result) {
                 throw new DatabaseError("Gemini API key upsert returned no result");
@@ -114,12 +111,7 @@ export class PgGeminiApiKeyRepository implements IGeminiApiKeyRepository {
 
             this.logger.debug({ apiKeyId: result.id, isPaid: result.isPaid }, "Upserted Gemini API key");
 
-            return {
-                id: result.id,
-                apiKey: result.apiKey,
-                isPaid: result.isPaid,
-                lastUsed: result.lastUsed,
-            };
+            return result;
         } catch (err) {
             if (err instanceof DatabaseError) throw err;
             throw new DatabaseError("Failed to upsert Gemini API key", err);
@@ -131,7 +123,7 @@ export class PgGeminiApiKeyRepository implements IGeminiApiKeyRepository {
      * in a single UPDATE pass. Used by {@link RoundRobinFreeKeyProvider} to persist
      * rotation position across restarts. Errors are logged and not re-thrown.
      */
-    async setLastUsed(id: string): Promise<void> {
+    async setLastUsed(id: GeminiApiKey["id"]): Promise<void> {
         try {
             await this.stmtSetLastUsed.execute({ id });
             this.logger.debug({ apiKeyId: id }, "Marked Gemini API key as last-used");
@@ -148,7 +140,7 @@ export class PgGeminiApiKeyRepository implements IGeminiApiKeyRepository {
      *
      * Guards against an empty `apiKeys` array to prevent accidental full-table deactivation.
      */
-    async deactivateNotIn(apiKeys: string[]): Promise<void> {
+    async deactivateNotIn(apiKeys: GeminiApiKey["apiKey"][]): Promise<void> {
         if (apiKeys.length === 0) {
             this.logger.error("deactivateNotIn called with empty array — skipping to prevent full-table deactivation");
             return;

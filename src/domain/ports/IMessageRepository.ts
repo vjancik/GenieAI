@@ -1,5 +1,5 @@
 import type { BaseMessage } from "@langchain/core/messages";
-import type { PersistedChatMessage } from "./Message.ts";
+import type { PersistedChatMessage } from "../entities/Message.ts";
 
 /**
  * Input shape for persisting a message row.

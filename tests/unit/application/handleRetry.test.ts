@@ -10,7 +10,7 @@ import type {
 import type { IInteractionLock } from "../../../src/application/ports/IInteractionLock.ts";
 import type { HandleChatMessageUseCase } from "../../../src/application/use-cases/HandleChatMessage.ts";
 import { HandleRetryUseCase } from "../../../src/application/use-cases/HandleMessageRetry.ts";
-import type { IMessageRepository } from "../../../src/domain/message/IMessageRepository.ts";
+import type { IMessageRepository } from "../../../src/domain/ports/IMessageRepository.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers

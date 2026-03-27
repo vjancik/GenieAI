@@ -1,6 +1,6 @@
 import type { BaseMessage } from "@langchain/core/messages";
-import type { PersistedChatMessage } from "../../domain/message/Message.ts";
-import type { MessageIntent } from "../../domain/message/MessageIntent.ts";
+import type { PersistedChatMessage } from "../../domain/entities/Message.ts";
+import type { MessageIntent } from "../../domain/entities/MessageIntent.ts";
 import type { OnStatusUpdate } from "../types/AgentStatus.ts";
 
 /**

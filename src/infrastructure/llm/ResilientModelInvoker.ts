@@ -14,8 +14,8 @@ import type {
 import type { IRoundRobinKeyProvider } from "../../application/ports/IRoundRobinKeyProvider.ts";
 import type { AgentStatusType, OnStatusUpdate } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";
+import type { GeminiApiKey } from "../../domain/entities/GeminiApiKey.ts";
 import { AllFreeKeysExhaustedError, PaidKeyExhaustedError } from "../../domain/errors/AppError.ts";
-import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
 import { is429Error } from "./errors/is429Error.ts";
 import { isModelFallbackError } from "./errors/isModelFallbackError.ts";
 import { filterHistoryForInlineSize } from "./utils/inlineAttachmentFilter.ts";

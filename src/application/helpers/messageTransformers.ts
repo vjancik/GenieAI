@@ -8,8 +8,8 @@ import {
     SystemMessage,
     ToolMessage,
 } from "@langchain/core/messages";
+import type { PersistedChatMessage } from "../../domain/entities/Message.ts";
 import { AppError } from "../../domain/errors/AppError.ts";
-import type { PersistedChatMessage } from "../../domain/message/Message.ts";
 import type { Logger } from "../types/Logger.ts";
 
 /**

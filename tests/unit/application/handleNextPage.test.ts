@@ -8,8 +8,8 @@ import type {
 import type { IGetNextPageQuery, NextPageData } from "../../../src/application/ports/IGetNextPageQuery.ts";
 import type { IInteractionLock } from "../../../src/application/ports/IInteractionLock.ts";
 import { HandleNextPageUseCase } from "../../../src/application/use-cases/HandleMessageNextPage.ts";
-import type { IMessageRepository } from "../../../src/domain/message/IMessageRepository.ts";
-import type { IMessagePageRepository } from "../../../src/domain/message/MessagePage.ts";
+import type { IMessagePageRepository } from "../../../src/domain/ports/IMessagePageRepository.ts";
+import type { IMessageRepository } from "../../../src/domain/ports/IMessageRepository.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers

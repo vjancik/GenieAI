@@ -1,6 +1,6 @@
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
-import type { EmbedMediaKey } from "../../domain/message/GeminiFile.ts";
-import { EMBED_MEDIA_KEYS } from "../../domain/message/GeminiFile.ts";
+import type { EmbedMediaKey } from "../../domain/entities/GeminiFile.ts";
+import { EMBED_MEDIA_KEYS } from "../../domain/entities/GeminiFile.ts";
 import { buildAttachmentTokenUrl, buildEmbedTokenUrl } from "../../infrastructure/discord/discordTokenUrl.ts";
 import type { IChatClientMessageAttachment, IChatClientMessageEmbed } from "../ports/chat/IChatClient.ts";
 import type { Logger } from "../types/Logger.ts";

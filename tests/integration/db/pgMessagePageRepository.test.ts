@@ -2,8 +2,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { HumanMessage } from "@langchain/core/messages";
 import { sql } from "drizzle-orm";
 import pino from "pino";
+import type { MessagePage } from "../../../src/domain/entities/MessagePage.ts";
 import { DatabaseError } from "../../../src/domain/errors/AppError.ts";
-import type { MessagePage } from "../../../src/domain/message/MessagePage.ts";
 import { createDb } from "../../../src/infrastructure/db/connection.ts";
 import { PgMessagePageRepository } from "../../../src/infrastructure/db/repositories/PgMessagePageRepository.ts";
 import { PgMessageRepository } from "../../../src/infrastructure/db/repositories/PgMessageRepository.ts";

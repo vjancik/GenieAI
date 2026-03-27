@@ -4,7 +4,7 @@ import { sleep } from "bun";
 import { sql } from "drizzle-orm";
 import pino from "pino";
 import { DatabaseError } from "../../../src/domain/errors/AppError.ts";
-import type { SaveMessageParams } from "../../../src/domain/message/IMessageRepository.ts";
+import type { SaveMessageParams } from "../../../src/domain/ports/IMessageRepository.ts";
 import { createDb } from "../../../src/infrastructure/db/connection.ts";
 import { PgMessageRepository } from "../../../src/infrastructure/db/repositories/PgMessageRepository.ts";
 

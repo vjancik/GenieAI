@@ -1,10 +1,10 @@
 import { AIMessage, type BaseMessage, HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
+import type { MessageInteractionType, PersistedChatMessage } from "../../domain/entities/Message.ts";
+import { MessageIntent } from "../../domain/entities/MessageIntent.ts";
 import { extractDisplayMessage } from "../../domain/errors/AppError.ts";
-import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
-import type { MessageInteractionType, PersistedChatMessage } from "../../domain/message/Message.ts";
-import { MessageIntent } from "../../domain/message/MessageIntent.ts";
-import type { IMessagePageRepository } from "../../domain/message/MessagePage.ts";
+import type { IMessagePageRepository } from "../../domain/ports/IMessagePageRepository.ts";
+import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
 import { shortenRedirectUrl } from "../../infrastructure/http/redirectUrl.ts";
 import { SearchMode } from "../config/AppConfig.ts";
 import { agentStatusLabel } from "../formatters/agentStatus.ts";

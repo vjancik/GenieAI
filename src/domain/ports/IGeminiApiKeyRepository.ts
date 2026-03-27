@@ -1,4 +1,4 @@
-import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
+import type { GeminiApiKey } from "../entities/GeminiApiKey.ts";
 
 /**
  * Port interface for persisting and syncing Google API key records.
@@ -31,7 +31,7 @@ export interface IGeminiApiKeyRepository {
      *
      * @param apiKeys - The raw API key strings that should remain active
      */
-    deactivateNotIn(apiKeys: string[]): Promise<void>;
+    deactivateNotIn(apiKeys: GeminiApiKey["apiKey"][]): Promise<void>;
 
     /**
      * Marks the given key as `lastUsed = true` and clears the flag from all
@@ -41,5 +41,5 @@ export interface IGeminiApiKeyRepository {
      *
      * @param id - The UUID of the key to mark as last-used
      */
-    setLastUsed(id: string): Promise<void>;
+    setLastUsed(id: GeminiApiKey["id"]): Promise<void>;
 }

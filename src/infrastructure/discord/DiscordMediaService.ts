@@ -1,7 +1,7 @@
 import type { Client } from "discord.js";
 import type { IChatClientMessageAttachment } from "../../application/ports/chat/IChatClient.ts";
 import type { IDiscordMediaService } from "../../application/ports/IDiscordMediaService.ts";
-import type { EmbedMediaKey } from "../../domain/message/GeminiFile.ts";
+import type { EmbedMediaKey } from "../../domain/entities/GeminiFile.ts";
 import type { DiscordClient } from "./DiscordClient.ts";
 
 /**
