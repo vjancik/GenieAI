@@ -155,6 +155,18 @@ async function verifyYtDlp(): Promise<void> {
 }
 
 /**
+ * Verifies deno is available in PATH by running `deno --version`.
+ * Throws a ToolError if the command is not found or exits non-zero.
+ */
+async function verifyDeno(): Promise<void> {
+    const proc = spawn(["deno", "--version"], { stderr: "pipe", stdout: "pipe" });
+    await proc.exited;
+    if (proc.exitCode !== 0) {
+        throw new ToolError("deno is not available in PATH and is required for video captions");
+    }
+}
+
+/**
  * Creates a LangChain tool that fetches captions from video URLs using yt-dlp.
  *
  * Verifies yt-dlp is available in PATH before returning the tool. Throws if not
@@ -183,7 +195,7 @@ export async function createGetVideoCaptionsTool(logger: Logger, proxy?: string,
             throw new ToolError(`ytDlp.httpProxy must use http:// or https://, got: ${scheme}`);
         }
     }
-    await verifyYtDlp();
+    await Promise.all([verifyYtDlp(), verifyDeno()]);
     return tool(
         async ({ urls }): Promise<VideoCaptionsResultEntry[]> => {
             // Deduplicate URLs to avoid redundant yt-dlp invocations

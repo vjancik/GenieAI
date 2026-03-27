@@ -28,12 +28,10 @@ services:
         env_file:
             - .env
         environment:
-            PATH: /home/bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
             LOG_LEVEL: debug
             DATABASE_URL: postgresql://genie:genie@db:5432/genie
         volumes:
             - ./logs:/usr/src/app/logs
-            - ~/bin:/home/bun/bin
             - ./config.local.yaml:/usr/src/app/config.local.yaml:ro
         depends_on:
             db:
