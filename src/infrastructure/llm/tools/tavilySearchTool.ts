@@ -46,8 +46,9 @@ const ROUTE_TO_SEARCH_NAME = "web_search";
 const ROUTE_TO_SEARCH_DESCRIPTION =
     "Use this when the question requires " +
     "up-to-date information, current events, recent news, live data, or " +
-    "niche topics where web search would significantly improve accuracy. " +
-    "The input query should be a one sentence natural language query that can span multiple topics.";
+    "niche topics where web search would significantly improve accuracy.\n" +
+    "The input query should be a one sentence natural language query that can span multiple topics.\n" +
+    "You must not call this tool with the same query more than once.";
 
 /** Creates a TavilySearch tool instance. Must only be called when TAVILY_API_KEY is set. */
 export function createTavilyTool() {
