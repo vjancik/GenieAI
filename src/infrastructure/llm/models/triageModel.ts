@@ -56,6 +56,7 @@ export function buildTriageSystemPrompt(searchMode: SearchMode): string {
         "Rules:\n" +
         "- If the message contains web page URLs to analyze: call get_website\n" +
         "- If the message contains video URLs (YouTube, social media, etc.): call get_video_captions\n" +
+        "- DO NOT ever call the previous 2 tools for the same URLs more than once\n" +
         "- You should only use URLs present in the user's message — do not make assumptions or add new URLs on your own\n" +
         "- If the question needs current/live information or very niche topics: call " +
         searchToolName +
