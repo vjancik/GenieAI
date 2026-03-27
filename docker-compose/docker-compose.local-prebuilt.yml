@@ -23,7 +23,7 @@ services:
 
     migrate:
         image: vjancik/genieai:main
-        command: ["bun", "src/infrastructure/db/migrate.ts"]
+        command: ["src/infrastructure/db/migrate.ts"]
         environment:
             DATABASE_URL: postgresql://genie:genie@db:5432/genie
         depends_on:

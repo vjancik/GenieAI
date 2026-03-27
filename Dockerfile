@@ -73,4 +73,5 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # run the app
 USER bun
-ENTRYPOINT [ "bun", "run", "start:instrumented" ]
+ENTRYPOINT [ "bun" ]
+CMD [ "run", "start:instrumented" ]
