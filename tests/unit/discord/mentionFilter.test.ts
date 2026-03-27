@@ -3,7 +3,7 @@ import type { Message } from "discord.js";
 import { MessageType } from "discord.js";
 import { extractUserContent } from "../../../src/application/helpers/extractUserContent.ts";
 import { parseMessageIntent } from "../../../src/application/helpers/parseMessageIntent.ts";
-import { MessageIntent } from "../../../src/domain/entities/MessageIntent.ts";
+import { MessageIntent } from "../../../src/domain/value-objects/MessageIntent.ts";
 import { DiscordClientMessage } from "../../../src/infrastructure/discord/adapters/DiscordClientMessage.ts";
 
 const BOT_ID = "123456789";

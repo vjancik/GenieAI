@@ -1,4 +1,4 @@
-import { MessageIntent } from "../../domain/entities/MessageIntent.ts";
+import { MessageIntent } from "../../domain/value-objects/MessageIntent.ts";
 
 /**
  * Maps recognized bot command prefixes to their corresponding {@link MessageIntent}.

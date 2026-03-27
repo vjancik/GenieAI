@@ -11,9 +11,9 @@ import type { IAgentOrchestrator } from "../../../src/application/ports/IAgentOr
 import type { StatusMessageUpdater } from "../../../src/application/services/StatusMessageUpdater.ts";
 import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
 import { HandleChatMessageUseCase } from "../../../src/application/use-cases/HandleChatMessage.ts";
-import { MessageIntent } from "../../../src/domain/entities/MessageIntent.ts";
 import type { IMessagePageRepository } from "../../../src/domain/ports/IMessagePageRepository.ts";
 import type { IMessageRepository } from "../../../src/domain/ports/IMessageRepository.ts";
+import { MessageIntent } from "../../../src/domain/value-objects/MessageIntent.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers

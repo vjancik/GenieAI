@@ -1,6 +1,6 @@
 import * as Sentry from "@sentry/bun";
-import { MessageIntent } from "../../domain/entities/MessageIntent.ts";
 import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
+import { MessageIntent } from "../../domain/value-objects/MessageIntent.ts";
 import { parseMessageIntent } from "../helpers/parseMessageIntent.ts";
 import type {
     IChatClientBot,
