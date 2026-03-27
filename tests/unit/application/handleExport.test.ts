@@ -88,6 +88,7 @@ function makeContextMenuInteraction(overrides: {
         targetMessage: target,
         userId: overrides.userId ?? "invoker-1",
         isDM: false,
+        canSendMessageInTargetChannel: true,
         reply: mock(async () => {}),
         deferReply: mock(async () => {}),
         editReply: mock(async () => {}),

@@ -37,6 +37,9 @@ export interface IChatClientContextMenuInteraction {
     /** Whether this interaction was invoked in a Direct Message channel. */
     readonly isDM: boolean;
 
+    /** Whether the bot has ViewChannel and SendMessages permissions in the target message's channel. Always true for DMs. */
+    readonly canSendMessageInTargetChannel: boolean;
+
     /** Sends an ephemeral reply (used for early-exit cases or ACK messages). */
     reply(options: ContextMenuReplyOptions): Promise<void>;
 

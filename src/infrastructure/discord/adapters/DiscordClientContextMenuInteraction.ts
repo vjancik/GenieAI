@@ -1,4 +1,4 @@
-import { ChannelType, type MessageContextMenuCommandInteraction, MessageFlags } from "discord.js";
+import { ChannelType, GuildChannel, type MessageContextMenuCommandInteraction, MessageFlags } from "discord.js";
 import type {
     ContextMenuDeferReplyOptions,
     ContextMenuEditReplyOptions,
@@ -33,6 +33,15 @@ export class DiscordClientContextMenuInteraction implements IChatClientContextMe
 
     get isDM() {
         return this.discordInteraction.channel?.type === ChannelType.DM;
+    }
+
+    get canSendMessageInTargetChannel() {
+        // DMs are always writable by the bot
+        if (this.isDM) return true;
+        const channel = this.discordInteraction.channel;
+        const me = this.discordInteraction.guild?.members.me;
+        if (!channel || !me || !(channel instanceof GuildChannel)) return false;
+        return channel.permissionsFor(me)?.has(["ViewChannel", "SendMessages"]) ?? false;
     }
 
     async reply(options: ContextMenuReplyOptions) {

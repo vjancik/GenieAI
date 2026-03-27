@@ -67,6 +67,14 @@ export class HandleSummarizeUseCase {
                     return;
                 }
 
+                if (!interaction.canSendMessageInTargetChannel) {
+                    void (await interaction.reply({
+                        content: "*I don't have permission to send messages in this channel.*",
+                        isEphemeral: true,
+                    }));
+                    return;
+                }
+
                 const targetMessage = interaction.targetMessage;
 
                 this.logger.info(
