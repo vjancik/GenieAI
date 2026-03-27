@@ -92,10 +92,11 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: mode=max
           sbom: true
-      -
-        name: Generate artifact attestation
-        uses: actions/attest@v4
-        with:
-          subject-name: index.docker.io/vjancik/genieai
-          subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
+      # Requires a public repository — uncomment when repo is made public
+      # -
+      #   name: Generate artifact attestation
+      #   uses: actions/attest@v4
+      #   with:
+      #     subject-name: index.docker.io/vjancik/genieai
+      #     subject-digest: ${{ steps.push.outputs.digest }}
+      #     push-to-registry: true
