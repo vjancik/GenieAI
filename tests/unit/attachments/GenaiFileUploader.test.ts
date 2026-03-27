@@ -52,9 +52,12 @@ beforeEach(() => {
     mockFilesDelete.mockImplementation(async () => {});
 });
 
-// spyOn mocks on module namespace objects persist across test files — restore after each test.
+// spyOn mocks on module namespace objects persist across test files — restore after each test
+// so they don't bleed into GoogleGenAI.test.ts which tests the real implementations.
 afterEach(() => {
-    mock.restore();
+    (GoogleGenAIModule.uploadStreamSingleRequest as ReturnType<typeof spyOn>).mockRestore?.();
+    (GoogleGenAIModule.initiateResumableUpload as ReturnType<typeof spyOn>).mockRestore?.();
+    (GoogleGenAIModule.uploadStreamChunked as ReturnType<typeof spyOn>).mockRestore?.();
 });
 
 function makeUploader() {
