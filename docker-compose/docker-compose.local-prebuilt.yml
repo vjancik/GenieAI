@@ -1,4 +1,4 @@
-name: genieaiv2-prod
+name: genieai
 
 services:
     db:
@@ -12,7 +12,7 @@ services:
             - "5434:5432"
         volumes:
             - db-data:/var/lib/postgresql/data
-            - ./postgres-local-prod.conf:/etc/postgresql/postgresql.conf:ro
+            - ../postgres-local.conf:/etc/postgresql/postgresql.conf:ro
         command: postgres -c config_file=/etc/postgresql/postgresql.conf
         healthcheck:
             test: ["CMD-SHELL", "pg_isready -U genie -d genie"]
@@ -21,21 +21,32 @@ services:
             retries: 5
         restart: unless-stopped
 
+    migrate:
+        image: vjancik/genieai:main
+        command: ["bun", "src/infrastructure/db/migrate.ts"]
+        environment:
+            DATABASE_URL: postgresql://genie:genie@db:5432/genie
+        depends_on:
+            db:
+                condition: service_healthy
+        restart: "no"
+
     app:
-        build:
-            context: .
-            dockerfile: Dockerfile
+        image: vjancik/genieai:main
         env_file:
-            - .env
+            - ../.env
         environment:
             LOG_LEVEL: debug
             DATABASE_URL: postgresql://genie:genie@db:5432/genie
         volumes:
-            - ./logs:/usr/src/app/logs
-            - ./config.local.yaml:/usr/src/app/config.local.yaml:ro
+            - ../logs:/usr/src/app/logs
+            - ../config.local.yaml:/usr/src/app/config.local.yaml:ro
         depends_on:
             db:
                 condition: service_healthy
+            migrate:
+                condition: service_completed_successfully
         restart: unless-stopped
 volumes:
     db-data:
+        name: genieai_db-data

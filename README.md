@@ -147,7 +147,7 @@ Genie only responds to explicit @mentions or `!ai` / `!aisearch` prefixes — re
 
 ### Run locally with docker-compose
 
-The included `docker-compose.local-prod.yml` starts a PostgreSQL database and the bot together.
+The included `docker-compose.local.yml` starts a PostgreSQL database and the bot together, building the image from source. If you don't want to or can't build the image yourself, `docker-compose/docker-compose.local-prebuilt.yml` uses the prebuilt image from Docker Hub (`vjancik/genieai:main`) instead — note it is currently only available for `linux/amd64` and `linux/arm64` architectures.
 
 **1. Prepare your files**
 
@@ -158,23 +158,12 @@ cp config.default.yaml config.local.yaml  # customise models, search backend, et
 
 `DATABASE_URL` is set automatically by the compose file — do not add it to `.env`.
 
-**2. Start the database and run migrations**
+**2. Start the stack**
+
+Migrations run automatically before the app starts.
 
 ```bash
-docker compose -f docker-compose.local-prod.yml up -d db
-docker compose -f docker-compose.local-prod.yml exec db bun db:migrate
-```
-
-**3. Start the app**
-
-```bash
-docker compose -f docker-compose.local-prod.yml up -d --build app
-```
-
-On subsequent starts (migrations already applied) you can bring up both together:
-
-```bash
-docker compose -f docker-compose.local-prod.yml up -d --build
+docker compose -f docker-compose.local.yml up -d --build
 # or equivalently:
 bun local:prod:up
 ```
@@ -182,7 +171,7 @@ bun local:prod:up
 To stop:
 
 ```bash
-docker compose -f docker-compose.local-prod.yml down
+docker compose -f docker-compose.local.yml down
 # or equivalently:
 bun local:prod:down
 ```
