@@ -235,7 +235,7 @@ describe("HandleExportUseCase.handleExportHtml", () => {
             discordAuthorId: BOT_USER_ID,
             channelId: CHANNEL_ID,
             guildId: GUILD_ID,
-            // TYPE COERCION: DiscordMessage.langchainMessages is Record<string, unknown>[],
+            // TYPE COERCION: PersistedChatMessage.langchainMessages is Record<string, unknown>[],
             // aiMsg.toJSON() satisfies that shape at runtime
             langchainMessages: [aiMsg.toJSON() as unknown as Record<string, unknown>],
             retriesLeft: null,

@@ -11,7 +11,7 @@ import {
     uniqueIndex,
     uuid,
 } from "drizzle-orm/pg-core";
-import type { DiscordMessage } from "../../domain/message/Message.ts";
+import type { PersistedChatMessage } from "../../domain/message/Message.ts";
 
 /**
  * Discriminates between a Discord attachment and an embed media property
@@ -62,7 +62,7 @@ export const messages = pgTable(
          */
         discordAuthorId: text("discord_author_id").notNull(),
         /** Serialized LangChain BaseMessage objects stored as JSON array */
-        langchainMessages: json("langchain_messages").notNull().$type<DiscordMessage["langchainMessages"]>(),
+        langchainMessages: json("langchain_messages").notNull().$type<PersistedChatMessage["langchainMessages"]>(),
         /**
          * Number of retries shown on the Retry button for this message.
          * Only set on bot response rows where the response is retryable.

@@ -184,7 +184,7 @@ export class HandleExportUseCase {
                 channelId: renderReply.channelId,
                 guildId: renderReply.guildId ?? DM_GUILD_TOKEN,
                 discordAuthorId: this.bot.userId,
-                newMessages: [],
+                langchainMessages: [],
                 retriesLeft: null,
                 usedFallback: false,
                 interactionType: "message_create",

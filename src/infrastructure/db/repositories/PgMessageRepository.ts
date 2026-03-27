@@ -1,10 +1,9 @@
-import type { BaseMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import { and, eq, sql } from "drizzle-orm";
 import type { Logger } from "../../../application/types/Logger.ts";
 import { DatabaseError } from "../../../domain/errors/AppError.ts";
-import type { IMessageRepository } from "../../../domain/message/IMessageRepository.ts";
-import type { DiscordMessage, MessageInteractionType } from "../../../domain/message/Message.ts";
+import type { DiscordIds, IMessageRepository, SaveMessageParams } from "../../../domain/message/IMessageRepository.ts";
+import type { MessageInteractionType, PersistedChatMessage } from "../../../domain/message/Message.ts";
 import type { Db } from "../connection.ts";
 import { pgTextArray } from "../pgTextArray.ts";
 import { messages } from "../schema.ts";
@@ -144,7 +143,7 @@ export class PgMessageRepository implements IMessageRepository {
         this.stmtExistsByDiscordMessageId = buildExistsByDiscordMessageIdStmt(db);
     }
 
-    async save(msg: Omit<DiscordMessage, "id" | "createdAt">): Promise<{ id: string }> {
+    async save(msg: SaveMessageParams): Promise<Pick<PersistedChatMessage, "id">> {
         return Sentry.startSpan(
             {
                 name: "Save message to database",
@@ -158,17 +157,13 @@ export class PgMessageRepository implements IMessageRepository {
             async () => {
                 try {
                     const [result] = await this.stmtInsertMessage.execute({
-                        discordMessageId: msg.discordMessageId,
-                        repliesToDiscordId: msg.repliesToDiscordId,
-                        channelId: msg.channelId,
-                        guildId: msg.guildId,
-                        role: msg.role,
-                        discordAuthorId: msg.discordAuthorId,
-                        langchainMessages: msg.langchainMessages,
-                        retriesLeft: msg.retriesLeft,
-                        usedFallback: msg.usedFallback,
-                        interactionType: msg.interactionType,
-                        interactionAuthorDiscordId: msg.interactionAuthorDiscordId,
+                        ...msg,
+                        // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
+                        // which is incompatible with our DB schema's Record<string, unknown>. Double cast
+                        // through unknown bridges the gap — the serialized shape IS a plain JSON object.
+                        langchainMessages: msg.langchainMessages.map(
+                            (m) => m.toJSON() as unknown as Record<string, unknown>,
+                        ),
                     });
 
                     if (!result) {
@@ -192,39 +187,16 @@ export class PgMessageRepository implements IMessageRepository {
         );
     }
 
-    async saveBotMessage(params: {
-        discordMessageId: string;
-        repliesToDiscordId: string;
-        channelId: string;
-        guildId: string;
-        discordAuthorId: string;
-        newMessages: BaseMessage[];
-        retriesLeft: number | null;
-        usedFallback: boolean;
-        interactionType: MessageInteractionType | null;
-        interactionAuthorDiscordId: string | null;
-    }): Promise<{ id: string }> {
+    async saveBotMessage(params: Omit<SaveMessageParams, "role">): Promise<Pick<PersistedChatMessage, "id">> {
         const saved = await this.save({
-            discordMessageId: params.discordMessageId,
-            repliesToDiscordId: params.repliesToDiscordId,
-            channelId: params.channelId,
-            guildId: params.guildId,
+            ...params,
             role: "assistant",
-            discordAuthorId: params.discordAuthorId,
-            // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
-            // which is incompatible with our DB schema's Record<string, unknown>. Double cast
-            // through unknown bridges the gap — the serialized shape IS a plain JSON object.
-            langchainMessages: params.newMessages.map((m) => m.toJSON() as unknown as Record<string, unknown>),
-            retriesLeft: params.retriesLeft,
-            usedFallback: params.usedFallback,
-            interactionType: params.interactionType,
-            interactionAuthorDiscordId: params.interactionAuthorDiscordId,
         });
 
         this.logger.debug(
             {
                 discordMessageId: params.discordMessageId,
-                messageCount: params.newMessages.length,
+                messageCount: params.langchainMessages.length,
             },
             "Saved assistant message to database",
         );
@@ -232,16 +204,15 @@ export class PgMessageRepository implements IMessageRepository {
         return saved;
     }
 
-    async saveBotPlaceholderMessage(params: {
-        discordMessageId: string;
-        repliesToDiscordId: string;
-        channelId: string;
-        guildId: string;
-        discordAuthorId: string;
-    }) {
+    async saveBotPlaceholderMessage(
+        params: Pick<
+            SaveMessageParams,
+            "discordMessageId" | "repliesToDiscordId" | "channelId" | "guildId" | "discordAuthorId"
+        >,
+    ) {
         return this.saveBotMessage({
             ...params,
-            newMessages: [],
+            langchainMessages: [],
             retriesLeft: null,
             usedFallback: false,
             interactionType: null,
@@ -249,11 +220,7 @@ export class PgMessageRepository implements IMessageRepository {
         });
     }
 
-    async deleteByDiscordMessageId(lookup: {
-        discordMessageId: string;
-        channelId: string;
-        guildId: string;
-    }): Promise<void> {
+    async deleteByDiscordMessageId(lookup: DiscordIds): Promise<void> {
         return Sentry.startSpan(
             {
                 name: "Delete message from database",
@@ -274,7 +241,7 @@ export class PgMessageRepository implements IMessageRepository {
         );
     }
 
-    async findById(id: string): Promise<DiscordMessage | null> {
+    async findById(id: PersistedChatMessage["id"]): Promise<PersistedChatMessage | null> {
         return Sentry.startSpan(
             {
                 name: "Find message by ID",
@@ -285,23 +252,7 @@ export class PgMessageRepository implements IMessageRepository {
                 try {
                     const [result] = await this.stmtFindById.execute({ id });
                     if (!result) return null;
-                    return {
-                        id: result.id,
-                        discordMessageId: result.discordMessageId,
-                        repliesToDiscordId: result.repliesToDiscordId,
-                        channelId: result.channelId,
-                        guildId: result.guildId,
-                        role: result.role,
-                        discordAuthorId: result.discordAuthorId,
-                        // TYPE COERCION: the parsed value's shape matches DiscordMessage["langchainMessages"]
-                        // by construction (it was stored from BaseMessage.toJSON()), but TS cannot verify it.
-                        langchainMessages: result.langchainMessages as DiscordMessage["langchainMessages"],
-                        retriesLeft: result.retriesLeft,
-                        usedFallback: result.usedFallback,
-                        interactionType: result.interactionType,
-                        interactionAuthorDiscordId: result.interactionAuthorDiscordId,
-                        createdAt: result.createdAt,
-                    };
+                    return result;
                 } catch (err) {
                     throw new DatabaseError("Failed to find message by ID", err);
                 }
@@ -309,11 +260,7 @@ export class PgMessageRepository implements IMessageRepository {
         );
     }
 
-    async findByDiscordMessageId(lookup: {
-        discordMessageId: string;
-        channelId: string;
-        guildId: string;
-    }): Promise<DiscordMessage | null> {
+    async findByDiscordMessageId(lookup: DiscordIds): Promise<PersistedChatMessage | null> {
         return Sentry.startSpan(
             {
                 name: "Find message by Discord ID",
@@ -327,33 +274,13 @@ export class PgMessageRepository implements IMessageRepository {
             },
             async () => {
                 try {
-                    const [result] = await this.stmtFindByDiscordMessageIdGuild.execute({
-                        guildId: lookup.guildId,
-                        channelId: lookup.channelId,
-                        discordMessageId: lookup.discordMessageId,
-                    });
+                    const [result] = await this.stmtFindByDiscordMessageIdGuild.execute(lookup);
 
                     if (!result) return null;
 
                     this.logger.debug(lookup, "Found message by Discord ID");
 
-                    return {
-                        id: result.id,
-                        discordMessageId: result.discordMessageId,
-                        repliesToDiscordId: result.repliesToDiscordId,
-                        channelId: result.channelId,
-                        guildId: result.guildId,
-                        role: result.role,
-                        discordAuthorId: result.discordAuthorId,
-                        // TYPE COERCION: the parsed value's shape matches DiscordMessage["langchainMessages"]
-                        // by construction (it was stored from BaseMessage.toJSON()), but TS cannot verify it.
-                        langchainMessages: result.langchainMessages as DiscordMessage["langchainMessages"],
-                        retriesLeft: result.retriesLeft,
-                        usedFallback: result.usedFallback,
-                        interactionType: result.interactionType,
-                        interactionAuthorDiscordId: result.interactionAuthorDiscordId,
-                        createdAt: result.createdAt,
-                    };
+                    return result;
                 } catch (err) {
                     throw new DatabaseError("Failed to find message by Discord ID", err);
                 }
@@ -361,36 +288,25 @@ export class PgMessageRepository implements IMessageRepository {
         );
     }
 
-    async existsByDiscordMessageId(lookup: {
-        discordMessageId: string;
-        channelId: string;
-        guildId: string;
-    }): Promise<boolean> {
+    async existsByDiscordMessageId(lookup: DiscordIds): Promise<boolean> {
         return (await this.getIdByDiscordMessageId(lookup)) !== null;
     }
 
-    async getIdByDiscordMessageId(lookup: {
-        discordMessageId: string;
-        channelId: string;
-        guildId: string;
-    }): Promise<string | null> {
+    async getIdByDiscordMessageId(lookup: DiscordIds): Promise<PersistedChatMessage["id"] | null> {
         try {
-            const [result] = await this.stmtExistsByDiscordMessageId.execute({
-                guildId: lookup.guildId,
-                channelId: lookup.channelId,
-                discordMessageId: lookup.discordMessageId,
-            });
+            const [result] = await this.stmtExistsByDiscordMessageId.execute(lookup);
             return result?.id ?? null;
         } catch (err) {
             throw new DatabaseError("Failed to look up message ID by Discord ID", err);
         }
     }
 
-    async findExistingDiscordIds(lookup: {
-        guildId: string;
-        channelId: string;
-        discordMessageIds: string[];
-    }): Promise<string[]> {
+    // TODO: check if missing index?
+    async findExistingDiscordIds(
+        lookup: {
+            discordMessageIds: string[];
+        } & Omit<DiscordIds, "discordMessageId">,
+    ): Promise<PersistedChatMessage["discordMessageId"][]> {
         if (lookup.discordMessageIds.length === 0) return [];
         try {
             const rows = await this.stmtFindExistingDiscordIds.execute({
@@ -404,7 +320,7 @@ export class PgMessageRepository implements IMessageRepository {
         }
     }
 
-    async saveBatch(msgs: Omit<DiscordMessage, "id" | "createdAt">[]): Promise<{ id: string }[]> {
+    async saveBatch(msgs: SaveMessageParams[]): Promise<Pick<PersistedChatMessage, "id">[]> {
         if (msgs.length === 0) return [];
         return Sentry.startSpan(
             {
@@ -418,17 +334,11 @@ export class PgMessageRepository implements IMessageRepository {
                         .insert(messages)
                         .values(
                             msgs.map((m) => ({
-                                discordMessageId: m.discordMessageId,
-                                repliesToDiscordId: m.repliesToDiscordId,
-                                channelId: m.channelId,
-                                guildId: m.guildId,
-                                role: m.role,
-                                discordAuthorId: m.discordAuthorId,
-                                langchainMessages: m.langchainMessages,
-                                retriesLeft: m.retriesLeft,
-                                usedFallback: m.usedFallback,
-                                interactionType: m.interactionType,
-                                interactionAuthorDiscordId: m.interactionAuthorDiscordId,
+                                ...m,
+                                // TYPE COERCION: see save() — same serialization rationale applies here.
+                                langchainMessages: m.langchainMessages.map(
+                                    (msg) => msg.toJSON() as unknown as Record<string, unknown>,
+                                ),
                             })),
                         )
                         .onConflictDoUpdate({
@@ -450,12 +360,12 @@ export class PgMessageRepository implements IMessageRepository {
         );
     }
 
-    async fetchChain(lookup: {
-        startDiscordMessageId: string;
-        channelId: string;
-        guildId: string;
-        limit?: number;
-    }): Promise<DiscordMessage[]> {
+    async fetchChain(
+        lookup: {
+            startDiscordMessageId: string;
+            limit?: number;
+        } & Omit<DiscordIds, "discordMessageId">,
+    ): Promise<PersistedChatMessage[]> {
         return Sentry.startSpan(
             {
                 name: "Fetch message chain",
@@ -522,14 +432,14 @@ export class PgMessageRepository implements IMessageRepository {
                         repliesToDiscordId: row.replies_to_discord_id as string | null,
                         channelId: row.channel_id as string,
                         guildId: row.guild_id as string,
-                        role: row.role as DiscordMessage["role"],
+                        role: row.role as PersistedChatMessage["role"],
                         discordAuthorId: row.discord_author_id as string,
                         // Raw db.execute() returns JSON columns as strings unlike ORM queries —
                         // TYPE COERCION: the parsed value's shape matches DiscordMessage["langchainMessages"]
                         // by construction (it was stored from BaseMessage.toJSON()), but TS cannot verify it.
                         langchainMessages: (typeof row.langchain_messages === "string"
                             ? JSON.parse(row.langchain_messages)
-                            : row.langchain_messages) as DiscordMessage["langchainMessages"],
+                            : row.langchain_messages) as PersistedChatMessage["langchainMessages"],
                         retriesLeft: row.retries_left as number | null,
                         usedFallback: row.used_fallback as boolean | null,
                         interactionType: row.interaction_type as MessageInteractionType | null,

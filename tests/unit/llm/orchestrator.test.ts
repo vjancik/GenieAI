@@ -5,7 +5,7 @@ import pino from "pino";
 import type { AgentStatusUpdate } from "../../../src/application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
 import { AllFreeKeysExhaustedError, AppError } from "../../../src/domain/errors/AppError.ts";
-import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
+import type { PersistedChatMessage } from "../../../src/domain/message/Message.ts";
 import { MessageIntent } from "../../../src/domain/message/MessageIntent.ts";
 import { AgentOrchestrator } from "../../../src/infrastructure/llm/agents/agentOrchestrator.ts";
 import { ResilientModelInvoker } from "../../../src/infrastructure/llm/ResilientModelInvoker.ts";
@@ -139,7 +139,7 @@ function makeInvoker(freeKeyProvider = makeFreeKeyProvider()) {
 }
 
 describe("dbMessagesToLangchain", () => {
-    const baseMsg: Omit<DiscordMessage, "role" | "langchainMessages"> = {
+    const baseMsg: Omit<PersistedChatMessage, "role" | "langchainMessages"> = {
         id: "uuid-1",
         discordMessageId: "discord-1",
         repliesToDiscordId: null,
@@ -155,7 +155,7 @@ describe("dbMessagesToLangchain", () => {
 
     test("converts a serialized HumanMessage back to HumanMessage", () => {
         const original = new HumanMessage("Hello!");
-        const records: DiscordMessage[] = [
+        const records: PersistedChatMessage[] = [
             {
                 ...baseMsg,
                 role: "human",
@@ -170,7 +170,7 @@ describe("dbMessagesToLangchain", () => {
 
     test("converts a serialized AIMessage back to AIMessage", () => {
         const original = new AIMessage("Hi there!");
-        const records: DiscordMessage[] = [
+        const records: PersistedChatMessage[] = [
             {
                 ...baseMsg,
                 role: "assistant",
@@ -186,7 +186,7 @@ describe("dbMessagesToLangchain", () => {
     test("flattens multiple langchainMessages per record into a single array", () => {
         const ai1 = new AIMessage("triage response");
         const ai2 = new AIMessage("final response");
-        const records: DiscordMessage[] = [
+        const records: PersistedChatMessage[] = [
             {
                 ...baseMsg,
                 role: "assistant",
@@ -208,7 +208,7 @@ describe("dbMessagesToLangchain", () => {
         const human = new HumanMessage("msg1");
         const ai = new AIMessage("msg2");
         const humanFollow = new HumanMessage("msg3");
-        const records: DiscordMessage[] = [
+        const records: PersistedChatMessage[] = [
             {
                 ...baseMsg,
                 discordMessageId: "d1",
@@ -241,7 +241,7 @@ describe("dbMessagesToLangchain", () => {
 });
 
 describe("dbMessagesToLangchain — constructor dispatch", () => {
-    const baseMsg: Omit<DiscordMessage, "role" | "langchainMessages"> = {
+    const baseMsg: Omit<PersistedChatMessage, "role" | "langchainMessages"> = {
         id: "uuid-1",
         discordMessageId: "discord-1",
         repliesToDiscordId: null,
@@ -255,7 +255,7 @@ describe("dbMessagesToLangchain — constructor dispatch", () => {
         createdAt: new Date(),
     };
 
-    function singleRecord(json: Record<string, unknown>): DiscordMessage[] {
+    function singleRecord(json: Record<string, unknown>): PersistedChatMessage[] {
         return [
             {
                 ...baseMsg,
@@ -334,7 +334,7 @@ describe("dbMessagesToLangchain — constructor dispatch", () => {
 });
 
 describe("dbMessagesToLangchain — thought chunk filtering", () => {
-    const baseMsg: Omit<DiscordMessage, "role" | "langchainMessages"> = {
+    const baseMsg: Omit<PersistedChatMessage, "role" | "langchainMessages"> = {
         id: "uuid-1",
         discordMessageId: "discord-1",
         repliesToDiscordId: null,
@@ -349,7 +349,7 @@ describe("dbMessagesToLangchain — thought chunk filtering", () => {
     };
 
     /** Serialized AIMessage with a thought chunk and a visible text chunk */
-    function thoughtRecord(): DiscordMessage[] {
+    function thoughtRecord(): PersistedChatMessage[] {
         const msg = new AIMessage({
             content: [
                 { type: "text", text: "internal reasoning", thought: true },
@@ -387,7 +387,7 @@ describe("dbMessagesToLangchain — thought chunk filtering", () => {
 
     test("does not affect messages with string content", () => {
         const msg = new HumanMessage("plain text");
-        const records: DiscordMessage[] = [
+        const records: PersistedChatMessage[] = [
             {
                 ...baseMsg,
                 role: "human",

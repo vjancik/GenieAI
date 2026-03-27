@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { HumanMessage } from "@langchain/core/messages";
 import { sql } from "drizzle-orm";
 import pino from "pino";
-import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
+import type { SaveMessageParams } from "../../../src/domain/message/IMessageRepository.ts";
 import { createDb } from "../../../src/infrastructure/db/connection.ts";
 import { PgMessageRepository } from "../../../src/infrastructure/db/repositories/PgMessageRepository.ts";
 
@@ -34,9 +34,7 @@ afterAll(async () => {
     await (db as unknown as { $client: { end?: () => Promise<void> } }).$client?.end?.();
 });
 
-function messagePayload(
-    overrides: Partial<Omit<DiscordMessage, "id" | "createdAt">> = {},
-): Omit<DiscordMessage, "id" | "createdAt"> {
+function messagePayload(overrides: Partial<SaveMessageParams> = {}): SaveMessageParams {
     return {
         discordMessageId: `discord-${Date.now()}-${Math.random()}`,
         repliesToDiscordId: null,
@@ -44,7 +42,7 @@ function messagePayload(
         guildId: "guild-001",
         role: "human",
         discordAuthorId: "user-123",
-        langchainMessages: [new HumanMessage("Hello!").toJSON() as unknown as Record<string, unknown>],
+        langchainMessages: [new HumanMessage("Hello!")],
         retriesLeft: null,
         usedFallback: null,
         interactionType: null,
@@ -100,7 +98,7 @@ describe("PgMessageRepository.findByDiscordMessageId", () => {
         await repo.save(
             messagePayload({
                 discordMessageId: "rt-001",
-                langchainMessages: [msg.toJSON() as unknown as Record<string, unknown>],
+                langchainMessages: [msg],
             }),
         );
 

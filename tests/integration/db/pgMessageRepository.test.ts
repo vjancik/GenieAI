@@ -4,7 +4,7 @@ import { sleep } from "bun";
 import { sql } from "drizzle-orm";
 import pino from "pino";
 import { DatabaseError } from "../../../src/domain/errors/AppError.ts";
-import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
+import type { SaveMessageParams } from "../../../src/domain/message/IMessageRepository.ts";
 import { createDb } from "../../../src/infrastructure/db/connection.ts";
 import { PgMessageRepository } from "../../../src/infrastructure/db/repositories/PgMessageRepository.ts";
 
@@ -41,10 +41,7 @@ afterAll(async () => {
 });
 
 /** Helper: build a minimal save payload */
-function messagePayload(
-    overrides: Partial<Omit<DiscordMessage, "id" | "createdAt">> = {},
-): Omit<DiscordMessage, "id" | "createdAt"> {
-    const defaultMsg = new HumanMessage("Hello!");
+function messagePayload(overrides: Partial<SaveMessageParams> = {}): SaveMessageParams {
     return {
         discordMessageId: `discord-${Date.now()}-${Math.random()}`,
         repliesToDiscordId: null,
@@ -52,7 +49,7 @@ function messagePayload(
         guildId: "guild-001",
         role: "human",
         discordAuthorId: "user-123",
-        langchainMessages: [defaultMsg.toJSON() as unknown as Record<string, unknown>],
+        langchainMessages: [new HumanMessage("Hello!")],
         retriesLeft: null,
         usedFallback: null,
         interactionType: null,
@@ -63,10 +60,7 @@ function messagePayload(
 
 describe("PgMessageRepository.save", () => {
     test("saves a message and returns the DB-assigned id", async () => {
-        const humanMsg = new HumanMessage("Hello!");
-        const payload = messagePayload({
-            langchainMessages: [humanMsg.toJSON() as unknown as Record<string, unknown>],
-        });
+        const payload = messagePayload();
         const saved = await repo.save(payload);
 
         expect(saved.id).toBeDefined();
@@ -131,7 +125,7 @@ describe("PgMessageRepository.fetchChain", () => {
             messagePayload({
                 discordMessageId: "chain2-root",
                 role: "human",
-                langchainMessages: [humanMsg.toJSON() as unknown as Record<string, unknown>],
+                langchainMessages: [humanMsg],
             }),
         );
 
@@ -143,7 +137,7 @@ describe("PgMessageRepository.fetchChain", () => {
                 discordMessageId: "chain2-child",
                 repliesToDiscordId: "chain2-root",
                 role: "assistant",
-                langchainMessages: [aiMsg.toJSON() as unknown as Record<string, unknown>],
+                langchainMessages: [aiMsg],
             }),
         );
 
@@ -256,7 +250,7 @@ describe("PgMessageRepository.fetchChain", () => {
         await repo.save(
             messagePayload({
                 discordMessageId: "json-001",
-                langchainMessages: [originalMsg.toJSON() as unknown as Record<string, unknown>],
+                langchainMessages: [originalMsg],
             }),
         );
 
@@ -284,10 +278,7 @@ describe("PgMessageRepository.fetchChain", () => {
             messagePayload({
                 discordMessageId: "multi-001",
                 role: "assistant",
-                langchainMessages: [
-                    triageMsg.toJSON() as unknown as Record<string, unknown>,
-                    finalMsg.toJSON() as unknown as Record<string, unknown>,
-                ],
+                langchainMessages: [triageMsg, finalMsg],
             }),
         );
 

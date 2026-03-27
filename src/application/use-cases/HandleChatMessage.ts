@@ -2,7 +2,7 @@ import { AIMessage, type BaseMessage, HumanMessage } from "@langchain/core/messa
 import * as Sentry from "@sentry/bun";
 import { extractDisplayMessage } from "../../domain/errors/AppError.ts";
 import type { IMessageRepository } from "../../domain/message/IMessageRepository.ts";
-import type { DiscordMessage, MessageInteractionType } from "../../domain/message/Message.ts";
+import type { MessageInteractionType, PersistedChatMessage } from "../../domain/message/Message.ts";
 import { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { IMessagePageRepository } from "../../domain/message/MessagePage.ts";
 import { shortenRedirectUrl } from "../../infrastructure/http/redirectUrl.ts";
@@ -433,7 +433,7 @@ export class HandleChatMessageUseCase {
                         }
                     }
 
-                    let dbHistory: DiscordMessage[];
+                    let dbHistory: PersistedChatMessage[];
                     let thisTurnMessage: HumanMessage | undefined;
 
                     if (params.reuseHumanMessage) {
@@ -506,10 +506,7 @@ export class HandleChatMessageUseCase {
                             guildId: params.guildId,
                             role: "human",
                             discordAuthorId: params.discordAuthorId,
-                            // TYPE COERCION: BaseMessage.toJSON() returns LangChain's internal Serialized type,
-                            // which is incompatible with our DB schema's Record<string, unknown>. Double cast
-                            // through unknown bridges the gap — the serialized shape IS a plain JSON object.
-                            langchainMessages: [builtMsg.toJSON() as unknown as Record<string, unknown>],
+                            langchainMessages: [builtMsg],
                             retriesLeft: null,
                             usedFallback: null,
                             interactionType: null,
@@ -740,7 +737,7 @@ export class HandleChatMessageUseCase {
                 channelId: botReply.channelId,
                 guildId: botReply.guildId ?? DM_GUILD_TOKEN,
                 discordAuthorId: this.bot.userId,
-                newMessages,
+                langchainMessages: newMessages,
                 retriesLeft: isRetryable ? effectiveRetriesLeft : null,
                 usedFallback: usedFallback ?? false,
                 interactionType: interactionType ?? null,
@@ -794,7 +791,7 @@ export class HandleChatMessageUseCase {
                 channelId: botReply.channelId,
                 guildId: botReply.guildId ?? DM_GUILD_TOKEN,
                 discordAuthorId: this.bot.userId,
-                newMessages,
+                langchainMessages: newMessages,
                 retriesLeft: isRetryable ? effectiveRetriesLeft : null,
                 usedFallback: usedFallback ?? false,
                 interactionType: interactionType ?? null,
@@ -871,7 +868,7 @@ export class HandleChatMessageUseCase {
         channelId: string,
         guildId: string,
         limit?: number,
-    ): Promise<DiscordMessage[]> {
+    ): Promise<PersistedChatMessage[]> {
         return Sentry.startSpan(
             {
                 name: "Fetch and persist live chain",
@@ -941,8 +938,7 @@ export class HandleChatMessageUseCase {
                             guildId: liveMsg.guildId ?? "@me",
                             role: ownBot ? "assistant" : ("human" as const),
                             discordAuthorId: liveMsg.authorId,
-                            // TYPE COERCION: same as above — BaseMessage.toJSON() vs Record<string, unknown>
-                            langchainMessages: [msg.toJSON() as unknown as Record<string, unknown>],
+                            langchainMessages: [msg],
                             retriesLeft: null,
                             usedFallback: null,
                             interactionType: null,

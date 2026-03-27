@@ -1,5 +1,18 @@
 import type { BaseMessage } from "@langchain/core/messages";
-import type { DiscordMessage, MessageInteractionType } from "./Message.ts";
+import type { PersistedChatMessage } from "./Message.ts";
+
+/**
+ * Input shape for persisting a message row.
+ * Uses `BaseMessage[]` for `langchainMessages` — serialization to `Record<string, unknown>[]`
+ * is handled by the repository implementation, not the caller.
+ */
+export type SaveMessageParams = Omit<PersistedChatMessage, "id" | "createdAt" | "langchainMessages"> & {
+    langchainMessages: BaseMessage[];
+};
+
+export type DiscordIds = Pick<PersistedChatMessage, "discordMessageId" | "channelId" | "guildId">;
+
+// TODO: consider using Prettify type helper for cleaner caller parameter signatures
 
 /**
  * Port (interface) for Discord message persistence.
@@ -9,10 +22,10 @@ import type { DiscordMessage, MessageInteractionType } from "./Message.ts";
 export interface IMessageRepository {
     /**
      * Persist a single message record.
-     * @param message - Message data without auto-generated id and createdAt
+     * @param message - Message data; `langchainMessages` accepts `BaseMessage[]` — serialization is handled by the implementation
      * @returns The DB-assigned UUID of the inserted row
      */
-    save(message: Omit<DiscordMessage, "id" | "createdAt">): Promise<{ id: string }>;
+    save(message: SaveMessageParams): Promise<Pick<PersistedChatMessage, "id">>;
 
     /**
      * Fetch the reply chain for the given message, identified by the
@@ -26,12 +39,12 @@ export interface IMessageRepository {
      * @param lookup.limit - Maximum number of rows to return (default: 10000, guards against infinite loops)
      * @returns Messages ordered chronologically (oldest first), or [] if not found
      */
-    fetchChain(lookup: {
-        startDiscordMessageId: string;
-        channelId: string;
-        guildId: string;
-        limit?: number;
-    }): Promise<DiscordMessage[]>;
+    fetchChain(
+        lookup: {
+            startDiscordMessageId: string;
+            limit?: number;
+        } & Omit<DiscordIds, "discordMessageId">,
+    ): Promise<PersistedChatMessage[]>;
 
     /**
      * Persist the bot's reply after it has been sent to Discord.
@@ -41,22 +54,11 @@ export interface IMessageRepository {
      * @param params.repliesToDiscordId - The Discord ID of the user message this replies to
      * @param params.channelId - Discord channel snowflake
      * @param params.guildId - Discord guild snowflake, or `"@me"` for DMs
-     * @param params.newMessages - All LangChain messages generated during this turn
+     * @param params.langchainMessages - All LangChain messages generated during this turn
      * @param params.retriesLeft - Remaining retries to store on the row; only set for retryable responses
      * @returns The DB-assigned UUID of the inserted row
      */
-    saveBotMessage(params: {
-        discordMessageId: string;
-        repliesToDiscordId: string;
-        channelId: string;
-        guildId: string;
-        discordAuthorId: string;
-        newMessages: BaseMessage[];
-        retriesLeft: number | null;
-        usedFallback: boolean;
-        interactionType: MessageInteractionType | null;
-        interactionAuthorDiscordId: string | null;
-    }): Promise<{ id: string }>;
+    saveBotMessage(params: Omit<SaveMessageParams, "role">): Promise<Pick<PersistedChatMessage, "id">>;
 
     /**
      * Saves a non-content bot reply (error notice, shutdown/rate-limit message, sources
@@ -69,13 +71,12 @@ export interface IMessageRepository {
      * @param params.discordAuthorId - Discord user ID of the bot
      * @returns The DB-assigned UUID of the inserted row
      */
-    saveBotPlaceholderMessage(params: {
-        discordMessageId: string;
-        repliesToDiscordId: string;
-        channelId: string;
-        guildId: string;
-        discordAuthorId: string;
-    }): Promise<{ id: string }>;
+    saveBotPlaceholderMessage(
+        params: Pick<
+            SaveMessageParams,
+            "discordMessageId" | "repliesToDiscordId" | "channelId" | "guildId" | "discordAuthorId"
+        >,
+    ): Promise<Pick<PersistedChatMessage, "id">>;
 
     /**
      * Fetch a single message by its UUID primary key.
@@ -83,7 +84,7 @@ export interface IMessageRepository {
      * @param id - The UUIDv7 primary key
      * @returns The message, or null if not found
      */
-    findById(id: string): Promise<DiscordMessage | null>;
+    findById(id: PersistedChatMessage["id"]): Promise<PersistedChatMessage | null>;
 
     /**
      * Fetch a single message by the (guildId, channelId, discordMessageId) triple that
@@ -94,11 +95,7 @@ export interface IMessageRepository {
      * @param lookup.guildId - The Discord guild snowflake, or `"@me"` for DMs
      * @returns The message, or null if not found
      */
-    findByDiscordMessageId(lookup: {
-        discordMessageId: string;
-        channelId: string;
-        guildId: string;
-    }): Promise<DiscordMessage | null>;
+    findByDiscordMessageId(lookup: DiscordIds): Promise<PersistedChatMessage | null>;
 
     /**
      * Returns the subset of the given Discord message IDs that are already
@@ -112,11 +109,11 @@ export interface IMessageRepository {
      * @param lookup.discordMessageIds - The Discord snowflake IDs to check
      * @returns The subset of discordMessageIds that exist in the DB
      */
-    findExistingDiscordIds(lookup: {
-        guildId: string;
-        channelId: string;
-        discordMessageIds: string[];
-    }): Promise<string[]>;
+    findExistingDiscordIds(
+        lookup: {
+            discordMessageIds: string[];
+        } & Omit<DiscordIds, "discordMessageId">,
+    ): Promise<PersistedChatMessage["discordMessageId"][]>;
 
     /**
      * Returns true if a message row exists for the given (guildId, channelId, discordMessageId) triple.
@@ -127,11 +124,7 @@ export interface IMessageRepository {
      * @param lookup.channelId - The Discord channel snowflake
      * @param lookup.guildId - The Discord guild snowflake, or `"@me"` for DMs
      */
-    existsByDiscordMessageId(lookup: {
-        discordMessageId: string;
-        channelId: string;
-        guildId: string;
-    }): Promise<boolean>;
+    existsByDiscordMessageId(lookup: DiscordIds): Promise<boolean>;
 
     /**
      * Returns the UUID primary key of a message row by its Discord snowflake triple,
@@ -141,11 +134,7 @@ export interface IMessageRepository {
      * @param lookup.channelId - The Discord channel snowflake
      * @param lookup.guildId - The Discord guild snowflake, or `"@me"` for DMs
      */
-    getIdByDiscordMessageId(lookup: {
-        discordMessageId: string;
-        channelId: string;
-        guildId: string;
-    }): Promise<string | null>;
+    getIdByDiscordMessageId(lookup: DiscordIds): Promise<PersistedChatMessage["id"] | null>;
 
     /**
      * Delete a single message row by its Discord message ID, guild, and channel.
@@ -156,7 +145,7 @@ export interface IMessageRepository {
      * @param lookup.channelId - The Discord channel snowflake
      * @param lookup.guildId - The Discord guild snowflake, or `"@me"` for DMs
      */
-    deleteByDiscordMessageId(lookup: { discordMessageId: string; channelId: string; guildId: string }): Promise<void>;
+    deleteByDiscordMessageId(lookup: DiscordIds): Promise<void>;
 
     /**
      * Batch-insert multiple message records, skipping any that already exist
@@ -169,5 +158,5 @@ export interface IMessageRepository {
      * @param messages - Array of message data without auto-generated id and createdAt
      * @returns Always N `{ id }` objects, index-aligned with the input array
      */
-    saveBatch(messages: Omit<DiscordMessage, "id" | "createdAt">[]): Promise<{ id: string }[]>;
+    saveBatch(messages: SaveMessageParams[]): Promise<Pick<PersistedChatMessage, "id">[]>;
 }

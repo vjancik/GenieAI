@@ -3,7 +3,7 @@ import { AIMessage, ChatMessage, FunctionMessage, HumanMessage, RemoveMessage } 
 import pino from "pino";
 import { dbMessagesToLangchain } from "../../../src/application/helpers/messageTransformers.ts";
 import { AppError } from "../../../src/domain/errors/AppError.ts";
-import type { DiscordMessage } from "../../../src/domain/message/Message.ts";
+import type { PersistedChatMessage } from "../../../src/domain/message/Message.ts";
 
 const logger = pino({ level: "silent" });
 
@@ -16,7 +16,7 @@ function makeRecord(className: string, kwargs: Record<string, unknown> = {}): Re
     };
 }
 
-function makeDiscordMessage(langchainMessages: Record<string, unknown>[]): DiscordMessage {
+function makeDiscordMessage(langchainMessages: Record<string, unknown>[]): PersistedChatMessage {
     return {
         id: "row-1",
         discordMessageId: "discord-1",
@@ -31,7 +31,7 @@ function makeDiscordMessage(langchainMessages: Record<string, unknown>[]): Disco
         interactionType: null,
         interactionAuthorDiscordId: null,
         createdAt: new Date(),
-    } as unknown as DiscordMessage;
+    } as unknown as PersistedChatMessage;
 }
 
 describe("dbMessagesToLangchain — unexpected message types", () => {

@@ -9,7 +9,7 @@ import {
     ToolMessage,
 } from "@langchain/core/messages";
 import { AppError } from "../../domain/errors/AppError.ts";
-import type { DiscordMessage } from "../../domain/message/Message.ts";
+import type { PersistedChatMessage } from "../../domain/message/Message.ts";
 import type { Logger } from "../types/Logger.ts";
 
 /**
@@ -134,7 +134,7 @@ export function extractContent(response: BaseMessage): string {
 }
 
 /**
- * Converts persisted {@link DiscordMessage} records into LangChain {@link BaseMessage} objects.
+ * Converts persisted {@link PersistedChatMessage} records into LangChain {@link BaseMessage} objects.
  *
  * Each DiscordMessage can contain multiple serialized LangChain messages
  * (e.g. a bot turn with tool use stores [triageAIMessage, ToolMessage, finalAIMessage]).
@@ -150,7 +150,7 @@ export function extractContent(response: BaseMessage): string {
  * @param filterThoughtChunks - Strip thought: true content parts before reconstruction (default: true)
  */
 export function dbMessagesToLangchain(
-    records: DiscordMessage[],
+    records: PersistedChatMessage[],
     logger: Logger,
     filterThoughtChunks = true,
 ): BaseMessage[] {

@@ -26,7 +26,7 @@ export type MessageInteractionType = "message_create" | "summary_command";
  * turn that involved tool use, this array would contain:
  * [triageAIMessage, ToolMessage, finalAIMessage].
  */
-export interface DiscordMessage {
+export interface PersistedChatMessage {
     /** UUID primary key */
     id: string;
     /** Discord's snowflake ID for this message */

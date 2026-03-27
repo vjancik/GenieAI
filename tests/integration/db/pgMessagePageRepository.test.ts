@@ -52,7 +52,7 @@ async function saveParentMessage(discordMessageId: string): Promise<{ id: string
         guildId: "guild-001",
         role: "assistant",
         discordAuthorId: "",
-        langchainMessages: [new HumanMessage("stub").toJSON() as unknown as Record<string, unknown>],
+        langchainMessages: [new HumanMessage("stub")],
         retriesLeft: null,
         usedFallback: null,
         interactionType: null,

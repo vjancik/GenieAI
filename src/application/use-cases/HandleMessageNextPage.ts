@@ -228,7 +228,7 @@ export class HandleNextPageUseCase {
                         channelId: newBotMessage.channelId,
                         guildId: newBotMessage.guildId ?? DM_GUILD_TOKEN,
                         discordAuthorId: this.bot.userId,
-                        newMessages: [],
+                        langchainMessages: [],
                         retriesLeft: null,
                         usedFallback: false,
                         interactionType: null,

@@ -13,7 +13,7 @@ import type { OnStatusUpdate } from "../../../application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../../application/types/AgentStatus.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
 import { AppError, LlmError } from "../../../domain/errors/AppError.ts";
-import type { DiscordMessage } from "../../../domain/message/Message.ts";
+import type { PersistedChatMessage } from "../../../domain/message/Message.ts";
 import { MessageIntent } from "../../../domain/message/MessageIntent.ts";
 import { buildGeneralSystemPrompt } from "../models/generalModel.ts";
 import { buildSearchSystemPrompt } from "../models/searchModel.ts";
@@ -173,13 +173,13 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     }
 
     /**
-     * Deserializes persisted {@link DiscordMessage} records into LangChain messages.
+     * Deserializes persisted {@link PersistedChatMessage} records into LangChain messages.
      * Delegates to {@link dbMessagesToLangchain} — see that function for full documentation.
      *
      * Exposed here so the application layer can call it through {@link IAgentOrchestrator}
      * without importing infrastructure utilities directly.
      */
-    buildHistory(records: DiscordMessage[]): BaseMessage[] {
+    buildHistory(records: PersistedChatMessage[]): BaseMessage[] {
         return dbMessagesToLangchain(records, this.logger);
     }
 

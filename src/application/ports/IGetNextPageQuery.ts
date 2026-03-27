@@ -1,4 +1,4 @@
-import type { DiscordMessage } from "../../domain/message/Message.ts";
+import type { PersistedChatMessage } from "../../domain/message/Message.ts";
 
 /**
  * Read model returned by {@link IGetNextPageQuery}.
@@ -33,7 +33,7 @@ export interface NextPageData {
      * The serialized LangChain messages from the first-page messages row.
      * The last entry is the final AI response whose text is paginated.
      */
-    langchainMessages: DiscordMessage["langchainMessages"];
+    langchainMessages: PersistedChatMessage["langchainMessages"];
 }
 
 /**

@@ -3,7 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { IGetNextPageQuery, NextPageData } from "../../../application/ports/IGetNextPageQuery.ts";
 import { DatabaseError } from "../../../domain/errors/AppError.ts";
-import type { DiscordMessage } from "../../../domain/message/Message.ts";
+import type { PersistedChatMessage } from "../../../domain/message/Message.ts";
 import type { Db } from "../connection.ts";
 import { messagePages, messages } from "../schema.ts";
 
@@ -101,7 +101,7 @@ export class PgGetNextPageQuery implements IGetNextPageQuery {
                         codeBlockType: row.codeBlockType,
                         // TYPE COERCION: the stored shape matches langchainMessages by construction
                         // (written via BaseMessage.toJSON()), but TS cannot verify it.
-                        langchainMessages: row.langchainMessages as DiscordMessage["langchainMessages"],
+                        langchainMessages: row.langchainMessages as PersistedChatMessage["langchainMessages"],
                     };
                 } catch (err) {
                     throw new DatabaseError("Failed to fetch next page data", err);

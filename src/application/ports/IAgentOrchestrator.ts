@@ -1,5 +1,5 @@
 import type { BaseMessage } from "@langchain/core/messages";
-import type { DiscordMessage } from "../../domain/message/Message.ts";
+import type { PersistedChatMessage } from "../../domain/message/Message.ts";
 import type { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { OnStatusUpdate } from "../types/AgentStatus.ts";
 
@@ -11,13 +11,13 @@ import type { OnStatusUpdate } from "../types/AgentStatus.ts";
  */
 export interface IAgentOrchestrator {
     /**
-     * Deserializes persisted {@link DiscordMessage} records into LangChain
+     * Deserializes persisted {@link PersistedChatMessage} records into LangChain
      * {@link BaseMessage} objects suitable for passing as conversation history.
      *
      * @param records - Chronologically ordered DB message records
      * @returns Flat array of deserialized LangChain messages
      */
-    buildHistory(records: DiscordMessage[]): BaseMessage[];
+    buildHistory(records: PersistedChatMessage[]): BaseMessage[];
 
     /**
      * Process a sequence of messages through the agent pipeline.
