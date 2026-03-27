@@ -89,6 +89,13 @@ export class AllFreeKeysExhaustedError extends AppError {
     }
 }
 
+/** Thrown when an LLM produces an invalid or unexpected response (e.g. tool calls from a user-facing model). */
+export class LlmError extends AppError {
+    constructor(message: string, cause?: unknown) {
+        super("LLM_ERROR", message, cause);
+    }
+}
+
 /** Thrown when the paid Gemini API key responds with HTTP 429. */
 export class PaidKeyExhaustedError extends AppError {
     constructor(cause?: unknown) {

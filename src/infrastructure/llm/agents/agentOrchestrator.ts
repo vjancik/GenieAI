@@ -12,7 +12,7 @@ import type { IResilientModelInvoker } from "../../../application/ports/IResilie
 import type { OnStatusUpdate } from "../../../application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../../application/types/AgentStatus.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
-import { AppError } from "../../../domain/errors/AppError.ts";
+import { AppError, LlmError } from "../../../domain/errors/AppError.ts";
 import type { DiscordMessage } from "../../../domain/message/Message.ts";
 import { MessageIntent } from "../../../domain/message/MessageIntent.ts";
 import { buildGeneralSystemPrompt } from "../models/generalModel.ts";
@@ -558,6 +558,15 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 config.context?.onStatusUpdate,
                 AgentStatusType.GENERATING,
             );
+
+            if (response.tool_calls && response.tool_calls.length > 0) {
+                this.logger.error(
+                    { toolCalls: response.tool_calls.map((tc) => tc.name) },
+                    "General node: user-facing model produced illegal tool calls",
+                );
+                throw new LlmError("User-facing general model produced an illegal tool call");
+            }
+
             return { messages: [response], isRetryable: usedFallback, usedFallback };
         });
     }
@@ -652,6 +661,14 @@ export class AgentOrchestrator implements IAgentOrchestrator {
 
                 Object.assign(result.additional_kwargs, tavilyGroundingKwargs);
 
+                if (result.tool_calls && result.tool_calls.length > 0) {
+                    this.logger.error(
+                        { toolCalls: result.tool_calls.map((tc) => tc.name) },
+                        "Search node (Tavily mode): user-facing model produced illegal tool calls",
+                    );
+                    throw new LlmError("User-facing search model produced an illegal tool call");
+                }
+
                 return {
                     messages: [tavilyResultMessage, result],
                     isRetryable: usedFallback,
@@ -672,6 +689,15 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 config.context?.onStatusUpdate,
                 AgentStatusType.SEARCHING,
             );
+
+            if (response.tool_calls && response.tool_calls.length > 0) {
+                this.logger.error(
+                    { toolCalls: response.tool_calls.map((tc) => tc.name) },
+                    "Search node (Google mode): user-facing model produced illegal tool calls",
+                );
+                throw new LlmError("User-facing search model produced an illegal tool call");
+            }
+
             return { messages: [response], isRetryable: usedFallback, usedFallback };
         });
     }
