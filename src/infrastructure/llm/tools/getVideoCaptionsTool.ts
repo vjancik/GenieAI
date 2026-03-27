@@ -224,6 +224,10 @@ export async function createGetVideoCaptionsTool(logger: Logger, proxy?: string,
  */
 const BOT_DETECTION_MSG = "Sign in to confirm you're not a bot.";
 
+// TODO: config var
+const PROXY_SOCKET_TIMEOUT_SEC = "20";
+const DEFAULT_SOCKET_TIMEOUT_SEC = "10";
+
 /**
  * Runs `yt-dlp --flat-playlist -J` for the given URL and returns stdout.
  *
@@ -234,12 +238,16 @@ const BOT_DETECTION_MSG = "Sign in to confirm you're not a bot.";
  */
 async function fetchYtDlpMetadata(url: string, logger: Logger, proxy?: string, proxyRetries = 5): Promise<string> {
     const proxyArgs = proxy ? ["--proxy", proxy] : [];
+    const socketTimeout = proxy ? PROXY_SOCKET_TIMEOUT_SEC : DEFAULT_SOCKET_TIMEOUT_SEC;
     const runMeta = async () => {
         // --flat-playlist: fail fast on playlists rather than fetching all entries
-        const proc = spawn(["yt-dlp", "--no-warnings", "--flat-playlist", ...proxyArgs, "-J", url], {
-            stderr: "pipe",
-            stdout: "pipe",
-        });
+        const proc = spawn(
+            ["yt-dlp", "--no-warnings", "--flat-playlist", "--socket-timeout", socketTimeout, ...proxyArgs, "-J", url],
+            {
+                stderr: "pipe",
+                stdout: "pipe",
+            },
+        );
         const [stdout, stderr] = await Promise.all([
             new Response(proc.stdout).text(),
             new Response(proc.stderr).text(),
@@ -281,6 +289,10 @@ async function fetchYtDlpMetadata(url: string, logger: Logger, proxy?: string, p
     return result.stdout;
 }
 
+// TODO: config var
+const DEFAULT_CAPTIONS_TIMEOUT_MS = 15_000;
+const PROXY_CAPTIONS_TIMEOUT_MS = 30_000;
+
 /**
  * Runs yt-dlp -J for a single video URL to get metadata, selects the best
  * available caption URL by priority, fetches it (retrying on 429), and returns
@@ -320,13 +332,14 @@ async function extractCaptions(
 
     logger.debug({ url, count: captionUrls.length }, "Trying caption URLs in priority order");
 
+    const timeout = proxy ? PROXY_CAPTIONS_TIMEOUT_MS : DEFAULT_CAPTIONS_TIMEOUT_MS;
     // Try each URL in priority order; on 429 retry up to proxyRetries times to
     // rotate the proxy IP, then fall through to the next URL on persistent failure
     for (const captionUrl of captionUrls) {
         let response: Response | undefined;
         for (let attempt = 0; attempt <= (proxy ? proxyRetries : 0); attempt++) {
             try {
-                response = await fetch(captionUrl, { signal: AbortSignal.timeout(30_000), proxy });
+                response = await fetch(captionUrl, { signal: AbortSignal.timeout(timeout), proxy });
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 logger.debug({ captionUrl, error: msg }, "Caption fetch threw, trying next URL");
