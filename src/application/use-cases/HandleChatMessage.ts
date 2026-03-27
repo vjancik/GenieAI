@@ -499,7 +499,7 @@ export class HandleChatMessageUseCase {
                             );
                         }
 
-                        const builtMsg = buildLangchainMessage({
+                        const builtMsg = await buildLangchainMessage({
                             role: "human",
                             content:
                                 params.message !== null
@@ -507,6 +507,7 @@ export class HandleChatMessageUseCase {
                                     : "",
                             attachments: params.attachments,
                             embeds: params.embeds,
+                            logger: this.logger,
                             guildId: params.guildId,
                             channelId: params.channelId,
                             discordMessageId: params.discordMessageId,
@@ -938,11 +939,12 @@ export class HandleChatMessageUseCase {
                         const content = ownBot ? liveMsg.cleanContent : discordMessageToLlmText(liveMsg);
 
                         const attachments = [...liveMsg.attachments, ...(liveMsg.forwardedSnapshot?.attachments ?? [])];
-                        const msg = buildLangchainMessage({
+                        const msg = await buildLangchainMessage({
                             role: ownBot ? "assistant" : "human",
                             content,
                             attachments,
                             embeds: liveMsg.embeds,
+                            logger: this.logger,
                             guildId: liveMsg.guildId ?? "@me",
                             channelId: liveMsg.channelId,
                             discordMessageId: liveMsg.id,
