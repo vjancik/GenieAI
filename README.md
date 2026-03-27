@@ -264,9 +264,9 @@ bun db:studio      # Runs Drizzle Kit Database Web UI (default port 4983, works 
 
 ### Further reading
 
-- [docs/features.md](docs/features.md) — full user-facing feature reference
-- [docs/file-tree.md](docs/file-tree.md) — annotated source file tree
-- [docs/code-statistics.md](docs/code-statistics.md) — line count breakdown
+- [docs/features.md](docs/features.md) — Full (arguably) user-facing feature reference
+- [docs/file-tree.md](docs/file-tree.md) — Annotated source file tree
+- [docs/code-statistics.md](docs/code-statistics.md) — Line count breakdown
 
 ## Caveats & Shortcomings
 
