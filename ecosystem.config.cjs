@@ -1,3 +1,4 @@
+// There seems to be a bug in latest PM2 version when running Bun processes that causes larger than normal CPU usage
 module.exports = {
     apps: [
         {

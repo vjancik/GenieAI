@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, ChatMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import pino from "pino";
+import { dbMessagesToLangchain } from "../../../src/application/helpers/messageTransformers.ts";
 import type { AgentStatusUpdate } from "../../../src/application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
 import type { PersistedChatMessage } from "../../../src/domain/entities/Message.ts";
@@ -10,7 +11,6 @@ import { MessageIntent } from "../../../src/domain/value-objects/MessageIntent.t
 import { AgentOrchestrator } from "../../../src/infrastructure/llm/agents/agentOrchestrator.ts";
 import { ResilientModelInvoker } from "../../../src/infrastructure/llm/ResilientModelInvoker.ts";
 import type { WebsiteResultEntry } from "../../../src/infrastructure/llm/tools/getWebsiteTool.ts";
-import { dbMessagesToLangchain } from "../../../src/infrastructure/llm/utils/messageTransformers.ts";
 
 const testLogger = pino({ level: "silent" });
 
