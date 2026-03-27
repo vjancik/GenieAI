@@ -37,6 +37,7 @@ function isTokenMediaBlock(block: ContentBlock): block is TokenMediaBlock {
     return block.type === "media" && typeof block.url === "string" && block.url.startsWith("discord://");
 }
 
+// TODO: Add a disk file cache
 export class InlineMediaNormalizer implements IInlineMediaNormalizer {
     constructor(
         private readonly mediaService: IDiscordMediaService,

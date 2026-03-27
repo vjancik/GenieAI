@@ -63,6 +63,7 @@ function makeMessageRepo(overrides: Partial<IMessageRepository> = {}): IMessageR
     return {
         save: mock(async () => ({ id: "row-1" })),
         saveBotMessage: mock(async () => ({ id: "row-1" })),
+        saveBotPlaceholderMessage: mock(async () => ({ id: "row-1" })),
         fetchChain: mock(async () => []),
         findExistingDiscordIds: mock(async () => []),
         ...overrides,
@@ -174,7 +175,7 @@ describe("HandleChatMessageUseCase.execute", () => {
 
         await useCase.execute({ message: msg, shutdownPending: true, isRateLimited: false });
 
-        expect(messageRepo.saveBotMessage).toHaveBeenCalled();
+        expect(messageRepo.saveBotPlaceholderMessage).toHaveBeenCalled();
         expect(msg.reply).toHaveBeenCalledWith(
             expect.objectContaining({ content: expect.stringContaining("restart") }),
         );
@@ -188,7 +189,7 @@ describe("HandleChatMessageUseCase.execute", () => {
         await useCase.execute({ message: msg, shutdownPending: false, isRateLimited: true });
 
         expect(msg.reply).toHaveBeenCalled();
-        expect(messageRepo.saveBotMessage).toHaveBeenCalled();
+        expect(messageRepo.saveBotPlaceholderMessage).toHaveBeenCalled();
     });
 
     it("injects synthetic greeting when content is empty, no attachments, and no reply reference", async () => {
@@ -382,14 +383,11 @@ describe("HandleChatMessageUseCase — sendSourcesReply", () => {
         const useCase = makeUseCase({ orchestrator, messageRepo });
         await useCase.execute({ message: msg, shutdownPending: false, isRateLimited: false });
 
-        // saveAssistantMessage should have been called twice:
-        // once for the main bot reply, once for the sources follow-up
-        expect(messageRepo.saveBotMessage).toHaveBeenCalledTimes(2);
-        const calls = (messageRepo.saveBotMessage as ReturnType<typeof mock>).mock.calls;
-        const sourcesSaveCall = calls.find(
-            (c) => (c[0] as Record<string, unknown>).discordMessageId === "sources-reply-1",
-        );
-        expect(sourcesSaveCall).toBeDefined();
-        expect((sourcesSaveCall?.[0] as Record<string, unknown>).newMessages).toEqual([]);
+        // saveBotMessage called once for the main bot reply
+        expect(messageRepo.saveBotMessage).toHaveBeenCalledTimes(1);
+        // saveBotPlaceholderMessage called once for the sources follow-up
+        expect(messageRepo.saveBotPlaceholderMessage).toHaveBeenCalledTimes(1);
+        const placeholderCall = (messageRepo.saveBotPlaceholderMessage as ReturnType<typeof mock>).mock.calls[0];
+        expect((placeholderCall?.[0] as Record<string, unknown>).discordMessageId).toBe("sources-reply-1");
     });
 });

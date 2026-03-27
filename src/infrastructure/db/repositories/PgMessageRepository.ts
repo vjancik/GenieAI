@@ -232,6 +232,23 @@ export class PgMessageRepository implements IMessageRepository {
         return saved;
     }
 
+    async saveBotPlaceholderMessage(params: {
+        discordMessageId: string;
+        repliesToDiscordId: string;
+        channelId: string;
+        guildId: string;
+        discordAuthorId: string;
+    }) {
+        return this.saveBotMessage({
+            ...params,
+            newMessages: [],
+            retriesLeft: null,
+            usedFallback: false,
+            interactionType: null,
+            interactionAuthorDiscordId: null,
+        });
+    }
+
     async deleteByDiscordMessageId(lookup: {
         discordMessageId: string;
         channelId: string;

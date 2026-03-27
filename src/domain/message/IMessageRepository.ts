@@ -59,6 +59,25 @@ export interface IMessageRepository {
     }): Promise<{ id: string }>;
 
     /**
+     * Saves a non-content bot reply (error notice, shutdown/rate-limit message, sources
+     * follow-up) with empty LangChain messages and no retry/fallback metadata.
+     *
+     * @param params.discordMessageId - The Discord ID of the sent bot reply
+     * @param params.repliesToDiscordId - The Discord ID of the message this replies to
+     * @param params.channelId - Discord channel snowflake
+     * @param params.guildId - Discord guild snowflake, or `"@me"` for DMs
+     * @param params.discordAuthorId - Discord user ID of the bot
+     * @returns The DB-assigned UUID of the inserted row
+     */
+    saveBotPlaceholderMessage(params: {
+        discordMessageId: string;
+        repliesToDiscordId: string;
+        channelId: string;
+        guildId: string;
+        discordAuthorId: string;
+    }): Promise<{ id: string }>;
+
+    /**
      * Fetch a single message by its UUID primary key.
      *
      * @param id - The UUIDv7 primary key

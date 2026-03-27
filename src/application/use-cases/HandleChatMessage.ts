@@ -133,17 +133,12 @@ export class HandleChatMessageUseCase {
             async (span) => {
                 if (shutdownPending) {
                     const reply = await message.reply({ content: "*A restart is pending, try again later.*" });
-                    await this.messageRepo.saveBotMessage({
+                    await this.messageRepo.saveBotPlaceholderMessage({
                         discordMessageId: reply.id,
                         repliesToDiscordId: message.id,
                         channelId: reply.channelId,
                         guildId: reply.guildId ?? DM_GUILD_TOKEN,
                         discordAuthorId: this.bot.userId,
-                        newMessages: [],
-                        retriesLeft: null,
-                        usedFallback: false,
-                        interactionType: null,
-                        interactionAuthorDiscordId: null,
                     });
                     return;
                 }
@@ -153,17 +148,12 @@ export class HandleChatMessageUseCase {
                         content:
                             "Hi! It seems you have sent too many messages at once recently. Please wait a while before sending more.",
                     });
-                    await this.messageRepo.saveBotMessage({
+                    await this.messageRepo.saveBotPlaceholderMessage({
                         discordMessageId: rateLimitReply.id,
                         repliesToDiscordId: message.id,
                         channelId: rateLimitReply.channelId,
                         guildId: rateLimitReply.guildId ?? DM_GUILD_TOKEN,
                         discordAuthorId: this.bot.userId,
-                        newMessages: [],
-                        retriesLeft: null,
-                        usedFallback: false,
-                        interactionType: null,
-                        interactionAuthorDiscordId: null,
                     });
                     return;
                 }
@@ -310,17 +300,12 @@ export class HandleChatMessageUseCase {
                         content: "Sorry, I encountered an error processing your request.",
                     });
                     // Persist the error message so it participates in the reply chain.
-                    await this.messageRepo.saveBotMessage({
+                    await this.messageRepo.saveBotPlaceholderMessage({
                         discordMessageId: errorReply.id,
                         repliesToDiscordId: message.id,
                         channelId: errorReply.channelId,
                         guildId: errorReply.guildId ?? DM_GUILD_TOKEN,
                         discordAuthorId: this.bot.userId,
-                        newMessages: [],
-                        retriesLeft: null,
-                        usedFallback: false,
-                        interactionType: null,
-                        interactionAuthorDiscordId: null,
                     });
                 })
                 .catch((editErr) => {
@@ -831,17 +816,12 @@ export class HandleChatMessageUseCase {
     private async sendSourcesReply(replyTo: IChatClientMessage, sourcesLine: string): Promise<void> {
         try {
             const sourcesReply = await replyTo.reply({ content: sourcesLine });
-            await this.messageRepo.saveBotMessage({
+            await this.messageRepo.saveBotPlaceholderMessage({
                 discordMessageId: sourcesReply.id,
                 repliesToDiscordId: replyTo.id,
                 channelId: sourcesReply.channelId,
                 guildId: sourcesReply.guildId ?? DM_GUILD_TOKEN,
                 discordAuthorId: this.bot.userId,
-                newMessages: [],
-                retriesLeft: null,
-                usedFallback: false,
-                interactionType: null,
-                interactionAuthorDiscordId: null,
             });
         } catch (err) {
             this.logger.warn({ err }, "Failed to send grounding sources reply");
