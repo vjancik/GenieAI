@@ -13,8 +13,6 @@ const mockFilesGet = mock(
             uri: "https://generativelanguage.googleapis.com/v1beta/files/test123",
         }) as unknown as GenaiFile,
 );
-const mockFilesDelete = mock(async () => {});
-
 /**
  * Mock `@google/genai` so `GoogleGenAIWithStreamingUpload` (which extends `GoogleGenAI`)
  * inherits stubbed `files.get` / `files.delete`. The `uploadStream` method on the subclass
@@ -30,7 +28,7 @@ mock.module("@google/genai", () => ({
     GoogleGenAI: class MockGoogleGenAI {
         readonly files = {
             get: mockFilesGet,
-            delete: mockFilesDelete,
+            delete: mock(async () => {}),
         };
     },
 }));
@@ -47,9 +45,7 @@ const CHUNK_SIZE = 8 * 1024 * 1024; // must match UPLOAD_CHUNK_SIZE in GoogleGen
 
 beforeEach(() => {
     mockFilesGet.mockReset();
-    mockFilesDelete.mockReset();
     mockFilesGet.mockImplementation(async () => ACTIVE_FILE);
-    mockFilesDelete.mockImplementation(async () => {});
 });
 
 // spyOn mocks on module namespace objects persist across test files — restore after each test
@@ -161,16 +157,24 @@ describe("GenaiFileUploader.uploadStream", () => {
 
 describe("GenaiFileUploader.deleteFile", () => {
     test("calls ai.files.delete with the provided file name", async () => {
-        await makeUploader().deleteFile("files/test123");
+        const uploader = makeUploader();
+        // TYPE COERCION: accessing private field to spy on the files.delete method directly.
+        const ai = (uploader as unknown as { ai: { files: { delete: (...args: unknown[]) => Promise<void> } } }).ai;
+        const deleteSpy = spyOn(ai.files, "delete").mockImplementation(async () => {});
 
-        expect(mockFilesDelete).toHaveBeenCalledWith({ name: "files/test123" });
+        await uploader.deleteFile("files/test123");
+
+        expect(deleteSpy).toHaveBeenCalledWith({ name: "files/test123" });
     });
 
     test("resolves without throwing even when the API throws (file already expired)", async () => {
-        mockFilesDelete.mockImplementationOnce(async () => {
+        const uploader = makeUploader();
+        // TYPE COERCION: accessing private field to inject a throwing stub.
+        const ai = (uploader as unknown as { ai: { files: { delete: (...args: unknown[]) => Promise<void> } } }).ai;
+        spyOn(ai.files, "delete").mockImplementation(async () => {
             throw new Error("File not found");
         });
 
-        await expect(makeUploader().deleteFile("files/gone")).resolves.toBeUndefined();
+        await expect(uploader.deleteFile("files/gone")).resolves.toBeUndefined();
     });
 });
