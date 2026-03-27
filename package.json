@@ -53,6 +53,7 @@
         "drizzle-orm": "^0.45.1",
         "katex": "^0.16.40",
         "langchain": "^1.2.36",
+        "lru-cache": "^11.2.7",
         "marked": "^17.0.5",
         "marked-katex-extension": "^5.1.7",
         "pino": "^10.3.1",

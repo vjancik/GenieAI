@@ -64,7 +64,7 @@ const fileConfigDefaults = {
     attachmentDownloader: {
         /** Timeout in ms for receiving the initial HTTP response when downloading Discord attachments. */
         timeoutMs: 10_000,
-        /** Per-download size limit for the in-memory (base64) downloader. */
+        /** Per-download size limit for the in-memory downloader. */
         memory: { maxSizeMB: 100 },
     },
     /**
@@ -78,7 +78,11 @@ const fileConfigDefaults = {
         /** Maximum total time to wait for a file to reach ACTIVE state before throwing (ms). */
         maxPollWaitMs: 120_000,
         /** Refresh Gemini files when less than this many minutes of their 48h TTL remains. */
-        fileStaleBeforeExpiryMinutes: 15,
+        fileStaleBeforeExpiryMinutes: 30,
+    },
+    cache: {
+        /** Maximum number of resolved Gemini fileUri entries to keep in the in-process LRU cache. */
+        geminiFileUrls: 1000,
     },
     discord: {
         /** Maximum number of messages to walk when fetching a Discord reply chain. */
@@ -207,6 +211,12 @@ const fileConfigSchema = z.object({
         })
         .optional()
         .prefault(fileConfigDefaults.geminiFileApi),
+    cache: z
+        .object({
+            geminiFileUrls: z.number().int().nonnegative().optional().prefault(fileConfigDefaults.cache.geminiFileUrls),
+        })
+        .optional()
+        .prefault(fileConfigDefaults.cache),
     discord: z
         .object({
             chainLimit: z.number().int().positive().optional().prefault(fileConfigDefaults.discord.chainLimit),

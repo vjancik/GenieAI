@@ -54,7 +54,6 @@ function deserializeMessage(json: Record<string, unknown>, logger: Logger): Base
     // arguments in LangChain's serialization format.
     const kwargs = json.kwargs as Record<string, unknown>;
 
-    // TODO: some potentially important properties might be missing from kwargs, see if this is the right way to deserialize
     switch (className) {
         case "HumanMessage":
             return new HumanMessage(kwargs);

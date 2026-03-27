@@ -1,5 +1,5 @@
 import { describe, expect, it, mock } from "bun:test";
-import { AIMessage, type BaseMessage, HumanMessage } from "@langchain/core/messages";
+import { AIMessage, type BaseMessage } from "@langchain/core/messages";
 import pino from "pino";
 import { SearchMode } from "../../../src/application/config/AppConfig.ts";
 import type {
@@ -8,7 +8,6 @@ import type {
     IChatClientMessageAttachment,
 } from "../../../src/application/ports/chat/IChatClient.ts";
 import type { IAgentOrchestrator } from "../../../src/application/ports/IAgentOrchestrator.ts";
-import type { AgentMessageBuilder } from "../../../src/application/services/AgentMessageBuilder.ts";
 import type { StatusMessageUpdater } from "../../../src/application/services/StatusMessageUpdater.ts";
 import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
 import { HandleChatMessageUseCase } from "../../../src/application/use-cases/HandleChatMessage.ts";
@@ -99,18 +98,6 @@ function makeOrchestrator(
     } as unknown as IAgentOrchestrator;
 }
 
-function makeAgentMessageBuilder(): AgentMessageBuilder {
-    return {
-        buildMessage: mock(async ({ content }: { content: string }) => ({
-            msg: new HumanMessage(content),
-            pendingRecords: [],
-        })),
-        persistPendingGeminiRecords: mock(async () => {}),
-        maxInlineAttachmentBytes: 10 * 1024 * 1024,
-        mode: "inline",
-    } as unknown as AgentMessageBuilder;
-}
-
 function makeStatusUpdater(): StatusMessageUpdater {
     return {
         scheduleUpdate: mock(() => {}),
@@ -128,7 +115,6 @@ function makeUseCase(
         previousBotId?: string;
         retries?: number;
         searchMode?: SearchMode;
-        messageBuilder?: AgentMessageBuilder;
     } = {},
 ): HandleChatMessageUseCase {
     return new HandleChatMessageUseCase(
@@ -141,7 +127,6 @@ function makeUseCase(
         overrides.messagePageRepo ?? makePageRepo(),
         overrides.retries ?? 0,
         overrides.searchMode ?? SearchMode.tavily,
-        overrides.messageBuilder ?? makeAgentMessageBuilder(),
     );
 }
 

@@ -138,6 +138,7 @@ function makeMessageRepo(overrides: Partial<IMessageRepository> = {}): IMessageR
         findByDiscordMessageId: mock(async () => null),
         findExistingDiscordIds: mock(async () => []),
         existsByDiscordMessageId: mock(async () => false),
+        getIdByDiscordMessageId: mock(async () => null),
         deleteByDiscordMessageId: mock(async () => {}),
         saveBatch: mock(async () => []),
         ...overrides,

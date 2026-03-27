@@ -10,14 +10,12 @@ import { pgTextArray } from "../pgTextArray.ts";
 import { geminiFiles, geminiFileUploads, messages } from "../schema.ts";
 
 /**
- * Prepared statement: LEFT JOIN gemini_files with gemini_file_uploads for a given
- * set of original URLs and a specific API key.
+ * Prepared statement for {@link PgGeminiFileRepository.findByOriginalUrl}.
  *
- * Uses `= ANY($urls)` instead of `IN (...)` so the query structure is fixed regardless
- * of how many URLs are looked up — a single `text[]` placeholder replaces the dynamic list.
- * At execute time, `urls` receives a {@link pgTextArray} value.
+ * Looks up gemini_files by original_gemini_url (discord:// token URLs) and LEFT JOINs
+ * the upload record for the specified API key.
  */
-function buildFindWithUploadStateStmt(db: Db) {
+function buildFindByOriginalUrlStmt(db: Db) {
     return db
         .select({
             fileId: geminiFiles.id,
@@ -28,8 +26,6 @@ function buildFindWithUploadStateStmt(db: Db) {
             fileEmbedIndex: geminiFiles.embedIndex,
             fileEmbedMediaKey: geminiFiles.embedMediaKey,
             fileMessageId: geminiFiles.messageId,
-            // discordMessageId and channelId are joined from messages to avoid storing
-            // them redundantly on gemini_files — cheap join on indexed PK/FK.
             msgDiscordMessageId: messages.discordMessageId,
             msgChannelId: messages.channelId,
             uploadId: geminiFileUploads.id,
@@ -48,8 +44,75 @@ function buildFindWithUploadStateStmt(db: Db) {
                 eq(geminiFileUploads.apiKeyId, sql.placeholder("apiKeyId")),
             ),
         )
-        .where(eq(geminiFiles.originalGeminiUrl, sql`ANY(${sql.placeholder("urls")})`))
-        .prepare("gemini_file_find_with_upload_state");
+        .where(eq(geminiFiles.originalGeminiUrl, sql`ANY(${sql.placeholder("originalUrls")})`))
+        .prepare("gemini_file_find_by_original_url");
+}
+
+// LEGACY: Legacy query for pre-refactor pre-discord-token URLs baked in Langchain messages.
+//         Not used for new conversations.
+// NOTE: I hate this with a passion, but this is a limitation introduced by loss of state
+//       due to how Langgraph state is structured. To override it with extra context from DB
+//       would mean losing message formatting in LangSmith. For now this is a painful but acceptable trade-off.
+/**
+ * Prepared statement for {@link PgGeminiFileRepository.findByUploadUrl}.
+ *
+ * Same shape as {@link buildFindByOriginalUrlStmt}: FROM gemini_files, LEFT JOIN
+ * gemini_file_uploads for the current API key's upload state.
+ *
+ * WHERE uses an EXISTS subquery to find anchors that have *any* upload row matching
+ * the requested Gemini URLs — regardless of which API key uploaded them. This allows
+ * the caller to locate anchors from fileUri blocks even when the current key has never
+ * uploaded the file (upload will be null, triggering a re-upload).
+ *
+ * A correlated scalar subquery also retrieves the specific matched Gemini URL so the
+ * caller can key the result map by the URL it searched for.
+ */
+function buildFindByUploadUrlStmt(db: Db) {
+    return db
+        .select({
+            fileId: geminiFiles.id,
+            fileOriginalGeminiUrl: geminiFiles.originalGeminiUrl,
+            fileSourceType: geminiFiles.sourceType,
+            fileDiscordAttachmentId: geminiFiles.discordAttachmentId,
+            fileDiscordFilename: geminiFiles.discordFilename,
+            fileEmbedIndex: geminiFiles.embedIndex,
+            fileEmbedMediaKey: geminiFiles.embedMediaKey,
+            fileMessageId: geminiFiles.messageId,
+            msgDiscordMessageId: messages.discordMessageId,
+            msgChannelId: messages.channelId,
+            uploadId: geminiFileUploads.id,
+            uploadGeminiFileId: geminiFileUploads.geminiFileId,
+            uploadApiKeyId: geminiFileUploads.apiKeyId,
+            uploadGeminiFileName: geminiFileUploads.geminiFileName,
+            uploadGeminiUrl: geminiFileUploads.geminiUrl,
+            uploadUploadedAt: geminiFileUploads.uploadedAt,
+            // Scalar subquery: retrieve the matched URL from the any-key upload row so the
+            // caller can key the result map by the URL it searched for, independent of
+            // whether the current-key LEFT JOIN found a record.
+            matchedGeminiUrl: sql<string>`(
+                SELECT u.gemini_url FROM gemini_file_uploads u
+                WHERE u.gemini_file_id = ${geminiFiles.id}
+                  AND u.gemini_url = ANY(${sql.placeholder("geminiUrls")})
+                LIMIT 1
+            )`,
+        })
+        .from(geminiFiles)
+        .innerJoin(messages, eq(messages.id, geminiFiles.messageId))
+        .leftJoin(
+            geminiFileUploads,
+            and(
+                eq(geminiFileUploads.geminiFileId, geminiFiles.id),
+                eq(geminiFileUploads.apiKeyId, sql.placeholder("apiKeyId")),
+            ),
+        )
+        .where(
+            sql`EXISTS (
+                SELECT 1 FROM gemini_file_uploads u
+                WHERE u.gemini_file_id = ${geminiFiles.id}
+                  AND u.gemini_url = ANY(${sql.placeholder("geminiUrls")})
+            )`,
+        )
+        .prepare("gemini_file_find_by_upload_url");
 }
 
 /**
@@ -80,6 +143,58 @@ function buildUpsertUploadStmt(db: Db) {
         .prepare("gemini_file_upload_upsert");
 }
 
+type UploadStateRow = {
+    fileId: string;
+    fileOriginalGeminiUrl: string;
+    fileSourceType: GeminiFile["sourceType"];
+    fileDiscordAttachmentId: string | null;
+    fileDiscordFilename: string | null;
+    fileEmbedIndex: number | null;
+    fileEmbedMediaKey: GeminiFile["embedMediaKey"];
+    fileMessageId: string;
+    msgDiscordMessageId: string;
+    msgChannelId: string;
+    uploadId: string | null;
+    uploadGeminiFileId: string | null;
+    uploadApiKeyId: string | null;
+    uploadGeminiFileName: string | null;
+    uploadGeminiUrl: string | null;
+    uploadUploadedAt: Date | null;
+};
+
+/** Constructs typed {@link GeminiFile} and {@link GeminiFileUpload} objects from a flat query row. */
+function buildFileAndUpload(row: UploadStateRow): { file: GeminiFile; upload: GeminiFileUpload | null } {
+    const file: GeminiFile = {
+        id: row.fileId,
+        originalGeminiUrl: row.fileOriginalGeminiUrl,
+        sourceType: row.fileSourceType,
+        discordAttachmentId: row.fileDiscordAttachmentId,
+        discordFilename: row.fileDiscordFilename,
+        embedIndex: row.fileEmbedIndex,
+        embedMediaKey: row.fileEmbedMediaKey,
+        messageId: row.fileMessageId,
+        discordMessageId: row.msgDiscordMessageId,
+        discordChannelId: row.msgChannelId,
+    };
+    const upload: GeminiFileUpload | null =
+        row.uploadId !== null &&
+        row.uploadGeminiFileId !== null &&
+        row.uploadApiKeyId !== null &&
+        row.uploadGeminiFileName !== null &&
+        row.uploadGeminiUrl !== null &&
+        row.uploadUploadedAt !== null
+            ? {
+                  id: row.uploadId,
+                  geminiFileId: row.uploadGeminiFileId,
+                  apiKeyId: row.uploadApiKeyId,
+                  geminiFileName: row.uploadGeminiFileName,
+                  geminiUrl: row.uploadGeminiUrl,
+                  uploadedAt: row.uploadUploadedAt,
+              }
+            : null;
+    return { file, upload };
+}
+
 /**
  * PostgreSQL implementation of {@link IGeminiFileRepository} using Drizzle ORM.
  *
@@ -99,14 +214,16 @@ function buildUpsertUploadStmt(db: Db) {
  * the parameter list.
  */
 export class PgGeminiFileRepository implements IGeminiFileRepository {
-    private readonly stmtFindWithUploadState: ReturnType<typeof buildFindWithUploadStateStmt>;
+    private readonly stmtFindByOriginalUrl: ReturnType<typeof buildFindByOriginalUrlStmt>;
+    private readonly stmtFindByUploadUrl: ReturnType<typeof buildFindByUploadUrlStmt>;
     private readonly stmtUpsertUpload: ReturnType<typeof buildUpsertUploadStmt>;
 
     constructor(
         private readonly db: Db,
         private readonly logger: Logger,
     ) {
-        this.stmtFindWithUploadState = buildFindWithUploadStateStmt(db);
+        this.stmtFindByOriginalUrl = buildFindByOriginalUrlStmt(db);
+        this.stmtFindByUploadUrl = buildFindByUploadUrlStmt(db);
         this.stmtUpsertUpload = buildUpsertUploadStmt(db);
     }
 
@@ -162,28 +279,15 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
         );
     }
 
-    /**
-     * LEFT JOINs `gemini_files` with `gemini_file_uploads` for the given
-     * original Gemini URLs and a specific API key.
-     *
-     * Always returns a `file` entry (Discord context is never deleted with the
-     * anchor row). Returns `upload: null` when the file has never been uploaded
-     * for the specified API key or the upload row was cleaned by the trigger.
-     *
-     * Uses a partial select to avoid Drizzle join namespace ambiguity and
-     * produce a flat, predictably typed result.
-     */
-    async findWithUploadStateForKey(
+    async findByOriginalUrl(
         originalUrls: string[],
         apiKeyId: string,
     ): Promise<Map<string, { file: GeminiFile; upload: GeminiFileUpload | null }>> {
-        if (originalUrls.length === 0) {
-            return new Map();
-        }
+        if (originalUrls.length === 0) return new Map();
 
         return Sentry.startSpan(
             {
-                name: "Find Gemini file upload state for key",
+                name: "Find Gemini files by original URL",
                 op: "db.query",
                 attributes: {
                     "db.table": "gemini_files",
@@ -193,56 +297,57 @@ export class PgGeminiFileRepository implements IGeminiFileRepository {
             },
             async (span) => {
                 try {
-                    const rows = await this.stmtFindWithUploadState.execute({
-                        // pgTextArray produces a text[] literal accepted by = ANY($1) without
-                        // expanding the parameter count — the query shape stays fixed regardless
-                        // of how many URLs are passed.
-                        urls: pgTextArray(originalUrls),
+                    const rows = await this.stmtFindByOriginalUrl.execute({
+                        originalUrls: pgTextArray(originalUrls),
                         apiKeyId,
                     });
-
                     span.setAttribute("db.result_count", rows.length);
-
                     const result = new Map<string, { file: GeminiFile; upload: GeminiFileUpload | null }>();
-
                     for (const row of rows) {
-                        const file: GeminiFile = {
-                            id: row.fileId,
-                            originalGeminiUrl: row.fileOriginalGeminiUrl,
-                            sourceType: row.fileSourceType,
-                            discordAttachmentId: row.fileDiscordAttachmentId,
-                            discordFilename: row.fileDiscordFilename,
-                            embedIndex: row.fileEmbedIndex,
-                            embedMediaKey: row.fileEmbedMediaKey,
-                            messageId: row.fileMessageId,
-                            discordMessageId: row.msgDiscordMessageId,
-                            discordChannelId: row.msgChannelId,
-                        };
-
-                        // Presence of uploadId indicates a matching upload row was found
-                        const upload: GeminiFileUpload | null =
-                            row.uploadId !== null &&
-                            row.uploadGeminiFileId !== null &&
-                            row.uploadApiKeyId !== null &&
-                            row.uploadGeminiFileName !== null &&
-                            row.uploadGeminiUrl !== null &&
-                            row.uploadUploadedAt !== null
-                                ? {
-                                      id: row.uploadId,
-                                      geminiFileId: row.uploadGeminiFileId,
-                                      apiKeyId: row.uploadApiKeyId,
-                                      geminiFileName: row.uploadGeminiFileName,
-                                      geminiUrl: row.uploadGeminiUrl,
-                                      uploadedAt: row.uploadUploadedAt,
-                                  }
-                                : null;
-
+                        const { file, upload } = buildFileAndUpload(row);
                         result.set(file.originalGeminiUrl, { file, upload });
                     }
-
                     return result;
                 } catch (err) {
-                    throw new DatabaseError("Failed to look up Gemini file upload state for key", err);
+                    throw new DatabaseError("Failed to look up Gemini files by original URL", err);
+                }
+            },
+        );
+    }
+
+    async findByUploadUrl(
+        geminiUrls: string[],
+        apiKeyId: string,
+    ): Promise<Map<string, { file: GeminiFile; upload: GeminiFileUpload | null }>> {
+        if (geminiUrls.length === 0) return new Map();
+
+        return Sentry.startSpan(
+            {
+                name: "Find Gemini files by upload URL",
+                op: "db.query",
+                attributes: {
+                    "db.table": "gemini_file_uploads",
+                    "gemini.url_count": geminiUrls.length,
+                    "llm.api_key_id": apiKeyId,
+                },
+            },
+            async (span) => {
+                try {
+                    const rows = await this.stmtFindByUploadUrl.execute({
+                        geminiUrls: pgTextArray(geminiUrls),
+                        apiKeyId,
+                    });
+                    span.setAttribute("db.result_count", rows.length);
+                    const result = new Map<string, { file: GeminiFile; upload: GeminiFileUpload | null }>();
+                    for (const row of rows) {
+                        const { file, upload } = buildFileAndUpload(row);
+                        // matchedGeminiUrl is always non-null here — it's the WHERE column
+                        // biome-ignore lint/style/noNonNullAssertion: guaranteed by WHERE gemini_url = ANY(...)
+                        result.set(row.matchedGeminiUrl!, { file, upload });
+                    }
+                    return result;
+                } catch (err) {
+                    throw new DatabaseError("Failed to look up Gemini files by upload URL", err);
                 }
             },
         );

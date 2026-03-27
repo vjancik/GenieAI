@@ -1,29 +1,51 @@
 import type { BaseMessage, MessageContent } from "@langchain/core/messages";
-import { HumanMessage } from "@langchain/core/messages";
 
 /**
  * A structured content block within a message's content array.
  * All LangChain complex content parts have at least a `type` discriminant.
  */
 type ContentBlock = Record<string, unknown> & { type: string };
-type InlineAttachmentBlock = ContentBlock & { data: string };
+
+/** A media block with already-resolved base64 data, ready for LLM consumption. */
+type DataAttachmentBlock = ContentBlock & { data: string };
+
+/** A media block still holding a discord:// token URL (data not yet fetched). */
+type TokenAttachmentBlock = ContentBlock & { url: string };
 
 /**
- * Returns true if a content block carries inline binary data (i.e. is an
- * attachment block, not a plain text block). Such blocks have a `data` field
- * containing a base64-encoded string.
+ * Returns true if a content block carries resolved base64 binary data.
+ * These blocks count toward the inline attachment size budget.
  */
-function isAttachmentBlock(block: ContentBlock): block is InlineAttachmentBlock {
+function isDataAttachmentBlock(block: ContentBlock): block is DataAttachmentBlock {
     return typeof block.data === "string";
 }
 
 /**
- * Returns the byte contribution of an attachment block.
- * We use the base64 string length as a conservative upper bound — actual decoded
- * bytes are ~75% of this, but using length avoids the cost of decoding.
+ * Returns true if a content block is an unresolved discord:// token URL block.
+ * These blocks have not yet been downloaded; they count as zero bytes toward the budget
+ * since their size is unknown until normalization resolves them.
  */
-function attachmentBlockBytes(block: InlineAttachmentBlock): number {
-    return block.data.length;
+function isTokenAttachmentBlock(block: ContentBlock): block is TokenAttachmentBlock {
+    return typeof block.url === "string" && block.url.startsWith("discord://");
+}
+
+/**
+ * Returns true if a block is any kind of attachment block (data or token).
+ * Used to identify blocks that should be stripped when trimming history.
+ */
+function isAttachmentBlock(block: ContentBlock): block is DataAttachmentBlock | TokenAttachmentBlock {
+    return isDataAttachmentBlock(block) || isTokenAttachmentBlock(block);
+}
+
+/**
+ * Returns the byte contribution of an attachment block.
+ * Token URL blocks contribute zero — their size is unknown until normalization.
+ * Data blocks use base64 string length as a conservative upper bound (actual decoded
+ * bytes are ~75% of this, but using length avoids the cost of decoding).
+ */
+function attachmentBlockBytes(block: DataAttachmentBlock | TokenAttachmentBlock): number {
+    if (isDataAttachmentBlock(block)) return block.data.length;
+    return 0;
 }
 
 /**
@@ -37,8 +59,6 @@ function attachmentBlockBytes(block: InlineAttachmentBlock): number {
 export function getInlineAttachmentBytes(messages: BaseMessage[]): number {
     let total = 0;
     for (const msg of messages) {
-        // TODO: in the future AIMessages might have inline data too, so we may want to generalize this check beyond HumanMessage
-        if (!(msg instanceof HumanMessage)) continue;
         if (!Array.isArray(msg.content)) continue;
         // TYPE COERCION: after Array.isArray, msg.content is MessageContentComplex[] which
         // TypeScript won't implicitly widen to ContentBlock[] (our Record-based local type).
@@ -59,7 +79,7 @@ export function getInlineAttachmentBytes(messages: BaseMessage[]): number {
  * are iterated in order, removing one at a time. Once the total drops below the
  * limit the function returns immediately, leaving all remaining blocks intact.
  *
- * Text blocks (`type: "text"`) are never removed — only blocks with a `data` field.
+ * Text blocks (`type: "text"`) are never removed — only attachment blocks (data or token URL).
  *
  * Messages that are not HumanMessages, or whose content is a plain string, are
  * never modified and are passed through unchanged.
@@ -79,8 +99,7 @@ export function filterHistoryForInlineSize(messages: BaseMessage[], maxBytes: nu
 
     for (let msgIdx = 0; msgIdx < result.length && totalBytes > maxBytes; msgIdx++) {
         const msg = result[msgIdx];
-        // TODO: we should extend this to work on all message types
-        if (!(msg instanceof HumanMessage)) continue;
+        if (!msg) continue;
         if (!Array.isArray(msg.content)) continue;
 
         // TYPE COERCION: after Array.isArray, msg.content is MessageContentComplex[] which
@@ -101,11 +120,14 @@ export function filterHistoryForInlineSize(messages: BaseMessage[], maxBytes: nu
         }
 
         if (modified) {
-            // Replace the message with a filtered copy; preserve any other kwargs
-            // TODO: if extended to work on all message types, this class will need to be determined dynamically rather than hardcoding HumanMessage
-            // TYPE COERCION: ContentBlock[] (our local type) is not directly assignable to
-            // MessageContent (LangChain's union); the blocks are valid structured content at runtime.
-            result[msgIdx] = new HumanMessage({
+            // Reconstruct using the same subclass as the original message, preserving all
+            // other fields (id, name, additional_kwargs, response_metadata).
+            // TYPE COERCION: msg.constructor is typed as Function; cast to a newable signature
+            // matching BaseMessage's constructor so TypeScript allows the instantiation.
+            // ContentBlock[] (our local type) is not directly assignable to MessageContent
+            // (LangChain's union); the blocks are valid structured content at runtime.
+            result[msgIdx] = new (msg.constructor as new (fields: object) => BaseMessage)({
+                ...msg,
                 content: newBlocks as MessageContent,
             });
         }

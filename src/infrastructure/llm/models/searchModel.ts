@@ -14,10 +14,15 @@ import { blockHighSafetySettings, neverTool } from "./sharedGeminiSettings.ts";
  * decides whether to invoke grounding based on prompt content — it cannot be forced programmatically.
  * In Tavily mode, search results are pre-injected as tool messages so no search instruction is needed.
  *
- * @param dateStr - Human-readable date string representing today (e.g. "Sunday, March 22, 2026")
  * @param searchMode - Determines whether Google Search instructions are included
  */
-export function buildSearchSystemPrompt(basePrompt: string, dateStr: string, searchMode: SearchMode): string {
+export function buildSearchSystemPrompt(basePrompt: string, searchMode: SearchMode): string {
+    const dateStr = new Date().toLocaleDateString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+    });
     return (
         basePrompt +
         "\n" +

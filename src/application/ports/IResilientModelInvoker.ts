@@ -1,6 +1,7 @@
 import type { AIMessageChunk, BaseMessage } from "@langchain/core/messages";
 import type { GeminiApiKey } from "../../domain/message/GeminiApiKey.ts";
 import type { ApiKeyType } from "../config/AppConfig.ts";
+import type { AgentStatusType, OnStatusUpdate } from "../types/AgentStatus.ts";
 
 /** Minimal invokable model interface used by the resilient invoker. */
 export interface IInvokableModel {
@@ -29,10 +30,13 @@ export interface IResilientModelInvoker {
      * - On 429: advances the key cursor and retries up to keyProvider.keyCount times.
      * - On 503/timeout: substitutes the fallback model (same key, same messages).
      *
-     * @param getModel         - Factory returning the primary model for a given key
-     * @param getFallbackModel - Factory returning the fallback model for a given key, or undefined
-     * @param messages         - Conversation history to invoke the model against
-     * @param timeoutMs        - Per-call timeout; falls back to the global timeout when undefined
+     * @param getModel           - Factory returning the primary model for a given key
+     * @param getFallbackModel   - Factory returning the fallback model for a given key, or undefined
+     * @param messages           - Conversation history to invoke the model against
+     * @param timeoutMs          - Per-call timeout; falls back to the global timeout when undefined
+     * @param onStatusUpdate     - Callback for attachment download/upload status during file refresh
+     * @param beforeInvokeStatus - Status to emit immediately before the LLM call, restoring the
+     *                             node's phase label after any attachment status update
      *
      * @throws {AllFreeKeysExhaustedError} if all free keys are rate-limited
      */
@@ -41,6 +45,8 @@ export interface IResilientModelInvoker {
         getFallbackModel: ((key: GeminiApiKey) => IInvokableModel | undefined) | undefined,
         messages: BaseMessage[],
         timeoutMs?: number,
+        onStatusUpdate?: OnStatusUpdate,
+        beforeInvokeStatus?: AgentStatusType,
     ): Promise<ModelInvocationResult>;
 
     /**
@@ -53,6 +59,8 @@ export interface IResilientModelInvoker {
         getFallbackModel: ((key: GeminiApiKey) => IInvokableModel | undefined) | undefined,
         messages: BaseMessage[],
         timeoutMs?: number,
+        onStatusUpdate?: OnStatusUpdate,
+        beforeInvokeStatus?: AgentStatusType,
     ): Promise<ModelInvocationResult>;
 
     /**
@@ -65,5 +73,7 @@ export interface IResilientModelInvoker {
         getFallbackModel: ((key: GeminiApiKey) => IInvokableModel | undefined) | undefined,
         messages: BaseMessage[],
         timeoutMs?: number,
+        onStatusUpdate?: OnStatusUpdate,
+        beforeInvokeStatus?: AgentStatusType,
     ): Promise<ModelInvocationResult>;
 }

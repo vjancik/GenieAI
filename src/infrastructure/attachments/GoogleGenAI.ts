@@ -12,7 +12,7 @@ export interface UploadStreamConfig extends Pick<UploadFileConfig, "name" | "mim
     byteLength: number;
 }
 
-// Implementation methods were hoisted to module level for easier mocking
+// Implementation methods were hoisted to module level for easier testing
 
 /**
  * Step 1 of the resumable upload protocol: POST to the Files API to create a
@@ -77,10 +77,37 @@ export async function uploadStreamSingleRequest(
         fileMetadata.name = config.name.startsWith("files/") ? config.name : `files/${config.name}`;
     }
 
-    const url = `${GEMINI_UPLOAD_BASE}/upload/v1beta/files?key=${apiKey}`;
+    const metadataJson = JSON.stringify({ file: fileMetadata });
+    const boundary = "gemini_upload_boundary";
 
     // Buffer the full stream so the body can be resent on retry.
-    const body = await new Response(stream).arrayBuffer();
+    const fileBytes = await new Response(stream).arrayBuffer();
+
+    // Multipart body: metadata part + file bytes part, matching the single-request
+    // upload format expected by the Files API.
+    const nl = "\r\n";
+    const metadataPart =
+        `--${boundary}${nl}` + `Content-Type: application/json; charset=UTF-8${nl}${nl}` + `${metadataJson}${nl}`;
+    const filePart = `--${boundary}${nl}` + `Content-Type: ${config.mimeType ?? "application/octet-stream"}${nl}${nl}`;
+    const closing = `${nl}--${boundary}--`;
+
+    const metadataPartBytes = new TextEncoder().encode(metadataPart);
+    const filePartBytes = new TextEncoder().encode(filePart);
+    const closingBytes = new TextEncoder().encode(closing);
+
+    const body = new Uint8Array(
+        metadataPartBytes.byteLength + filePartBytes.byteLength + fileBytes.byteLength + closingBytes.byteLength,
+    );
+    let offset = 0;
+    body.set(metadataPartBytes, offset);
+    offset += metadataPartBytes.byteLength;
+    body.set(filePartBytes, offset);
+    offset += filePartBytes.byteLength;
+    body.set(new Uint8Array(fileBytes), offset);
+    offset += fileBytes.byteLength;
+    body.set(closingBytes, offset);
+
+    const url = `${GEMINI_UPLOAD_BASE}/upload/v1beta/files?key=${apiKey}`;
 
     let retryCount = 0;
     let delayMs = INITIAL_RETRY_DELAY_MS;
@@ -89,8 +116,8 @@ export async function uploadStreamSingleRequest(
         const response = await fetch(url, {
             method: "POST",
             headers: {
-                "Content-Type": config.mimeType ?? "application/octet-stream",
-                "Content-Length": String(body.byteLength),
+                "Content-Type": `multipart/related; boundary=${boundary}`,
+                "X-Goog-Upload-Protocol": "multipart",
             },
             body,
         });

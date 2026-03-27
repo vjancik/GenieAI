@@ -6,11 +6,12 @@ import type { DiscordMessage, MessageInteractionType } from "../../domain/messag
 import { MessageIntent } from "../../domain/message/MessageIntent.ts";
 import type { IMessagePageRepository } from "../../domain/message/MessagePage.ts";
 import { shortenRedirectUrl } from "../../infrastructure/http/redirectUrl.ts";
-import { AttachmentMode, SearchMode } from "../config/AppConfig.ts";
+import { SearchMode } from "../config/AppConfig.ts";
 import { agentStatusLabel } from "../formatters/agentStatus.ts";
 import { extractWebGroundingChunks, formatGroundingSources } from "../formatters/groundingSources.ts";
 import { splitMarkdown } from "../formatters/markdownSplitter.ts";
 import { discordMessageToLlmText, llmTextToDiscordText } from "../formatters/textTransformers.ts";
+import { buildLangchainMessage } from "../helpers/buildLangchainMessage.ts";
 import { extractUserContent } from "../helpers/extractUserContent.ts";
 import { hasExtendedMarkdown } from "../helpers/hasExtendedMarkdown.ts";
 import { parseMessageIntent } from "../helpers/parseMessageIntent.ts";
@@ -23,7 +24,7 @@ import type {
 } from "../ports/chat/IChatClient.ts";
 import type { IAgentOrchestrator } from "../ports/IAgentOrchestrator.ts";
 import type { IChatMessageService } from "../ports/IChatMessageService.ts";
-import type { AgentMessageBuilder, PendingGeminiRecord } from "../services/AgentMessageBuilder.ts";
+import type { IInlineMediaNormalizer } from "../ports/IInlineMediaNormalizer.ts";
 import type { StatusMessageUpdater } from "../services/StatusMessageUpdater.ts";
 import type { OnStatusUpdate } from "../types/AgentStatus.ts";
 import type { Logger } from "../types/Logger.ts";
@@ -79,9 +80,12 @@ export class HandleChatMessageUseCase {
         private readonly messagePageRepo: IMessagePageRepository,
         private readonly retries: number,
         private readonly searchMode: SearchMode,
-        private readonly messageBuilder: AgentMessageBuilder,
         private readonly chatMessageService?: IChatMessageService,
         private readonly enableInDMs: boolean = false,
+        /** Required in inline attachment mode: resolves discord:// token URLs to base64 data blocks. */
+        private readonly inlineMediaNormalizer?: IInlineMediaNormalizer,
+        /** Maximum total attachment bytes allowed per message in inline mode. Null = no limit. */
+        private readonly maxInlineAttachmentBytes: number | null = null,
     ) {}
 
     /**
@@ -420,31 +424,27 @@ export class HandleChatMessageUseCase {
                     attributes: {
                         "chat.message_id": params.discordMessageId,
                         "app.attachment_count": params.attachments.length,
-                        "app.attachment_mode": this.messageBuilder.mode,
                         "app.has_reply_chain": params.referencedMessageId !== null,
                     },
                 },
                 async (span) => {
-                    if (this.messageBuilder.mode === AttachmentMode.inline) {
-                        // Guard: reject if total attachment size exceeds the configured limit
-                        if (params.attachments.length > 0) {
-                            const totalBytes = params.attachments.reduce((sum, a) => sum + a.size, 0);
-                            if (totalBytes > this.messageBuilder.maxInlineAttachmentBytes) {
-                                const limitMb = this.messageBuilder.maxInlineAttachmentBytes / (1024 * 1024);
-                                const actualMb = (totalBytes / (1024 * 1024)).toFixed(1);
-                                this.logger.warn(
-                                    {
-                                        totalBytes,
-                                        maxBytes: this.messageBuilder.maxInlineAttachmentBytes,
-                                        discordMessageId: params.discordMessageId,
-                                    },
-                                    "Attachment size exceeds limit — rejecting",
-                                );
-                                return {
-                                    response: `Sorry, your attachments total ${actualMb} MB which exceeds the ${limitMb} MB limit. Please send smaller files.`,
-                                    newMessages: [],
-                                };
-                            }
+                    if (this.maxInlineAttachmentBytes !== null && params.attachments.length > 0) {
+                        const totalBytes = params.attachments.reduce((sum, a) => sum + a.size, 0);
+                        if (totalBytes > this.maxInlineAttachmentBytes) {
+                            const limitMb = this.maxInlineAttachmentBytes / (1024 * 1024);
+                            const actualMb = (totalBytes / (1024 * 1024)).toFixed(1);
+                            this.logger.warn(
+                                {
+                                    totalBytes,
+                                    maxBytes: this.maxInlineAttachmentBytes,
+                                    discordMessageId: params.discordMessageId,
+                                },
+                                "Attachment size exceeds inline limit — rejecting",
+                            );
+                            return {
+                                response: `Sorry, your attachments total ${actualMb} MB which exceeds the ${limitMb} MB limit. Please send smaller files.`,
+                                newMessages: [],
+                            };
                         }
                     }
 
@@ -495,12 +495,11 @@ export class HandleChatMessageUseCase {
                                 params.referencedMessageId,
                                 params.channelId,
                                 params.guildId,
-                                params.onStatusUpdate,
                                 params.fetchHistory === false ? 1 : undefined,
                             );
                         }
 
-                        const { msg: builtMsg, pendingRecords } = await this.messageBuilder.buildMessage({
+                        const builtMsg = buildLangchainMessage({
                             role: "human",
                             content:
                                 params.message !== null
@@ -508,11 +507,13 @@ export class HandleChatMessageUseCase {
                                     : "",
                             attachments: params.attachments,
                             embeds: params.embeds,
-                            onStatusUpdate: params.onStatusUpdate,
+                            guildId: params.guildId,
+                            channelId: params.channelId,
+                            discordMessageId: params.discordMessageId,
                         });
 
-                        // Persist the user's message first so gemini_files FK is satisfied
-                        const savedUserMsg = await this.messageRepo.save({
+                        // Persist the user's message (token URL blocks — no uploads at this stage)
+                        await this.messageRepo.save({
                             discordMessageId: params.discordMessageId,
                             repliesToDiscordId: params.referencedMessageId,
                             channelId: params.channelId,
@@ -528,8 +529,6 @@ export class HandleChatMessageUseCase {
                             interactionType: null,
                             interactionAuthorDiscordId: null,
                         });
-
-                        await this.messageBuilder.persistPendingGeminiRecords(pendingRecords, savedUserMsg.id);
 
                         thisTurnMessage = builtMsg;
                     }
@@ -567,19 +566,24 @@ export class HandleChatMessageUseCase {
 
                     span.setAttribute("app.history_length", history.length);
 
+                    // In inline mode, media blocks in history contain discord:// token URLs
+                    // instead of raw base64. Resolve them to data blocks before sending to the LLM.
+                    const llmHistory = this.inlineMediaNormalizer
+                        ? await this.inlineMediaNormalizer.normalize(history, params.onStatusUpdate)
+                        : history;
+
                     this.logger.debug(
                         {
                             discordMessageId: params.discordMessageId,
                             historyLength: history.length,
                             hasReply: params.referencedMessageId !== null,
                             attachmentCount: params.attachments.length,
-                            attachmentMode: this.messageBuilder.mode,
                         },
                         "Processing message with history",
                     );
 
                     const { content, newMessages, isRetryable, usedFallback } = await this.orchestrator.process(
-                        history,
+                        llmHistory,
                         params.intent,
                         params.onStatusUpdate,
                     );
@@ -885,7 +889,6 @@ export class HandleChatMessageUseCase {
         referencedMessageId: string,
         channelId: string,
         guildId: string,
-        onStatusUpdate?: OnStatusUpdate,
         limit?: number,
     ): Promise<DiscordMessage[]> {
         return Sentry.startSpan(
@@ -925,7 +928,6 @@ export class HandleChatMessageUseCase {
                     const built: Array<{
                         message: IChatClientMessage;
                         msg: BaseMessage;
-                        pendingRecords: PendingGeminiRecord[];
                         ownBot: boolean;
                     }> = [];
 
@@ -936,18 +938,20 @@ export class HandleChatMessageUseCase {
                         const content = ownBot ? liveMsg.cleanContent : discordMessageToLlmText(liveMsg);
 
                         const attachments = [...liveMsg.attachments, ...(liveMsg.forwardedSnapshot?.attachments ?? [])];
-                        const { msg, pendingRecords } = await this.messageBuilder.buildMessage({
+                        const msg = buildLangchainMessage({
                             role: ownBot ? "assistant" : "human",
                             content,
                             attachments,
                             embeds: liveMsg.embeds,
-                            onStatusUpdate,
+                            guildId: liveMsg.guildId ?? "@me",
+                            channelId: liveMsg.channelId,
+                            discordMessageId: liveMsg.id,
                         });
 
-                        built.push({ message: liveMsg, msg, pendingRecords, ownBot });
+                        built.push({ message: liveMsg, msg, ownBot });
                     }
 
-                    const savedRows = await this.messageRepo.saveBatch(
+                    await this.messageRepo.saveBatch(
                         built.map(({ message: liveMsg, msg, ownBot }) => ({
                             discordMessageId: liveMsg.id,
                             repliesToDiscordId: liveMsg.referencedMessageId,
@@ -963,14 +967,6 @@ export class HandleChatMessageUseCase {
                             interactionAuthorDiscordId: null,
                         })),
                     );
-
-                    for (let i = 0; i < built.length; i++) {
-                        // biome-ignore lint/style/noNonNullAssertion: index always in-bounds (same-length arrays)
-                        const { pendingRecords } = built[i]!;
-                        if (pendingRecords.length === 0) continue;
-                        // biome-ignore lint/style/noNonNullAssertion: index always in-bounds (same-length arrays)
-                        await this.messageBuilder.persistPendingGeminiRecords(pendingRecords, savedRows[i]!.id);
-                    }
                 }
 
                 return this.messageRepo.fetchChain({

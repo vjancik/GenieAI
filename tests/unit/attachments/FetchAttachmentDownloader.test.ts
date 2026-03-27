@@ -59,18 +59,31 @@ describe("FetchAttachmentDownloader", () => {
         globalFetch.mockRestore();
     });
 
-    test("resolves mimeType from Content-Type header", async () => {
+    test("prefers Discord contentType over Content-Type header", async () => {
         const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(
-            makeResponse(new Uint8Array([0]), "image/png; charset=utf-8"),
+            makeResponse(new Uint8Array([0]), "image/webp"),
         );
 
+        // Discord metadata says png; CDN transcodes and returns webp — metadata wins
         const result = await downloader.download({
             ...testAttachment,
-            contentType: "image/jpeg", // should be overridden by header
+            contentType: "image/png",
         });
 
-        // Header value stripped of parameters
         expect(result.mimeType).toBe("image/png");
+
+        globalFetch.mockRestore();
+    });
+
+    test("falls back to Content-Type header when Discord contentType is null", async () => {
+        const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(
+            makeResponse(new Uint8Array([0]), "image/webp; charset=utf-8"),
+        );
+
+        // Header value stripped of parameters
+        const result = await downloader.download({ ...testAttachment, contentType: null });
+
+        expect(result.mimeType).toBe("image/webp");
 
         globalFetch.mockRestore();
     });
@@ -182,19 +195,21 @@ describe("FetchAttachmentDownloader", () => {
             makeResponse(new Uint8Array([1]), "image/webp"),
         );
 
+        // acceptTypes validation uses the HTTP header; returned mimeType uses Discord metadata
         const result = await downloader.download(testAttachment, "image/*");
-        expect(result.mimeType).toBe("image/webp");
+        expect(result.mimeType).toBe("image/jpeg");
 
         globalFetch.mockRestore();
     });
 
     test("does not throw when response MIME type matches acceptTypes exactly", async () => {
         const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(
-            makeResponse(new Uint8Array([1]), "image/png"),
+            makeResponse(new Uint8Array([1]), "image/jpeg"),
         );
 
-        const result = await downloader.download(testAttachment, "image/png");
-        expect(result.mimeType).toBe("image/png");
+        // acceptTypes validation uses the HTTP header; returned mimeType uses Discord metadata
+        const result = await downloader.download(testAttachment, "image/jpeg");
+        expect(result.mimeType).toBe("image/jpeg");
 
         globalFetch.mockRestore();
     });
@@ -219,9 +234,10 @@ describe("FetchAttachmentDownloader", () => {
         // Wait long enough for the 1 ms timeout to fire before the response resolves
         await new Promise((r) => setTimeout(r, 5));
 
+        // Discord metadata wins; HTTP header value is ignored when metadata is present
         const result = await timedOutDownloader.download(testAttachment);
 
-        expect(result.mimeType).toBe("image/png");
+        expect(result.mimeType).toBe("image/jpeg");
         expect(result.data).toBe(Buffer.from(data).toString("base64"));
 
         globalFetch.mockRestore();
