@@ -20,7 +20,8 @@ ARG TARGETARCH
 
 RUN --mount=type=cache,id=apt-cache-$TARGETARCH,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib-$TARGETARCH,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends unzip wget
+    apt-get update && apt-get install -y --no-install-recommends ca-certificates unzip wget \
+    && mkdir -p ./bin
 
 RUN --mount=type=cache,id=yt-dlp-2026-03-17-$TARGETARCH,target=/cache \
     if [ "$TARGETARCH" = "amd64" ]; then \
@@ -30,7 +31,7 @@ RUN --mount=type=cache,id=yt-dlp-2026-03-17-$TARGETARCH,target=/cache \
     else \
         echo "Unsupported TARGETARCH: $TARGETARCH" && exit 1; \
     fi \
-    && ( [ -f /cache/yt-dlp-2026-03-17 ] || wget -q --show-progress --progress=bar:force -O /cache/yt-dlp-2026-03-17 "$YT_DLP_URL" ) \
+    && ( [ -s /cache/yt-dlp-2026-03-17 ] || wget -q --show-progress --progress=bar:force -O /cache/yt-dlp-2026-03-17 "$YT_DLP_URL" ) \
     && cp /cache/yt-dlp-2026-03-17 ./bin/yt-dlp \
     && chmod +x ./bin/yt-dlp
 RUN --mount=type=cache,id=deno-v2-7-9-$TARGETARCH,target=/cache \
@@ -41,7 +42,7 @@ RUN --mount=type=cache,id=deno-v2-7-9-$TARGETARCH,target=/cache \
     else \
         echo "Unsupported TARGETARCH: $TARGETARCH" && exit 1; \
     fi \
-    && ( [ -f /cache/deno-v2-7-9 ] || ( wget -q --show-progress --progress=bar:force -O /cache/deno-v2-7-9.zip "$DENO_URL" \
+    && ( [ -s /cache/deno-v2-7-9 ] || ( wget -q --show-progress --progress=bar:force -O /cache/deno-v2-7-9.zip "$DENO_URL" \
         && unzip /cache/deno-v2-7-9.zip deno -d /cache \
         && mv /cache/deno /cache/deno-v2-7-9 \
         && rm /cache/deno-v2-7-9.zip ) ) \
