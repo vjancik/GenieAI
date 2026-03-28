@@ -1,6 +1,7 @@
 # Genie AI
 
 [![Test and Build](https://github.com/vjancik/GenieAI/actions/workflows/test-and-build.yml/badge.svg)](https://github.com/vjancik/GenieAI/actions/workflows/test-and-build.yml)
+[![codecov](https://codecov.io/github/vjancik/GenieAI/branch/main/graph/badge.svg?token=XAHAG15PW9)](https://codecov.io/github/vjancik/GenieAI)
 
 A Discord bot powered by Google Gemini that answers questions in multi-turn reply threads. Genie uses a lightweight triage model to decide whether to fetch web pages, extract video captions from video links, use a search engine, or answer directly — then routes to a stronger model for the final response.
 
