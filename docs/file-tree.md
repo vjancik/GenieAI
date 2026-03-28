@@ -94,6 +94,7 @@ GenieAIV2/
 │       │   └── GoogleGenAI.ts                          # Extends GoogleGenAI with streaming upload methods for the Gemini Files resumable upload protocol
 │       ├── db/
 │       │   ├── connection.ts                           # Creates a Drizzle ORM client (Bun native SQL)
+│       │   ├── migrate.ts                              # Runs Drizzle migrations programmatically (no drizzle-kit required at runtime)
 │       │   ├── pgTextArray.ts                          # Serializes a string[] to a PostgreSQL array literal for use in Bun SQL prepared statements
 │       │   ├── schema.ts                               # Full Drizzle schema definition for all tables
 │       │   ├── queries/
@@ -171,13 +172,15 @@ GenieAIV2/
 │   └── discord/
 │       └── registerCommands.ts                        # Registers Discord slash / context menu commands with the API
 │
+├── docker-compose/
+│   ├── docker-compose.dev-db.yml                      # Dev PostgreSQL instance (port 5432)
+│   ├── docker-compose.test-db.yml                     # Test PostgreSQL instance (port 5433)
+│   └── docker-compose.local-prebuilt.yml              # Local stack using prebuilt Docker Hub image (vjancik/genieai:main)
 ├── drizzle.config.ts                                  # Drizzle Kit config (migration output path, DB connection)
 ├── config.default.yaml                                # Default configuration with all supported options documented
 ├── config.local.yaml                                  # Local overrides (gitignored)
 ├── Dockerfile                                         # Production image (includes yt-dlp and Deno for rendering)
-├── docker-compose.local-dev.yml                       # Dev PostgreSQL instance (port 5432)
-├── docker-compose.local-prod.yml                      # Local production-like stack
-├── docker-compose.test.yml                            # Test PostgreSQL instance (port 5433)
+├── docker-compose.local.yml                           # Local production-like stack (builds from source)
 ├── ecosystem.config.cjs                               # PM2 process manager config for production
 ├── biome.json                                         # Biome linter / formatter config
 ├── tsconfig.json                                      # TypeScript compiler config
