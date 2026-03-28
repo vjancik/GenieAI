@@ -22,9 +22,7 @@ services:
         restart: unless-stopped
 
     migrate:
-        build:
-            context: .
-            dockerfile: Dockerfile
+        image: genieai-app:latest
         command: ["src/infrastructure/db/migrate.ts"]
         environment:
             DATABASE_URL: postgresql://genie:genie@db:5432/genie
@@ -37,6 +35,7 @@ services:
         build:
             context: .
             dockerfile: Dockerfile
+        image: genieai-app:latest
         env_file:
             - .env
         environment:
