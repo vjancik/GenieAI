@@ -45,9 +45,15 @@ jobs:
         run: bun db:test:migrate
 
       - name: Run tests
-        run: bun run test
+        run: bun run test --coverage --coverage-reporter=lcov
         env:
           DATABASE_URL: postgresql://genie_test:genie_test@localhost:5433/genie_test
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v6
+        with:
+          files: ./coverage/lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   docker-build-push:
     needs: tests
@@ -61,7 +67,7 @@ jobs:
       id-token: write
     steps:
       -
-        name: Docker meta
+        name: Docker extract build metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
