@@ -1,6 +1,7 @@
 import { tool } from "@langchain/core/tools";
 import TurndownService from "turndown";
 import { z } from "zod/v4";
+import { parseMimeType } from "../../../application/helpers/parseMimeType.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
 import { ToolError } from "../../../domain/errors/AppError.ts";
 
@@ -52,8 +53,7 @@ export async function fetchTextBody(url: string): Promise<{ body: string; conten
         throw new ToolError(`HTTP ${res.status}`);
     }
 
-    const contentType = res.headers.get("content-type") ?? "";
-    const mimeType = (contentType.split(";")[0] ?? "").trim();
+    const mimeType = parseMimeType(res.headers.get("content-type")) ?? "";
 
     if (!mimeType.startsWith("text/")) {
         throw new ToolError(`Unsupported content type "${mimeType}" — only text/* responses are supported`);

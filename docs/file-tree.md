@@ -86,7 +86,6 @@ GenieAIV2/
 │   │
 │   └── infrastructure/                                 # Concrete adapters; depends on application ports
 │       ├── attachments/
-│       │   ├── contentBlockMapper.ts                   # Maps downloaded attachment bytes to LangChain content blocks
 │       │   ├── FetchAttachmentDownloader.ts            # Downloads Discord attachments as base64 via fetch; used in inline mode
 │       │   ├── FetchStreamingAttachmentDownloader.ts   # Streams attachments to disk via fetch
 │       │   ├── GenaiFileUploader.ts                    # Uploads a file to Gemini Files API and polls until ready

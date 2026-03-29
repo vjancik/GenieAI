@@ -4,7 +4,7 @@ import {
     buildEmbedTokenUrl,
     isDiscordTokenUrl,
     parseDiscordTokenUrl,
-} from "../../../src/infrastructure/discord/discordTokenUrl.ts";
+} from "../../../src/application/helpers/discordTokenUrl.ts";
 
 describe("buildAttachmentTokenUrl", () => {
     test("produces correct discord:// URL", () => {

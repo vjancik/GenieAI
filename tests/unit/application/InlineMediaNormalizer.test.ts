@@ -1,11 +1,11 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { ContentBlock } from "@langchain/core/messages";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
+import { buildAttachmentTokenUrl, buildEmbedTokenUrl } from "../../../src/application/helpers/discordTokenUrl.ts";
 import type { IAttachmentDownloader } from "../../../src/application/ports/IAttachmentDownloader.ts";
 import type { IDiscordMediaService } from "../../../src/application/ports/IDiscordMediaService.ts";
 import { InlineMediaNormalizer } from "../../../src/application/services/InlineMediaNormalizer.ts";
 import type { Logger } from "../../../src/application/types/Logger.ts";
-import { buildAttachmentTokenUrl, buildEmbedTokenUrl } from "../../../src/infrastructure/discord/discordTokenUrl.ts";
 
 const noopLogger = {
     debug: () => {},

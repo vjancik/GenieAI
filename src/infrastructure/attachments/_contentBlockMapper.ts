@@ -1,3 +1,7 @@
+/** UNUSED: Code relating V1 path Langchain media chunk message construction.
+ *          Currently unused, might be useful in later langchain updates.
+ */
+
 /**
  * Maps a MIME type string to the LangChain content block type understood by ChatGoogle.
  *

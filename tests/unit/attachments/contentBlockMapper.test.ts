@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { getBlockType } from "../../../src/infrastructure/attachments/contentBlockMapper.ts";
+import { getBlockType } from "../../../src/infrastructure/attachments/_contentBlockMapper.ts";
 
 describe("getBlockType", () => {
     test("maps image/* MIME types to 'image'", () => {

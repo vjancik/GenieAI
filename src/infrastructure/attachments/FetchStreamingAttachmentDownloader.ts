@@ -1,5 +1,6 @@
 import * as Sentry from "@sentry/bun";
 import type { AppConfig } from "../../application/config/AppConfig.ts";
+import { parseMimeType } from "../../application/helpers/parseMimeType.ts";
 import type { IChatClientMessageAttachment } from "../../application/ports/chat/IChatClient.ts";
 import type {
     IStreamingAttachmentDownloader,
@@ -46,7 +47,7 @@ export class FetchStreamingAttachmentDownloader implements IStreamingAttachmentD
             },
             async (span) => {
                 const result = await this.fetchWithFallback(attachment, acceptTypes);
-                const mimeType = attachment.contentType ?? result.mimeType ?? "application/octet-stream";
+                const mimeType = parseMimeType(attachment.contentType) ?? result.mimeType ?? "application/octet-stream";
 
                 span.setAttributes({
                     "attachment.mime_type": mimeType,
@@ -123,9 +124,7 @@ export class FetchStreamingAttachmentDownloader implements IStreamingAttachmentD
             throw new AppError("ATTACHMENT_DOWNLOAD_FAILED", `HTTP ${response.status} fetching attachment from ${url}`);
         }
 
-        const rawContentType = response.headers.get("content-type");
-        // Strip parameters (e.g. "image/jpeg; charset=utf-8") to get the base type
-        const mimeType = rawContentType?.split(";")[0]?.trim() ?? null;
+        const mimeType = parseMimeType(response.headers.get("content-type"));
 
         const contentLengthHeader = response.headers.get("content-length");
         const contentLength = contentLengthHeader !== null ? Number(contentLengthHeader) : null;

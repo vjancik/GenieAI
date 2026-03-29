@@ -12,7 +12,7 @@
 
 import type { BaseMessage } from "@langchain/core/messages";
 import { HumanMessage } from "@langchain/core/messages";
-import { parseDiscordTokenUrl } from "../../infrastructure/discord/discordTokenUrl.ts";
+import { parseDiscordTokenUrl } from "../helpers/discordTokenUrl.ts";
 import type { IAttachmentDownloader } from "../ports/IAttachmentDownloader.ts";
 import type { IDiscordMediaService } from "../ports/IDiscordMediaService.ts";
 import type { IInlineMediaNormalizer } from "../ports/IInlineMediaNormalizer.ts";

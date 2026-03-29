@@ -1,9 +1,10 @@
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import type { EmbedMediaKey } from "../../domain/entities/GeminiFile.ts";
 import { EMBED_MEDIA_KEYS } from "../../domain/entities/GeminiFile.ts";
-import { buildAttachmentTokenUrl, buildEmbedTokenUrl } from "../../infrastructure/discord/discordTokenUrl.ts";
 import type { IChatClientMessageAttachment, IChatClientMessageEmbed } from "../ports/chat/IChatClient.ts";
 import type { Logger } from "../types/Logger.ts";
+import { buildAttachmentTokenUrl, buildEmbedTokenUrl } from "./discordTokenUrl.ts";
+import { parseMimeType } from "./parseMimeType.ts";
 
 /** Returns true if at least one embed contains a URL for any of the tracked media keys. */
 function embedsHaveMedia(embeds: IChatClientMessageEmbed[]): boolean {
@@ -28,9 +29,7 @@ async function fetchEmbedMimeType(url: string): Promise<string | null> {
         // TODO: config var for timeout
         const response = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(10_000) });
         const contentType = response.headers.get("content-type");
-        if (!contentType) return null;
-        // Strip parameters (e.g. "image/jpeg; charset=utf-8" → "image/jpeg")
-        return contentType.split(";")[0]?.trim() ?? null;
+        return parseMimeType(contentType);
     } catch {
         return null;
     }
@@ -59,7 +58,7 @@ async function buildTokenContentParts(
     const mediaBlocks: Array<{ type: "media"; mimeType: string; url: string }> = [];
 
     for (const attachment of attachments) {
-        const mimeType = attachment.contentType;
+        const mimeType = parseMimeType(attachment.contentType);
         if (mimeType === null) {
             logger.error(
                 { attachmentId: attachment.id, url: attachment.url, name: attachment.name },

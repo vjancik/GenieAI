@@ -1,5 +1,6 @@
 import * as Sentry from "@sentry/bun";
 import type { AppConfig } from "../../application/config/AppConfig.ts";
+import { parseMimeType } from "../../application/helpers/parseMimeType.ts";
 import type { IChatClientMessageAttachment } from "../../application/ports/chat/IChatClient.ts";
 import type { DownloadedAttachment, IAttachmentDownloader } from "../../application/ports/IAttachmentDownloader.ts";
 import type { Logger } from "../../application/types/Logger.ts";
@@ -48,7 +49,7 @@ export class FetchAttachmentDownloader implements IAttachmentDownloader {
                     );
                 }
                 const buffer = await this.fetchWithFallback(attachment, acceptTypes);
-                const mimeType = attachment.contentType ?? buffer.mimeType ?? "application/octet-stream";
+                const mimeType = parseMimeType(attachment.contentType) ?? buffer.mimeType ?? "application/octet-stream";
 
                 span.setAttribute("attachment.mime_type", mimeType);
 
@@ -138,9 +139,7 @@ export class FetchAttachmentDownloader implements IAttachmentDownloader {
         }
 
         const bytes = await response.arrayBuffer();
-        // Strip parameters (e.g. "image/jpeg; charset=utf-8") to get the base type
-        const rawContentType = response.headers.get("content-type");
-        const mimeType = rawContentType?.split(";")[0]?.trim() ?? null;
+        const mimeType = parseMimeType(response.headers.get("content-type"));
 
         // Validate the response MIME type against the requested Accept types.
         // A wildcard pattern like "image/*" matches any "image/" prefix.
