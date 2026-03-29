@@ -2,21 +2,11 @@ import * as Sentry from "@sentry/bun";
 import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
 import { MessageIntent } from "../../domain/value-objects/MessageIntent.ts";
 import { parseMessageIntent } from "../helpers/parseMessageIntent.ts";
-import type {
-    IChatClientBot,
-    IChatClientButtonInteraction,
-    IChatClientChannel,
-    IChatClientMessage,
-} from "../ports/chat/IChatClient.ts";
+import type { IChatClientButtonInteraction, IChatClientMessage } from "../ports/chat/IChatClient.ts";
 import type { IInteractionLock } from "../ports/IInteractionLock.ts";
+import { DM_GUILD_TOKEN, RETRY_BUTTON_ID } from "../shared/tokens.ts";
 import type { Logger } from "../types/Logger.ts";
 import type { HandleChatMessageUseCase } from "./HandleChatMessage.ts";
-
-/** Sentinel value stored as guild_id for DM messages, which have no guild. */
-const DM_GUILD_TOKEN = "@me";
-
-/** Custom ID for the Retry button attached to failed bot responses. */
-const RETRY_BUTTON_ID = "retry_mention";
 
 /**
  * Returns the button array for `message` with the button matching `removeId` filtered out.
@@ -52,7 +42,6 @@ export class HandleRetryUseCase {
     constructor(
         private readonly handleChatMessage: HandleChatMessageUseCase,
         private readonly messageRepo: IMessageRepository,
-        private readonly bot: IChatClientBot,
         private readonly logger: Logger,
         private readonly interactionLock: IInteractionLock,
     ) {}
@@ -191,16 +180,6 @@ export class HandleRetryUseCase {
                             this.logger.warn({ err }, "Failed to delete old failed bot reply from Discord on retry");
                         });
 
-                        // If the deleted message had a sources follow-up, clean it up too.
-                        if (channel) {
-                            this.deleteDanglingSourcesMessageOptimistically(
-                                channel,
-                                interaction.message.id,
-                                originalMessage.channelId,
-                                guildId,
-                            );
-                        }
-
                         // Delete the failure row from DB — it has no real LLM output so it is safe
                         // to remove without risking gaps in another conversation chain.
                         // Fire-and-forget — failure here doesn't block the retry from proceeding.
@@ -251,75 +230,12 @@ export class HandleRetryUseCase {
                         interaction.message.delete().catch((err) => {
                             this.logger.warn({ err }, "Failed to delete old bot reply from Discord on retry");
                         });
-
-                        if (channel) {
-                            this.deleteDanglingSourcesMessageOptimistically(
-                                channel,
-                                interaction.message.id,
-                                originalMessage.channelId,
-                                guildId,
-                            );
-                        }
                     }
                 } finally {
                     this.interactionLock.clearLock(interaction.message.id, interaction.customId);
                 }
             },
         );
-    }
-
-    // NOTE: A naive implementation for a rare usecase, could be made more robust by extending the database
-    /**
-     * After deleting a bot message on Retry, opportunistically deletes any dangling
-     * sources follow-up that replied to it. Web Search responses send a separate
-     * "*Sources: …*" message that would otherwise be left orphaned.
-     *
-     * Fetches up to 10 messages sent after the deleted message in the same channel,
-     * finds the first one that is the bot's own message, replies to the deleted
-     * message, and starts with "*Sources: " — then deletes it from Discord and the DB.
-     *
-     * Intentionally fire-and-forget: errors are logged but never propagate.
-     *
-     * @param channel - The text channel the deleted message was in
-     * @param deletedMessageId - Snowflake ID of the message that was just deleted
-     * @param channelId - Channel ID for DB deletion
-     * @param guildId - Guild ID for DB deletion
-     */
-    private deleteDanglingSourcesMessageOptimistically(
-        channel: IChatClientChannel,
-        deletedMessageId: string,
-        channelId: string,
-        guildId: string,
-    ): void {
-        const botId = this.bot.userId;
-
-        channel
-            .fetchMessagesAfter(deletedMessageId, 10)
-            .then((fetched) => {
-                const sourcesMsg = fetched.find(
-                    (msg) =>
-                        msg.authorId === botId &&
-                        msg.referencedMessageId === deletedMessageId &&
-                        // NOTE this might drift from sources message formatting
-                        msg.content.startsWith("*Sources: "),
-                );
-                if (!sourcesMsg) return;
-
-                // Delete from Discord — fire-and-forget
-                sourcesMsg.delete().catch((err) => {
-                    this.logger.warn({ err }, "Failed to delete dangling sources message from Discord on retry");
-                });
-
-                // Delete from DB — fire-and-forget
-                this.messageRepo
-                    .deleteByDiscordMessageId({ discordMessageId: sourcesMsg.id, channelId, guildId })
-                    .catch((err) => {
-                        this.logger.warn({ err }, "Failed to delete dangling sources message from DB on retry");
-                    });
-            })
-            .catch((err) => {
-                this.logger.warn({ err }, "Failed to fetch messages when cleaning up dangling sources on retry");
-            });
     }
 
     /**

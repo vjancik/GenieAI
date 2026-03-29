@@ -1,14 +1,12 @@
 import { sleep } from "bun";
 import { ApplicationCommandType, REST, Routes } from "discord.js";
+import {
+    EXPORT_HTML_COMMAND_NAME,
+    EXPORT_IMAGE_COMMAND_NAME,
+    SUMMARIZE_COMMAND_NAME,
+} from "../../application/shared/tokens.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import type { DiscordClient } from "./DiscordClient.ts";
-
-/** The name of the message context menu command for summarization. */
-export const SUMMARIZE_COMMAND_NAME = "Summarize";
-/** The name of the message context menu command for HTML export. */
-export const EXPORT_HTML_COMMAND_NAME = "Export as HTML";
-/** The name of the message context menu command for image export. */
-export const EXPORT_IMAGE_COMMAND_NAME = "Export as Image";
 
 /**
  * Responsible for registering application commands (slash commands, context menu commands)

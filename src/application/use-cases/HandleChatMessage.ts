@@ -1,14 +1,12 @@
-import { AIMessage, type BaseMessage, HumanMessage } from "@langchain/core/messages";
+import { type BaseMessage, HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import type { MessageInteractionType, PersistedChatMessage } from "../../domain/entities/Message.ts";
 import { extractDisplayMessage } from "../../domain/errors/AppError.ts";
 import type { IMessagePageRepository } from "../../domain/ports/IMessagePageRepository.ts";
 import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
 import { MessageIntent } from "../../domain/value-objects/MessageIntent.ts";
-import { shortenRedirectUrl } from "../../infrastructure/http/redirectUrl.ts";
-import { SearchMode } from "../config/AppConfig.ts";
 import { agentStatusLabel } from "../formatters/agentStatus.ts";
-import { extractWebGroundingChunks, formatGroundingSources } from "../formatters/groundingSources.ts";
+import { extractWebGroundingChunks } from "../formatters/groundingSources.ts";
 import { splitMarkdown } from "../formatters/markdownSplitter.ts";
 import { discordMessageToLlmText, llmTextToDiscordText } from "../formatters/textTransformers.ts";
 import { buildLangchainMessage } from "../helpers/buildLangchainMessage.ts";
@@ -26,23 +24,18 @@ import type { IAgentOrchestrator } from "../ports/IAgentOrchestrator.ts";
 import type { IChatMessageService } from "../ports/IChatMessageService.ts";
 import type { IInlineMediaNormalizer } from "../ports/IInlineMediaNormalizer.ts";
 import type { StatusMessageUpdater } from "../services/StatusMessageUpdater.ts";
+import {
+    DM_GUILD_TOKEN,
+    NEXT_PAGE_BUTTON_ID,
+    RENDER_BUTTON_ID,
+    RETRY_BUTTON_ID,
+    SOURCES_BUTTON_ID,
+} from "../shared/tokens.ts";
 import type { OnStatusUpdate } from "../types/AgentStatus.ts";
 import type { Logger } from "../types/Logger.ts";
 
-/** Sentinel used for DM guildId. */
-const DM_GUILD_TOKEN = "@me";
-
 /** Discord's maximum message length in characters. */
 const MESSAGE_LENGTH_LIMIT = 2000;
-
-/** Custom ID for the Retry button attached to failed bot responses. */
-const RETRY_BUTTON_ID = "retry_mention";
-
-/** Custom ID for the Next Page button attached to paginated bot responses. */
-const NEXT_PAGE_BUTTON_ID = "next_page";
-
-/** Custom ID for the Render button attached to responses containing extended markdown. */
-const RENDER_BUTTON_ID = "render_image";
 
 /**
  * Internal agent result produced by {@link HandleChatMessageUseCase.invokeAgent}
@@ -79,7 +72,6 @@ export class HandleChatMessageUseCase {
         private readonly previousBotId: string | undefined,
         private readonly messagePageRepo: IMessagePageRepository,
         private readonly retries: number,
-        private readonly searchMode: SearchMode,
         private readonly chatMessageService?: IChatMessageService,
         private readonly enableInDMs: boolean = false,
         /** Required in inline attachment mode: resolves discord:// token URLs to base64 data blocks. */
@@ -663,11 +655,11 @@ export class HandleChatMessageUseCase {
             ? "\n*This response was generated using a fallback model. If it's unsatisfactory you can try to Retry later to see if the primary model is available again.*"
             : "";
 
-        // Start resolving grounding sources in parallel with sending the response and saving to DB.
+        // Determine whether the response has grounding sources so the Sources button can be appended.
         // Skipped on failure responses — the error message has no meaningful sources to cite,
         // and in Tavily mode the triage AIMessage may carry tool calls that would produce
         // spurious source citations even though no real LLM answer was generated.
-        const sourcesLinePromise = isFailure ? Promise.resolve(null) : this.resolveGroundingSources(newMessages);
+        const sourceCount = isFailure ? 0 : this.countResponseSources(newMessages);
 
         // Attach a Retry button when the use case signals a retryable failure and retries remain.
         // retriesLeft=undefined means this is a fresh response — use configured retries.
@@ -708,10 +700,16 @@ export class HandleChatMessageUseCase {
                 throw new Error("splitMarkdown did not return pageCount for paginated content");
             }
 
+            const sourcesButton: IChatClientMessageButton | undefined =
+                sourceCount > 0
+                    ? { customId: SOURCES_BUTTON_ID, label: `Sources · ${sourceCount}`, style: "secondary" }
+                    : undefined;
+
             const firstPageButtons: IChatClientMessageButton[] = [
                 { customId: NEXT_PAGE_BUTTON_ID, label: `Next Page · Page 1 of ${totalPages}`, style: "primary" },
                 ...(retryButton ? [retryButton] : []),
                 ...(renderButton ? [renderButton] : []),
+                ...(sourcesButton ? [sourcesButton] : []),
             ];
 
             const botReply = await replyTarget.reply({
@@ -752,28 +750,24 @@ export class HandleChatMessageUseCase {
                 endedInCodeBlock: page1EndedInCodeBlock,
                 codeBlockType: page1CodeBlockType,
             });
-
-            const sourcesLine = await sourcesLinePromise;
-            if (sourcesLine) {
-                await this.sendSourcesReply(botReply, sourcesLine);
-            }
         } else {
             // --- NON-PAGINATED PATH ---
 
-            const sourcesLine = await sourcesLinePromise;
             const responseWithFooter = discordResponse + fallbackFooter;
-            const combined =
-                sourcesLine && responseWithFooter.length + 1 + sourcesLine.length <= MESSAGE_LENGTH_LIMIT
-                    ? `${responseWithFooter}\n${sourcesLine}`
-                    : null;
+
+            const sourcesButton: IChatClientMessageButton | undefined =
+                sourceCount > 0
+                    ? { customId: SOURCES_BUTTON_ID, label: `Sources · ${sourceCount}`, style: "secondary" }
+                    : undefined;
 
             const nonPaginatedButtons: IChatClientMessageButton[] = [
                 ...(retryButton ? [retryButton] : []),
                 ...(renderButton ? [renderButton] : []),
+                ...(sourcesButton ? [sourcesButton] : []),
             ];
 
             const botReply = await replyTarget.reply({
-                content: (replyPrefix ? `${replyPrefix} ` : "") + (combined ?? responseWithFooter),
+                content: (replyPrefix ? `${replyPrefix} ` : "") + responseWithFooter,
                 ...(nonPaginatedButtons.length > 0 && { buttons: nonPaginatedButtons }),
                 ...(!pingUser && {
                     allowedMentions: {
@@ -797,10 +791,6 @@ export class HandleChatMessageUseCase {
                 interactionType: interactionType ?? null,
                 interactionAuthorDiscordId: interactionAuthorDiscordId ?? null,
             });
-
-            if (sourcesLine && !combined) {
-                await this.sendSourcesReply(botReply, sourcesLine);
-            }
         }
 
         span.setAttributes({
@@ -809,52 +799,14 @@ export class HandleChatMessageUseCase {
         });
     }
 
-    /** Sends grounding source citations as a follow-up reply and persists the row. */
-    private async sendSourcesReply(replyTo: IChatClientMessage, sourcesLine: string): Promise<void> {
-        try {
-            const sourcesReply = await replyTo.reply({ content: sourcesLine });
-            await this.messageRepo.saveBotPlaceholderMessage({
-                discordMessageId: sourcesReply.id,
-                repliesToDiscordId: replyTo.id,
-                channelId: sourcesReply.channelId,
-                guildId: sourcesReply.guildId ?? DM_GUILD_TOKEN,
-                discordAuthorId: this.bot.userId,
-            });
-        } catch (err) {
-            this.logger.warn({ err }, "Failed to send grounding sources reply");
-        }
-    }
-
     /**
-     * Extracts grounding source chunks from the last AIMessage in `newMessages` and
-     * formats them as a Discord sources line. Returns null when no grounding data is present.
+     * Returns true when the last message in `newMessages` contains web grounding chunks,
+     * indicating the Sources button should be shown.
      */
-    private async resolveGroundingSources(newMessages: BaseMessage[]): Promise<string | null> {
+    private countResponseSources(newMessages: BaseMessage[]): number {
         const lastMessage = newMessages.at(-1);
-        if (!(lastMessage instanceof AIMessage)) return null;
-
-        const rawChunks = extractWebGroundingChunks(lastMessage.additional_kwargs);
-        if (rawChunks.length === 0) return null;
-
-        const GOOGLE_REDIRECT_PREFIX = "https://vertexaisearch.cloud.google.com";
-
-        const sources = await Promise.all(
-            rawChunks.map(async ({ uri, title }) => {
-                if (this.searchMode === SearchMode.google) {
-                    if (!uri.startsWith(GOOGLE_REDIRECT_PREFIX)) {
-                        this.logger.error(
-                            { uri },
-                            "Google Search grounding URI does not match expected redirect prefix — may need updating",
-                        );
-                        return { title, url: uri };
-                    }
-                    return { title, url: await shortenRedirectUrl(uri) };
-                }
-                return { title, url: uri };
-            }),
-        );
-
-        return formatGroundingSources(sources);
+        if (!lastMessage) return 0;
+        return extractWebGroundingChunks(lastMessage.additional_kwargs).length;
     }
 
     /**

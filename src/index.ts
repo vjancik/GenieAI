@@ -23,6 +23,7 @@ import { HandleChatMessageUseCase } from "./application/use-cases/HandleChatMess
 import { HandleExportUseCase } from "./application/use-cases/HandleMessageExport.ts";
 import { HandleNextPageUseCase } from "./application/use-cases/HandleMessageNextPage.ts";
 import { HandleRetryUseCase } from "./application/use-cases/HandleMessageRetry.ts";
+import { HandleSourcesUseCase } from "./application/use-cases/HandleMessageSources.ts";
 import { HandleSummarizeUseCase } from "./application/use-cases/HandleMessageSummarize.ts";
 import { FetchAttachmentDownloader } from "./infrastructure/attachments/FetchAttachmentDownloader.ts";
 import { FetchStreamingAttachmentDownloader } from "./infrastructure/attachments/FetchStreamingAttachmentDownloader.ts";
@@ -67,25 +68,31 @@ const config = await configProvider.get();
 
 // Database
 const db = createDb(config.databaseUrl);
-const messageRepository = new PgMessageRepository(db, logger.child({ module: "repository" }));
-const geminiApiKeyRepository = new PgGeminiApiKeyRepository(db, logger.child({ module: "repository:apiKey" }));
-const geminiFileRepository = new PgGeminiFileRepository(db, logger.child({ module: "repository:gemini" }));
+const messageRepository = new PgMessageRepository(db, logger.child({ module: "repository:messages" }));
+const geminiApiKeyRepository = new PgGeminiApiKeyRepository(db, logger.child({ module: "repository:gemini-api-keys" }));
+const geminiFileRepository = new PgGeminiFileRepository(db, logger.child({ module: "repository:gemini-files" }));
 
 // Sync API keys from env → DB to assign stable UUIDs (required before wiring providers)
-const apiKeySyncService = new GeminiApiKeySyncService(geminiApiKeyRepository, logger.child({ module: "apiKeySync" }));
+const apiKeySyncService = new GeminiApiKeySyncService(
+    geminiApiKeyRepository,
+    logger.child({ module: "service:api-key-sync" }),
+);
 const { freeKeys, paidKey } = await apiKeySyncService.sync(config.googleFreeApiKeys, config.googlePaidApiKey);
 
 // Attachment infrastructure
-const attachmentDownloader = new FetchAttachmentDownloader(logger.child({ module: "attachments" }), config);
+const attachmentDownloader = new FetchAttachmentDownloader(
+    logger.child({ module: "attachments:memory-downloader" }),
+    config,
+);
 const streamingDownloader = new FetchStreamingAttachmentDownloader(
-    logger.child({ module: "attachments:streaming" }),
+    logger.child({ module: "attachments:streaming-downloader" }),
     config,
 );
 
 // Lazy uploader registry — one GenaiFileUploader per API key, constructed on first use
 const uploaderRegistry = new GenaiFileUploaderRegistry(
     [...freeKeys, ...(paidKey !== null ? [paidKey] : [])],
-    logger.child({ module: "attachments:uploaderRegistry" }),
+    logger.child({ module: "attachments:uploader-registry" }),
     config.file,
 );
 
@@ -135,11 +142,11 @@ const searchProvider = new SearchModelProvider({
 });
 
 // Discord client lifecycle wrapper — created before use cases and gateway so both can share it
-const discordClient = new DiscordClient(config.discordToken, logger.child({ module: "discord-client" }));
+const discordClient = new DiscordClient(config.discordToken, logger.child({ module: "discord:client" }));
 const commandRegistry = new DiscordCommandRegistry(
     discordClient,
     config.discordClientId,
-    logger.child({ module: "discord-commands" }),
+    logger.child({ module: "discord:commands" }),
 );
 
 const discordMediaService = new DiscordMediaService(discordClient);
@@ -181,7 +188,7 @@ const agentOrchestrator = new AgentOrchestrator(
     resilientInvoker,
     getWebsiteTool,
     getVideoCaptionsTool,
-    logger.child({ module: "agent-orchestrator" }),
+    logger.child({ module: "agent" }),
     config,
     tavilyTool,
     tavilyOnlyTriageProvider,
@@ -190,7 +197,7 @@ const agentOrchestrator = new AgentOrchestrator(
 // Live Discord chain fetch service — used as fallback when DB reply chain is empty
 const discordChatMessageService = new DiscordChatMessageService(
     discordClient,
-    logger.child({ module: "discord-chat" }),
+    logger.child({ module: "service:discord-messages" }),
     config.file,
 );
 
@@ -209,12 +216,11 @@ const handleChatMessageUseCase = new HandleChatMessageUseCase(
     agentOrchestrator,
     messageRepository,
     statusUpdater,
-    logger.child({ module: "handle-chat-message-use-case" }),
+    logger.child({ module: "use-case:handle-chat-message" }),
     discordClientBot,
     config.file.discord.previousBotId,
     messagePageRepository,
     config.file.discord.retries,
-    config.file.agent.nodes.search.mode,
     discordChatMessageService,
     config.file.discord.enableInDMs,
     isInlineMode ? inlineMediaNormalizer : undefined,
@@ -229,21 +235,25 @@ const handleNextPageUseCase = new HandleNextPageUseCase(
     messageRepository,
     messagePageRepository,
     discordClientBot,
-    logger.child({ module: "next-page" }),
+    logger.child({ module: "use-case:next-page" }),
     interactionLock,
 );
 const handleRetryUseCase = new HandleRetryUseCase(
     handleChatMessageUseCase,
     messageRepository,
-    discordClientBot,
-    logger.child({ module: "retry" }),
+    logger.child({ module: "use-case:retry" }),
     interactionLock,
+);
+const handleSourcesUseCase = new HandleSourcesUseCase(
+    messageRepository,
+    config.file.agent.nodes.search.mode,
+    logger.child({ module: "use-case:sources" }),
 );
 const handleSummarizeUseCase = new HandleSummarizeUseCase(
     handleChatMessageUseCase,
     messageRepository,
     discordClientBot,
-    logger.child({ module: "summarize" }),
+    logger.child({ module: "use-case:summarize" }),
     config.file.discord.enableInDMs,
 );
 const handleExportUseCase = new HandleExportUseCase(
@@ -251,7 +261,7 @@ const handleExportUseCase = new HandleExportUseCase(
     markdownToHtml,
     htmlToImage,
     discordClientBot,
-    logger.child({ module: "export" }),
+    logger.child({ module: "use-case:export" }),
     config.file.discord.previousBotId,
     interactionLock,
 );
@@ -263,11 +273,12 @@ const rateLimiter = new RateLimiter([
 const discordGateway = new DiscordGateway(
     discordClient,
     handleChatMessageUseCase,
-    logger.child({ module: "discord" }),
+    logger.child({ module: "discord:gateway" }),
     handleNextPageUseCase,
     handleRetryUseCase,
     handleSummarizeUseCase,
     handleExportUseCase,
+    handleSourcesUseCase,
     rateLimiter,
 );
 

@@ -31,8 +31,6 @@
 ## ChatClient Interface Rules
 - coalesce all `undefined`s to `null`, properties should ever only be nullable, never undefined
 - do not define return types on methods of concrete implementations of abstract interfaces
-- if the interface method return type is void or Promise<void> make sure to preceed the last statement in the implementation
-  with a `void` keyword to prevent implicit returns 
 
 # Database Rules
 - prefer prepared statements for repeated queries

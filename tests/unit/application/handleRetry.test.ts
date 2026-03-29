@@ -2,7 +2,6 @@ import { describe, expect, it, mock } from "bun:test";
 import type { BaseMessage } from "@langchain/core/messages";
 import pino from "pino";
 import type {
-    IChatClientBot,
     IChatClientButtonInteraction,
     IChatClientChannel,
     IChatClientMessage,
@@ -119,10 +118,6 @@ function makeMessageRepo(overrides: Partial<IMessageRepository> = {}): IMessageR
     };
 }
 
-function makeBot(userId = BOT_USER_ID): IChatClientBot {
-    return { userId } as IChatClientBot;
-}
-
 function makeChatMessageUseCase(): HandleChatMessageUseCase {
     return {
         execute: mock(async () => {}),
@@ -155,14 +150,12 @@ function makeUseCase(
     overrides: {
         handleChatMessage?: HandleChatMessageUseCase;
         messageRepo?: IMessageRepository;
-        bot?: IChatClientBot;
         interactionLock?: IInteractionLock;
     } = {},
 ): HandleRetryUseCase {
     return new HandleRetryUseCase(
         overrides.handleChatMessage ?? makeChatMessageUseCase(),
         overrides.messageRepo ?? makeMessageRepo(),
-        overrides.bot ?? makeBot(),
         logger,
         overrides.interactionLock ?? makeInteractionLock(),
     );
@@ -408,65 +401,6 @@ describe("HandleRetryUseCase", () => {
         );
     });
 
-    it("deletes dangling sources message from Discord and DB when found after deleted message", async () => {
-        const sourcesMsg = makeMessage({
-            id: "sources-msg-1",
-            authorId: BOT_USER_ID,
-            isAuthorBot: true,
-            content: "*Sources: [Example](<https://example.com>)*",
-            referencedMessageId: "bot-msg-1",
-        });
-        const channel: IChatClientChannel = {
-            fetchMessage: mock(async () => makeMessage({ id: "orig-1", content: "!ai hello" })),
-            fetchMessagesAfter: mock(async () => [sourcesMsg]),
-        };
-        const deleteByDiscordMessageId = mock(async () => {});
-        const messageRepo = makeMessageRepo({
-            fetchChain: mock(async () => [makeHumanRecord(), makeBotRecord()]),
-            deleteByDiscordMessageId,
-        });
-        const useCase = makeUseCase({ messageRepo });
-        const interaction = makeButtonInteraction({ messageId: "bot-msg-1", referencedMessageId: "orig-1", channel });
-
-        await useCase.execute(interaction);
-        await new Promise((r) => setTimeout(r, 0));
-
-        expect(sourcesMsg.delete).toHaveBeenCalled();
-        expect(deleteByDiscordMessageId).toHaveBeenCalledWith(
-            expect.objectContaining({ discordMessageId: "sources-msg-1" }),
-        );
-    });
-
-    it("does not delete non-sources bot messages during dangling cleanup", async () => {
-        const otherMsg = makeMessage({
-            id: "other-bot-msg",
-            authorId: BOT_USER_ID,
-            isAuthorBot: true,
-            content: "Some other bot message",
-            referencedMessageId: "bot-msg-1",
-        });
-        const channel: IChatClientChannel = {
-            fetchMessage: mock(async () => makeMessage({ id: "orig-1", content: "!ai hello" })),
-            fetchMessagesAfter: mock(async () => [otherMsg]),
-        };
-        const deleteByDiscordMessageId = mock(async () => {});
-        const messageRepo = makeMessageRepo({
-            fetchChain: mock(async () => [makeHumanRecord(), makeBotRecord()]),
-            deleteByDiscordMessageId,
-        });
-        const useCase = makeUseCase({ messageRepo });
-        const interaction = makeButtonInteraction({ messageId: "bot-msg-1", referencedMessageId: "orig-1", channel });
-
-        await useCase.execute(interaction);
-        await new Promise((r) => setTimeout(r, 0));
-
-        expect(otherMsg.delete).not.toHaveBeenCalled();
-        const ids = (deleteByDiscordMessageId.mock.calls as unknown as [{ discordMessageId: string }][]).map(
-            ([arg]) => arg.discordMessageId,
-        );
-        expect(ids).not.toContain("other-bot-msg");
-    });
-
     it("continues with retry when interaction.message.delete() throws", async () => {
         const originalMsg = makeMessage({ id: "orig-1", content: "!ai hello" });
         const channel: IChatClientChannel = {
@@ -510,48 +444,5 @@ describe("HandleRetryUseCase", () => {
         // Should not throw even though DB delete fails (fire-and-forget)
         await expect(useCase.execute(interaction)).resolves.toBeUndefined();
         expect(handleChatMessage.invokeAgentAndReply).toHaveBeenCalled();
-    });
-
-    it("does not crash when sources message delete() throws during dangling cleanup", async () => {
-        const sourcesMsg = makeMessage({
-            id: "sources-msg-1",
-            authorId: BOT_USER_ID,
-            isAuthorBot: true,
-            content: "*Sources: [Example](<https://example.com>)*",
-            referencedMessageId: "bot-msg-1",
-        });
-        // Override delete on sourcesMsg to throw
-        (sourcesMsg.delete as ReturnType<typeof mock>).mockImplementation(async () => {
-            throw new Error("sources delete failed");
-        });
-        const channel: IChatClientChannel = {
-            fetchMessage: mock(async () => makeMessage({ id: "orig-1", content: "!ai hello" })),
-            fetchMessagesAfter: mock(async () => [sourcesMsg]),
-        };
-        const messageRepo = makeMessageRepo({
-            fetchChain: mock(async () => [makeHumanRecord(), makeBotRecord()]),
-            deleteByDiscordMessageId: mock(async () => {}),
-        });
-        const useCase = makeUseCase({ messageRepo });
-        const interaction = makeButtonInteraction({ messageId: "bot-msg-1", referencedMessageId: "orig-1", channel });
-
-        await expect(useCase.execute(interaction)).resolves.toBeUndefined();
-    });
-
-    it("does not crash when fetchMessagesAfter throws during dangling cleanup", async () => {
-        const channel: IChatClientChannel = {
-            fetchMessage: mock(async () => makeMessage({ id: "orig-1", content: "!ai hello" })),
-            fetchMessagesAfter: mock(async () => {
-                throw new Error("fetch failed");
-            }),
-        };
-        const messageRepo = makeMessageRepo({
-            fetchChain: mock(async () => [makeHumanRecord(), makeBotRecord()]),
-            deleteByDiscordMessageId: mock(async () => {}),
-        });
-        const useCase = makeUseCase({ messageRepo });
-        const interaction = makeButtonInteraction({ messageId: "bot-msg-1", referencedMessageId: "orig-1", channel });
-
-        await expect(useCase.execute(interaction)).resolves.toBeUndefined();
     });
 });

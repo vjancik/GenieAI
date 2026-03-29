@@ -11,13 +11,8 @@ import type {
 import type { IImageRenderer } from "../ports/IImageRenderer.ts";
 import type { IInteractionLock } from "../ports/IInteractionLock.ts";
 import type { IMarkdownRenderer } from "../ports/IMarkdownRenderer.ts";
+import { DM_GUILD_TOKEN, RENDER_BUTTON_ID } from "../shared/tokens.ts";
 import type { Logger } from "../types/Logger.ts";
-
-/** Sentinel value stored as guild_id for DM messages, which have no guild. */
-const DM_GUILD_TOKEN = "@me";
-
-/** Custom ID for the Render button attached to responses containing extended markdown. */
-const RENDER_BUTTON_ID = "render_image";
 
 /**
  * Returns the button array for `message` with the button matching `removeId` filtered out.
@@ -81,7 +76,7 @@ export class HandleExportUseCase {
 
         const markdown = await this.resolveExportContent(target);
         if (!markdown.trim()) {
-            void (await interaction.editReply({ content: "*The message has no text content.*" }));
+            await interaction.editReply({ content: "*The message has no text content.*" });
             return;
         }
         const html = this.markdownRenderer.render(markdown);
@@ -117,7 +112,7 @@ export class HandleExportUseCase {
 
         const markdown = await this.resolveExportContent(target);
         if (!markdown.trim()) {
-            void (await interaction.editReply({ content: "*The message has no text content.*" }));
+            await interaction.editReply({ content: "*The message has no text content.*" });
             return;
         }
         const html = this.markdownRenderer.render(markdown);

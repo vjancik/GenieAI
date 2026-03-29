@@ -7,11 +7,9 @@ import type {
     IChatClientContextMenuInteraction,
     IChatClientMessage,
 } from "../ports/chat/IChatClient.ts";
+import { DM_GUILD_TOKEN } from "../shared/tokens.ts";
 import type { Logger } from "../types/Logger.ts";
 import type { HandleChatMessageUseCase } from "./HandleChatMessage.ts";
-
-/** Sentinel value stored as guild_id for DM messages, which have no guild. */
-const DM_GUILD_TOKEN = "@me";
 
 /**
  * Application use case: handles the Summarize message context menu command.
@@ -60,18 +58,18 @@ export class HandleSummarizeUseCase {
 
                 // Reject the command in DMs when DM support is disabled
                 if (interaction.isDM && !this.enableInDMs) {
-                    void (await interaction.reply({
+                    await interaction.reply({
                         content: "*Use of this command is currently disabled in DMs.*",
                         isEphemeral: true,
-                    }));
+                    });
                     return;
                 }
 
                 if (!interaction.canSendMessageInTargetChannel) {
-                    void (await interaction.reply({
+                    await interaction.reply({
                         content: "*I don't have permission to send messages in this channel.*",
                         isEphemeral: true,
-                    }));
+                    });
                     return;
                 }
 

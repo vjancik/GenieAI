@@ -10,16 +10,11 @@ import type {
 } from "../ports/chat/IChatClient.ts";
 import type { IGetNextPageQuery } from "../ports/IGetNextPageQuery.ts";
 import type { IInteractionLock } from "../ports/IInteractionLock.ts";
+import { DM_GUILD_TOKEN, NEXT_PAGE_BUTTON_ID } from "../shared/tokens.ts";
 import type { Logger } from "../types/Logger.ts";
 
 /** Discord's maximum message length in characters. */
 const MESSAGE_LENGTH_LIMIT = 2000;
-
-/** Sentinel value stored as guild_id for DM messages, which have no guild. */
-const DM_GUILD_TOKEN = "@me";
-
-/** Custom ID for the Next Page button attached to paginated bot responses. */
-const NEXT_PAGE_BUTTON_ID = "next_page";
 
 /**
  * Returns the button array for `message` with the button matching `removeId` filtered out.

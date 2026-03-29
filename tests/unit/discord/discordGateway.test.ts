@@ -5,6 +5,7 @@ import type { HandleChatMessageUseCase } from "../../../src/application/use-case
 import type { HandleExportUseCase } from "../../../src/application/use-cases/HandleMessageExport.ts";
 import type { HandleNextPageUseCase } from "../../../src/application/use-cases/HandleMessageNextPage.ts";
 import type { HandleRetryUseCase } from "../../../src/application/use-cases/HandleMessageRetry.ts";
+import type { HandleSourcesUseCase } from "../../../src/application/use-cases/HandleMessageSources.ts";
 import type { HandleSummarizeUseCase } from "../../../src/application/use-cases/HandleMessageSummarize.ts";
 import type { DiscordClient } from "../../../src/infrastructure/discord/DiscordClient.ts";
 import { DiscordGateway } from "../../../src/infrastructure/discord/DiscordGateway.ts";
@@ -107,6 +108,10 @@ function makeHandleExportUseCase(): HandleExportUseCase {
     } as unknown as HandleExportUseCase;
 }
 
+function makeHandleSourcesUseCase(): HandleSourcesUseCase {
+    return { execute: mock(async () => {}) } as unknown as HandleSourcesUseCase;
+}
+
 /** Constructs a DiscordGateway with all dependencies stubbed. */
 function makeGateway(
     overrides: {
@@ -115,6 +120,7 @@ function makeGateway(
         handleRetry?: HandleRetryUseCase;
         handleSummarize?: HandleSummarizeUseCase;
         handleExport?: HandleExportUseCase;
+        handleSources?: HandleSourcesUseCase;
         rateLimiter?: RateLimiter;
     } = {},
 ): DiscordGateway {
@@ -129,6 +135,7 @@ function makeGateway(
         overrides.handleRetry ?? makeHandleRetryUseCase(),
         overrides.handleSummarize ?? makeHandleSummarizeUseCase(),
         overrides.handleExport ?? makeHandleExportUseCase(),
+        overrides.handleSources ?? makeHandleSourcesUseCase(),
         overrides.rateLimiter ?? new RateLimiter([{ windowMs: 60_000, limit: 100 }]),
     );
 }

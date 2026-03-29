@@ -1,7 +1,6 @@
 import { describe, expect, it, mock } from "bun:test";
-import { AIMessage, type BaseMessage } from "@langchain/core/messages";
+import type { BaseMessage } from "@langchain/core/messages";
 import pino from "pino";
-import { SearchMode } from "../../../src/application/config/AppConfig.ts";
 import type {
     IChatClientBot,
     IChatClientMessage,
@@ -115,7 +114,6 @@ function makeUseCase(
         bot?: IChatClientBot;
         previousBotId?: string;
         retries?: number;
-        searchMode?: SearchMode;
     } = {},
 ): HandleChatMessageUseCase {
     return new HandleChatMessageUseCase(
@@ -127,7 +125,6 @@ function makeUseCase(
         overrides.previousBotId,
         overrides.messagePageRepo ?? makePageRepo(),
         overrides.retries ?? 0,
-        overrides.searchMode ?? SearchMode.tavily,
     );
 }
 
@@ -322,72 +319,5 @@ describe("HandleChatMessageUseCase.invokeAgent", () => {
         // isRetryable is true when processMessage catches an error (allows retry button)
         expect(result.isRetryable).toBe(true);
         expect(result.thinkingMessagePromise).toBeDefined();
-    });
-});
-
-// ---------------------------------------------------------------------------
-// sendAgentResponse — sendSourcesReply persists separate sources row
-// ---------------------------------------------------------------------------
-
-describe("HandleChatMessageUseCase — sendSourcesReply", () => {
-    it("sends sources as a separate reply and persists a row when sources don't fit inline", async () => {
-        // Build an AIMessage with grounding metadata so resolveGroundingSources returns a sourcesLine
-        // Use 1960-char response + sourcesLine (~46 chars): 1960+1+46=2007 > 2000, so sources won't fit inline
-        const responseContent = "A".repeat(1960);
-        const aiMsg = new AIMessage({
-            content: responseContent,
-            additional_kwargs: {
-                groundingMetadata: {
-                    groundingChunks: [{ web: { uri: "https://example.com/a", title: "Example A" } }],
-                },
-            },
-        });
-
-        const orchestrator: IAgentOrchestrator = {
-            buildHistory: mock(() => []),
-            process: mock(async (_history, _intent, onStatusUpdate) => {
-                onStatusUpdate?.({ type: AgentStatusType.SEARCHING });
-                return {
-                    content: responseContent,
-                    newMessages: [aiMsg] as BaseMessage[],
-                    isRetryable: false,
-                    usedFallback: false,
-                };
-            }),
-        } as unknown as IAgentOrchestrator;
-
-        const messageRepo = makeMessageRepo();
-
-        // The bot reply returned by replyTarget.reply() needs its own reply() for sendSourcesReply
-        const sourcesReplyMsg = makeMessage({ id: "sources-reply-1", authorId: BOT_USER_ID, isAuthorBot: true });
-        const botReplyMsg = makeMessage({
-            id: "bot-reply-1",
-            authorId: BOT_USER_ID,
-            isAuthorBot: true,
-            reply: mock(async () => sourcesReplyMsg),
-        });
-
-        // The thinking message is sent first, then deleted; bot reply is sent separately
-        const thinkingMsg = makeMessage({ id: "thinking-src", authorId: BOT_USER_ID, isAuthorBot: true });
-        let callCount = 0;
-        const msg = makeMessage({
-            id: "user-msg-src",
-            content: "!ai hello",
-            reply: mock(async () => {
-                // First call = thinking placeholder, second call = actual bot reply
-                callCount++;
-                return callCount === 1 ? thinkingMsg : botReplyMsg;
-            }),
-        });
-
-        const useCase = makeUseCase({ orchestrator, messageRepo });
-        await useCase.execute({ message: msg, shutdownPending: false, isRateLimited: false });
-
-        // saveBotMessage called once for the main bot reply
-        expect(messageRepo.saveBotMessage).toHaveBeenCalledTimes(1);
-        // saveBotPlaceholderMessage called once for the sources follow-up
-        expect(messageRepo.saveBotPlaceholderMessage).toHaveBeenCalledTimes(1);
-        const placeholderCall = (messageRepo.saveBotPlaceholderMessage as ReturnType<typeof mock>).mock.calls[0];
-        expect((placeholderCall?.[0] as Record<string, unknown>).discordMessageId).toBe("sources-reply-1");
     });
 });

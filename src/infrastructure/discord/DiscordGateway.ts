@@ -1,31 +1,27 @@
 import * as Sentry from "@sentry/bun";
 import { Events, MessageFlags } from "discord.js";
 import type { IChatClientMessage } from "../../application/ports/chat/IChatClient.ts";
+import {
+    EXPORT_HTML_COMMAND_NAME,
+    EXPORT_IMAGE_COMMAND_NAME,
+    NEXT_PAGE_BUTTON_ID,
+    RENDER_BUTTON_ID,
+    RETRY_BUTTON_ID,
+    SOURCES_BUTTON_ID,
+    SUMMARIZE_COMMAND_NAME,
+} from "../../application/shared/tokens.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import type { HandleChatMessageUseCase } from "../../application/use-cases/HandleChatMessage.ts";
 import type { HandleExportUseCase } from "../../application/use-cases/HandleMessageExport.ts";
 import type { HandleNextPageUseCase } from "../../application/use-cases/HandleMessageNextPage.ts";
 import type { HandleRetryUseCase } from "../../application/use-cases/HandleMessageRetry.ts";
+import type { HandleSourcesUseCase } from "../../application/use-cases/HandleMessageSources.ts";
 import type { HandleSummarizeUseCase } from "../../application/use-cases/HandleMessageSummarize.ts";
 import { DiscordClientButtonInteraction } from "./adapters/DiscordClientButtonInteraction.ts";
 import { DiscordClientContextMenuInteraction } from "./adapters/DiscordClientContextMenuInteraction.ts";
 import { DiscordClientMessage } from "./adapters/DiscordClientMessage.ts";
 import type { DiscordClient } from "./DiscordClient.ts";
-import {
-    EXPORT_HTML_COMMAND_NAME,
-    EXPORT_IMAGE_COMMAND_NAME,
-    SUMMARIZE_COMMAND_NAME,
-} from "./DiscordCommandRegistry.ts";
 import type { RateLimiter } from "./RateLimiter.ts";
-
-/** Custom ID for the Retry button — needed only for event routing in this class. */
-const RETRY_BUTTON_ID = "retry_mention";
-
-/** Custom ID for the Next Page button — needed only for event routing in this class. */
-const NEXT_PAGE_BUTTON_ID = "next_page";
-
-/** Custom ID for the Render button — needed only for event routing in this class. */
-const RENDER_BUTTON_ID = "render_image";
 
 /**
  * Manages Discord event dispatching for incoming messages and button interactions.
@@ -56,6 +52,7 @@ export class DiscordGateway {
         private readonly handleRetryUseCase: HandleRetryUseCase,
         private readonly handleSummarizeUseCase: HandleSummarizeUseCase,
         private readonly handleExportUseCase: HandleExportUseCase,
+        private readonly handleSourcesUseCase: HandleSourcesUseCase,
         private readonly rateLimiter: RateLimiter,
     ) {
         this.client = discordClient.client;
@@ -99,6 +96,8 @@ export class DiscordGateway {
                 this.trackHandler(this.guard(this.handleNextPageUseCase.execute(wrapped), NEXT_PAGE_BUTTON_ID));
             } else if (interaction.customId === RENDER_BUTTON_ID) {
                 this.trackHandler(this.guard(this.handleExportUseCase.handleRender(wrapped), RENDER_BUTTON_ID));
+            } else if (interaction.customId === SOURCES_BUTTON_ID) {
+                this.trackHandler(this.guard(this.handleSourcesUseCase.execute(wrapped), SOURCES_BUTTON_ID));
             }
         });
 
