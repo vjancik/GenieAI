@@ -60,7 +60,7 @@
         "@sentry/bun": "^10.42.0",
         "discord.js": "^14.25.1",
         "drizzle-orm": "^0.45.1",
-        "katex": "^0.16.40",
+        "katex": "^0.16.44",
         "langchain": "^1.2.36",
         "lru-cache": "^11.2.7",
         "marked": "^17.0.5",
