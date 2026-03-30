@@ -138,9 +138,10 @@ Key things to configure:
 ## Discord Setup
 
 1. In the [Discord Developer Portal](https://discord.com/developers/applications), enable the **Message Content** privileged intent for your application.
-2. Invite the bot to your server with the `bot` scope and the following permissions:
-   - **Attach Files**, **Manage Messages**, **Read Message History**, **Send Messages** (required)
-   - **Send Messages in Threads** (optional — required only if you want the bot to respond inside threads)
+2. Under **Installation**, enable **Guild Install** (required) and optionally **User Install** (allows users to add the bot to their account and use the commands in DMs with the bot).
+   - Guild Install scopes: `applications.commands`, `bot`
+   - Guild Install permissions: **Attach Files**, **Manage Messages**, **Read Message History**, **Send Messages** (required), **Send Messages in Threads** (optional — required only if you want the bot to respond inside threads)
+   - User Install scope: `applications.commands`
 3. Mention the bot in any channel to start a conversation:
    > `@Genie what is the capital of France?`
 
