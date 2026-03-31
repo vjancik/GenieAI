@@ -79,7 +79,6 @@ async function streamingInvoke(
         throw err;
     }
 
-    // TODO: Temporary solution, improve
     return new AIMessage({ ...collected });
 }
 

@@ -134,7 +134,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                 const tokenUrls = new Set<string>();
                 const fileUris = new Set<string>();
                 for (const msg of messages) {
-                    if (!(msg instanceof HumanMessage) || !Array.isArray(msg.content)) continue;
+                    if (!Array.isArray(msg.content)) continue;
                     for (const block of msg.content as unknown[]) {
                         if (isTokenBlock(block)) tokenUrls.add(block.url);
                         else if (isFileUriBlock(block)) fileUris.add(block.fileUri);
@@ -477,7 +477,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
      */
     private applyResolutions(messages: BaseMessage[], resolved: Map<string, string | null>): BaseMessage[] {
         return messages.map((msg) => {
-            if (!(msg instanceof HumanMessage) || !Array.isArray(msg.content)) return msg;
+            if (!Array.isArray(msg.content)) return msg;
 
             let modified = false;
             const newBlocks = [];

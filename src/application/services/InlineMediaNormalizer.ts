@@ -62,7 +62,7 @@ export class InlineMediaNormalizer implements IInlineMediaNormalizer {
         let statusFired = false;
 
         for (const msg of messages) {
-            if (!(msg instanceof HumanMessage) || !Array.isArray(msg.content)) {
+            if (!Array.isArray(msg.content)) {
                 result.push(msg);
                 continue;
             }
