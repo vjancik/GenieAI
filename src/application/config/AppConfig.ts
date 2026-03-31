@@ -396,12 +396,7 @@ export type AppConfig = EnvConfig & { file: FileConfigWithComputed };
  * Only plain objects are recursed — arrays and primitives are not walked.
  * Used to warn about unknown/misspelled keys in the yaml config file.
  */
-function collectUnknownKeys(
-    value: Record<string, unknown>,
-    // biome-ignore lint/suspicious/noExplicitAny: zod internal shape type is unavoidably any
-    schemaShape: Record<string, any>,
-    path = "",
-): string[] {
+function collectUnknownKeys(value: Record<string, unknown>, schemaShape: Record<string, unknown>, path = ""): string[] {
     const unknown: string[] = [];
     for (const key of Object.keys(value)) {
         const fullPath = path ? `${path}.${key}` : key;
@@ -415,10 +410,19 @@ function collectUnknownKeys(
                 childValue !== null &&
                 typeof childValue === "object" &&
                 !Array.isArray(childValue) &&
-                typeof childSchema?.shape === "object" &&
-                childSchema.shape !== null
+                childSchema !== null &&
+                typeof childSchema === "object" &&
+                "shape" in childSchema &&
+                childSchema.shape !== null &&
+                typeof childSchema.shape === "object"
             ) {
-                unknown.push(...collectUnknownKeys(childValue as Record<string, unknown>, childSchema.shape, fullPath));
+                unknown.push(
+                    ...collectUnknownKeys(
+                        childValue as Record<string, unknown>,
+                        childSchema.shape as Record<string, unknown>,
+                        fullPath,
+                    ),
+                );
             }
         }
     }

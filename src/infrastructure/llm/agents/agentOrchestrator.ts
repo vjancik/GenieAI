@@ -136,9 +136,7 @@ interface NodeApiKeyTypes {
 }
 
 export class AgentOrchestrator implements IAgentOrchestrator {
-    // Type inferred from buildGraph() return — avoids complex LangGraph generic annotation
-    // biome-ignore lint/suspicious/noExplicitAny: LangGraph compiled graph generic is impractical to annotate
-    private readonly graph: ReturnType<() => any>;
+    private readonly graph: ReturnType<AgentOrchestrator["buildGraph"]>;
     private readonly nodeTimeoutsMs: ModelTimeouts;
     private readonly nodeApiKeyTypes: NodeApiKeyTypes;
     private readonly searchMode: SearchMode;
