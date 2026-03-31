@@ -20,6 +20,7 @@ import { AllFreeKeysExhaustedError, PaidKeyExhaustedError } from "../../domain/e
 import { is429Error } from "./errors/is429Error.ts";
 import { isModelFallbackError } from "./errors/isModelFallbackError.ts";
 import { filterHistoryForInlineSize } from "./utils/inlineAttachmentFilter.ts";
+import { concatMessageChunks } from "./utils/langchainUtils.ts";
 
 /**
  * Streams a model, collecting all chunks into a single concatenated `AIMessage`.
@@ -71,7 +72,7 @@ async function streamingInvoke(
     let collected: AIMessageChunk = firstResult.value;
     try {
         for await (const chunk of { [Symbol.asyncIterator]: () => iterator }) {
-            collected = collected.concat(chunk);
+            collected = concatMessageChunks(collected, chunk);
         }
     } catch (err) {
         await cancelStream();
@@ -79,16 +80,7 @@ async function streamingInvoke(
     }
 
     // TODO: Temporary solution, improve
-    return new AIMessage({
-        content: collected.content,
-        tool_calls: collected.tool_calls,
-        invalid_tool_calls: collected.invalid_tool_calls,
-        usage_metadata: collected.usage_metadata,
-        additional_kwargs: collected.additional_kwargs,
-        response_metadata: collected.response_metadata,
-        id: collected.id,
-        name: collected.name,
-    });
+    return new AIMessage({ ...collected });
 }
 
 /**
