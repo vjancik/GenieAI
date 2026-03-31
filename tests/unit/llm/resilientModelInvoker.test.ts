@@ -62,29 +62,58 @@ function make503Error() {
     return Object.assign(new Error("Service Unavailable"), { status: 503 });
 }
 
+/** Model stub that yields a single chunk from stream(). */
+function makeSuccessModel(chunk: AIMessageChunk): IInvokableModel {
+    return {
+        invoke: mock(async () => chunk),
+        stream: mock(async () =>
+            (async function* () {
+                yield chunk;
+            })(),
+        ),
+    };
+}
+
+/** Model stub whose stream() throws the given error. */
+function makeErrorModel(err: unknown): IInvokableModel {
+    return {
+        invoke: mock(async () => {
+            throw err;
+        }),
+        // TYPE COERCION: async function that always throws satisfies AsyncIterable<AIMessageChunk>
+        stream: mock(
+            async () =>
+                ({
+                    [Symbol.asyncIterator]() {
+                        return {
+                            next: async () => {
+                                throw err;
+                            },
+                        };
+                    },
+                }) as AsyncIterable<AIMessageChunk>,
+        ),
+    };
+}
+
 // ---------------------------------------------------------------------------
 // invokeWithPaidKey — lines 46-51
 // ---------------------------------------------------------------------------
 
 describe("ResilientModelInvoker.invokeWithPaidKey", () => {
     test("returns result on success", async () => {
-        const response = new AIMessageChunk("paid response");
-        const model: IInvokableModel = { invoke: mock(async () => response) };
+        const model = makeSuccessModel(new AIMessageChunk("paid response"));
         const invoker = makeInvoker();
 
         const result = await invoker.invokeWithPaidKey(() => model, undefined, []);
 
-        expect(result.result).toBe(response);
+        expect(result.result.content).toBe("paid response");
         expect(result.usedFallback).toBe(false);
     });
 
     test("throws PaidKeyExhaustedError when paid key returns 429", async () => {
         const rateLimitErr = Object.assign(new Error("Too Many Requests"), { status: 429 });
-        const model: IInvokableModel = {
-            invoke: mock(async () => {
-                throw rateLimitErr;
-            }),
-        };
+        const model = makeErrorModel(rateLimitErr);
         const invoker = makeInvoker();
 
         await expect(invoker.invokeWithPaidKey(() => model, undefined, [])).rejects.toBeInstanceOf(
@@ -93,13 +122,8 @@ describe("ResilientModelInvoker.invokeWithPaidKey", () => {
     });
 
     test("uses fallback model on 503 and returns usedFallback=true", async () => {
-        const fallbackResponse = new AIMessageChunk("fallback response");
-        const primaryModel: IInvokableModel = {
-            invoke: mock(async () => {
-                throw make503Error();
-            }),
-        };
-        const fallbackModel: IInvokableModel = { invoke: mock(async () => fallbackResponse) };
+        const primaryModel = makeErrorModel(make503Error());
+        const fallbackModel = makeSuccessModel(new AIMessageChunk("fallback response"));
         const invoker = makeInvoker();
 
         const result = await invoker.invokeWithPaidKey(
@@ -108,22 +132,14 @@ describe("ResilientModelInvoker.invokeWithPaidKey", () => {
             [],
         );
 
-        expect(result.result).toBe(fallbackResponse);
+        expect(result.result.content).toBe("fallback response");
         expect(result.usedFallback).toBe(true);
     });
 
     test("throws PaidKeyExhaustedError when fallback also returns 429 on paid key", async () => {
         const rateLimitErr = Object.assign(new Error("Too Many Requests"), { status: 429 });
-        const primaryModel: IInvokableModel = {
-            invoke: mock(async () => {
-                throw make503Error();
-            }),
-        };
-        const fallbackModel: IInvokableModel = {
-            invoke: mock(async () => {
-                throw rateLimitErr;
-            }),
-        };
+        const primaryModel = makeErrorModel(make503Error());
+        const fallbackModel = makeErrorModel(rateLimitErr);
         const invoker = makeInvoker();
 
         await expect(
@@ -137,16 +153,8 @@ describe("ResilientModelInvoker.invokeWithPaidKey", () => {
 
     test("propagates non-429 fallback errors immediately", async () => {
         const unexpectedErr = new Error("unexpected network failure");
-        const primaryModel: IInvokableModel = {
-            invoke: mock(async () => {
-                throw make503Error();
-            }),
-        };
-        const fallbackModel: IInvokableModel = {
-            invoke: mock(async () => {
-                throw unexpectedErr;
-            }),
-        };
+        const primaryModel = makeErrorModel(make503Error());
+        const fallbackModel = makeErrorModel(unexpectedErr);
         const invoker = makeInvoker();
 
         await expect(
@@ -165,13 +173,8 @@ describe("ResilientModelInvoker.invokeWithPaidKey", () => {
 
 describe("ResilientModelInvoker.invokeWithFreeKeys — fallback model", () => {
     test("uses fallback model on 503 and returns usedFallback=true", async () => {
-        const fallbackResponse = new AIMessageChunk("fallback ok");
-        const primaryModel: IInvokableModel = {
-            invoke: mock(async () => {
-                throw make503Error();
-            }),
-        };
-        const fallbackModel: IInvokableModel = { invoke: mock(async () => fallbackResponse) };
+        const primaryModel = makeErrorModel(make503Error());
+        const fallbackModel = makeSuccessModel(new AIMessageChunk("fallback ok"));
         const invoker = makeInvoker();
 
         const result = await invoker.invokeWithFreeKeys(
@@ -180,17 +183,13 @@ describe("ResilientModelInvoker.invokeWithFreeKeys — fallback model", () => {
             [],
         );
 
-        expect(result.result).toBe(fallbackResponse);
+        expect(result.result.content).toBe("fallback ok");
         expect(result.usedFallback).toBe(true);
     });
 
     test("throws AllFreeKeysExhaustedError when all keys return 429", async () => {
         const rateLimitErr = Object.assign(new Error("Too Many Requests"), { status: 429 });
-        const model: IInvokableModel = {
-            invoke: mock(async () => {
-                throw rateLimitErr;
-            }),
-        };
+        const model = makeErrorModel(rateLimitErr);
         const invoker = makeInvoker(makeTwoKeyProvider());
 
         await expect(invoker.invokeWithFreeKeys(() => model, undefined, [])).rejects.toBeInstanceOf(

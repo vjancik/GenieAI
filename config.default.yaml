@@ -10,8 +10,7 @@
   #   Your answer should be shorter than 1500 characters.\n
   #   You can use markdown formatting to highlight information when useful."  # <optional>
 
-# Global fallback timeout for all model invocations (ms).
-# Superseded by per-model agent.nodes.*.timeoutMs when set.
+# Global timeout for all model request durations (ms).
 globalModelTimeoutMs: 600000 # <optional>
 
 attachmentDownloader:
@@ -64,7 +63,7 @@ agent:
       model: "gemini-3.1-flash-lite-preview"  # <required>
       apiKeyType: "free"                      # <required>
       fallbackModel: "gemini-2.5-flash"       # <optional>
-      # Maximum milliseconds to wait for a triage model response before aborting.
+      # Maximum milliseconds to wait for a triage model first chunk before aborting.
       timeoutMs: 60000                        # <required>
       thinkingLevel: "LOW"                    # <optional>
 
@@ -72,14 +71,14 @@ agent:
       model: "gemini-3-flash-preview"   # <required>
       apiKeyType: "free"                # <required>
       fallbackModel: "gemini-2.5-flash" # <optional>
-      # Maximum milliseconds to wait for a general model response before aborting.
+      # Maximum milliseconds to wait for a general model first chunk before aborting.
       timeoutMs: 120000                 # <required>
 
     search:
       model: "gemini-3-flash-preview"   # <required>
       apiKeyType: "paid"                # <required>
       fallbackModel: "gemini-2.5-flash" # <optional>
-      # Maximum milliseconds to wait for a search model response before aborting.
+      # Maximum milliseconds to wait for a search model first chunk before aborting.
       timeoutMs: 120000                 # <required>
       # Search backend to use. Options: "google" | "tavily"   <optional, default: "google">
       #   google: Google Search grounding via Gemini API. Requires GOOGLE_PAID_API_KEY.

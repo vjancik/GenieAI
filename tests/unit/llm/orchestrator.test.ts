@@ -55,10 +55,28 @@ const testConfig = {
     },
 };
 
+/** Wraps a single AIMessage in a one-chunk async iterable for stream() mocks. */
+function makeStreamIterable(msg: AIMessage) {
+    return {
+        [Symbol.asyncIterator]: () => {
+            let done = false;
+            return {
+                next: async () => {
+                    if (done) return { done: true as const, value: undefined };
+                    done = true;
+                    return { done: false, value: msg };
+                },
+            };
+        },
+    };
+}
+
 /** Helper to create a mock model that returns a given response */
 function makeModel(response: string) {
+    const msg = new AIMessage(response);
     return {
-        invoke: mock(async (_messages: BaseMessage[]) => new AIMessage(response)),
+        invoke: mock(async (_messages: BaseMessage[]) => msg),
+        stream: mock(async (_messages: BaseMessage[]) => makeStreamIterable(msg)),
     };
 }
 
@@ -72,28 +90,22 @@ function makeTool(pageContents: string, url = "https://example.com"): { invoke: 
 
 /** Helper to create a triage model mock that returns a specific tool call */
 function makeTriageWithToolCall(toolName: string, toolArgs: Record<string, unknown> = {}) {
+    const msg = new AIMessage({
+        content: "",
+        tool_calls: [{ name: toolName, args: toolArgs, id: "call_test_123", type: "tool_call" }],
+    });
     return {
-        invoke: mock(
-            async (_messages: BaseMessage[]) =>
-                new AIMessage({
-                    content: "",
-                    tool_calls: [
-                        {
-                            name: toolName,
-                            args: toolArgs,
-                            id: "call_test_123",
-                            type: "tool_call",
-                        },
-                    ],
-                }),
-        ),
+        invoke: mock(async (_messages: BaseMessage[]) => msg),
+        stream: mock(async (_messages: BaseMessage[]) => makeStreamIterable(msg)),
     };
 }
 
 /** Helper to create a triage model mock with no tool call */
 function makeTriageWithNoToolCall() {
+    const msg = new AIMessage({ content: "I am confused", tool_calls: [] });
     return {
-        invoke: mock(async (_messages: BaseMessage[]) => new AIMessage({ content: "I am confused", tool_calls: [] })),
+        invoke: mock(async (_messages: BaseMessage[]) => msg),
+        stream: mock(async (_messages: BaseMessage[]) => makeStreamIterable(msg)),
     };
 }
 
@@ -420,8 +432,8 @@ describe("Orchestrator.process", () => {
 
         const result = await orchestrator.process([new HumanMessage("What happened today?")], MessageIntent.UNKNOWN);
 
-        expect(searchModel.invoke).toHaveBeenCalledTimes(1);
-        expect(generalModel.invoke).not.toHaveBeenCalled();
+        expect(searchModel.stream).toHaveBeenCalledTimes(1);
+        expect(generalModel.stream).not.toHaveBeenCalled();
         expect(result.content).toBe("search response");
         expect(result.newMessages).toHaveLength(1);
         expect(result.newMessages[0]).toBeInstanceOf(AIMessage);
@@ -447,8 +459,8 @@ describe("Orchestrator.process", () => {
 
         const result = await orchestrator.process([new HumanMessage("Tell me a joke")], MessageIntent.UNKNOWN);
 
-        expect(generalModel.invoke).toHaveBeenCalledTimes(1);
-        expect(searchModel.invoke).not.toHaveBeenCalled();
+        expect(generalModel.stream).toHaveBeenCalledTimes(1);
+        expect(searchModel.stream).not.toHaveBeenCalled();
         expect(result.content).toBe("general response");
         expect(result.newMessages).toHaveLength(1);
         expect(result.newMessages[0]).toBeInstanceOf(AIMessage);
@@ -482,8 +494,8 @@ describe("Orchestrator.process", () => {
         expect(websiteTool.invoke).toHaveBeenCalledWith({
             urls: ["https://example.com"],
         });
-        expect(generalModel.invoke).toHaveBeenCalledTimes(1);
-        expect(searchModel.invoke).not.toHaveBeenCalled();
+        expect(generalModel.stream).toHaveBeenCalledTimes(1);
+        expect(searchModel.stream).not.toHaveBeenCalled();
         expect(result.content).toBe("summary of website");
         // triage AIMessage + ToolMessage + final AIMessage
         expect(result.newMessages).toHaveLength(3);
@@ -514,7 +526,7 @@ describe("Orchestrator.process", () => {
         expect(videoTool.invoke).toHaveBeenCalledWith({
             urls: ["https://youtube.com/watch?v=abc"],
         });
-        expect(generalModel.invoke).toHaveBeenCalledTimes(1);
+        expect(generalModel.stream).toHaveBeenCalledTimes(1);
         expect(result.content).toBe("video summary");
         // triage AIMessage + ToolMessage + final AIMessage
         expect(result.newMessages).toHaveLength(3);
@@ -540,7 +552,7 @@ describe("Orchestrator.process", () => {
 
         const result = await orchestrator.process([new HumanMessage("Hello")], MessageIntent.UNKNOWN);
 
-        expect(generalModel.invoke).toHaveBeenCalledTimes(1);
+        expect(generalModel.stream).toHaveBeenCalledTimes(1);
         expect(result.content).toBe("fallback response");
         expect(result.newMessages).toHaveLength(1);
     });
@@ -567,7 +579,7 @@ describe("Orchestrator.process", () => {
 
         await orchestrator.process([...history, new HumanMessage("Follow-up question")], MessageIntent.UNKNOWN);
 
-        const callArgs = (generalModel.invoke as ReturnType<typeof mock>).mock.calls[0]?.[0] as BaseMessage[];
+        const callArgs = (generalModel.stream as ReturnType<typeof mock>).mock.calls[0]?.[0] as BaseMessage[];
         expect(callArgs).toBeDefined();
         // Should include history messages in the invocation
         const contents = callArgs.map((m) => m.content);
@@ -586,6 +598,7 @@ describe("Orchestrator.process", () => {
         });
         const generalModel = {
             invoke: mock(async (_messages: BaseMessage[]) => thoughtResponse),
+            stream: mock(async (_messages: BaseMessage[]) => makeStreamIterable(thoughtResponse)),
         };
         const searchModel = makeModel("search response");
         const websiteTool = makeTool("website content");
@@ -608,7 +621,7 @@ describe("Orchestrator.process", () => {
         expect(result.content).toBe("The actual answer.");
         // But the full message (including thought) is preserved in newMessages
         expect(result.newMessages).toHaveLength(1);
-        expect(result.newMessages[0]).toEqual(thoughtResponse);
+        expect(result.newMessages[0]?.content).toEqual(thoughtResponse.content);
     });
 
     test("emits TRIAGE and GENERATING status updates on general route", async () => {
@@ -778,10 +791,11 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
         const provider = makeMultiKeyProvider(2);
         let generalCallCount = 0;
         const generalModel = {
-            invoke: mock(async () => {
+            invoke: mock(async () => new AIMessage("")),
+            stream: mock(async () => {
                 generalCallCount++;
                 if (generalCallCount === 1) throw make429Error();
-                return new AIMessage("success on second key");
+                return makeStreamIterable(new AIMessage("success on second key"));
             }),
         };
 
@@ -799,7 +813,8 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
         const provider = makeMultiKeyProvider(2);
         let generalCallCount = 0;
         const generalModel = {
-            invoke: mock(async () => {
+            invoke: mock(async () => new AIMessage("")),
+            stream: mock(async () => {
                 generalCallCount++;
                 if (generalCallCount === 1) {
                     // Simulate another concurrent request advancing the cursor
@@ -807,7 +822,7 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
                     provider.forceAdvance();
                     throw make429Error();
                 }
-                return new AIMessage("success on concurrent-advanced key");
+                return makeStreamIterable(new AIMessage("success on concurrent-advanced key"));
             }),
         };
 
@@ -826,7 +841,8 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
     test("throws AllFreeKeysExhaustedError when all keys return 429", async () => {
         const provider = makeMultiKeyProvider(2);
         const generalModel = {
-            invoke: mock(async () => {
+            invoke: mock(async () => new AIMessage("")),
+            stream: mock(async () => {
                 throw make429Error();
             }),
         };
@@ -848,12 +864,13 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
         const provider = makeMultiKeyProvider(2);
         let generalCallCount = 0;
         // Primary always 503s, so fallback is tried. Fallback 429s on first key, succeeds on second.
-        const fallbackInvoke = mock(async () => {
+        const fallbackStream = mock(async () => {
             if (generalCallCount === 1) throw make429Error();
-            return new AIMessage("success from fallback on second key");
+            return makeStreamIterable(new AIMessage("success from fallback on second key"));
         });
         const generalModel = {
-            invoke: mock(async () => {
+            invoke: mock(async () => new AIMessage("")),
+            stream: mock(async () => {
                 generalCallCount++;
                 throw make503Error();
             }),
@@ -863,7 +880,7 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
                 return generalModel;
             },
             getFallback(_key: unknown) {
-                return { invoke: fallbackInvoke };
+                return { invoke: mock(async () => new AIMessage("")), stream: fallbackStream };
             },
         };
 
@@ -883,17 +900,15 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
         expect(result.content).toBe("success from fallback on second key");
         // nextKey() called once: fallback on key-0 returned 429, rotate to key-1
         expect(provider.nextKey).toHaveBeenCalledTimes(1);
-        expect(fallbackInvoke).toHaveBeenCalledTimes(2);
+        expect(fallbackStream).toHaveBeenCalledTimes(2);
     });
 
     test("throws AllFreeKeysExhaustedError when all fallback model invocations return 429", async () => {
         const make503Error = () => new Error("HTTP 503 Service Unavailable");
         const provider = makeMultiKeyProvider(2);
-        const fallbackInvoke = mock(async () => {
-            throw make429Error();
-        });
         const generalModel = {
-            invoke: mock(async () => {
+            invoke: mock(async () => new AIMessage("")),
+            stream: mock(async () => {
                 throw make503Error();
             }),
         };
@@ -902,7 +917,12 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
                 return generalModel;
             },
             getFallback(_key: unknown) {
-                return { invoke: fallbackInvoke };
+                return {
+                    invoke: mock(async () => new AIMessage("")),
+                    stream: mock(async () => {
+                        throw make429Error();
+                    }),
+                };
             },
         };
 

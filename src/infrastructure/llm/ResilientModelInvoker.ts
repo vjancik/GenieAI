@@ -1,5 +1,6 @@
-import type { BaseMessage } from "@langchain/core/messages";
+import { AIMessage, type AIMessageChunk, type BaseMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
+import type { Span } from "@sentry/core";
 import {
     ApiKeyType,
     type AttachmentMode,
@@ -19,6 +20,76 @@ import { AllFreeKeysExhaustedError, PaidKeyExhaustedError } from "../../domain/e
 import { is429Error } from "./errors/is429Error.ts";
 import { isModelFallbackError } from "./errors/isModelFallbackError.ts";
 import { filterHistoryForInlineSize } from "./utils/inlineAttachmentFilter.ts";
+
+/**
+ * Streams a model, collecting all chunks into a single concatenated `AIMessage`.
+ *
+ * - `invokeOptions` is forwarded directly to `model.stream()`.
+ * - `firstChunkTimeoutMs` races against the arrival of the first streamed chunk; if no
+ *   chunk arrives within that window the stream is cancelled and a TimeoutError is thrown.
+ */
+async function streamingInvoke(
+    model: IInvokableModel,
+    messages: BaseMessage[],
+    invokeOptions?: unknown,
+    extraOptions?: { firstChunkTimeoutMs?: number; span?: Span },
+): Promise<AIMessage> {
+    const iterable = await model.stream(messages, invokeOptions);
+    const iterator = iterable[Symbol.asyncIterator]();
+
+    /** Cancel the stream and release the underlying fetch connection. Errors are swallowed
+     *  since cancellation is best-effort cleanup — the original error takes precedence. */
+    const cancelStream = async () => {
+        await iterator.return?.().catch(() => undefined);
+    };
+
+    // Race the first chunk against firstChunkTimeoutMs. This catches models that
+    // accept the request but stall before emitting any output.
+    const firstChunkTimeoutMs = extraOptions?.firstChunkTimeoutMs;
+    const invokedAt = Date.now();
+    let firstResult: IteratorResult<AIMessageChunk>;
+    if (firstChunkTimeoutMs !== undefined) {
+        const firstChunkTimeout = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new DOMException("First chunk timeout", "TimeoutError")), firstChunkTimeoutMs),
+        );
+        try {
+            firstResult = await Promise.race([iterator.next(), firstChunkTimeout]);
+        } catch (err) {
+            await cancelStream();
+            throw err;
+        }
+    } else {
+        firstResult = await iterator.next();
+    }
+
+    if (firstResult.done) {
+        throw new Error("Model stream completed without emitting any chunks");
+    }
+
+    extraOptions?.span?.setAttribute("llm.time_to_first_chunk_ms", Date.now() - invokedAt);
+
+    let collected: AIMessageChunk = firstResult.value;
+    try {
+        for await (const chunk of { [Symbol.asyncIterator]: () => iterator }) {
+            collected = collected.concat(chunk);
+        }
+    } catch (err) {
+        await cancelStream();
+        throw err;
+    }
+
+    // TODO: Temporary solution, improve
+    return new AIMessage({
+        content: collected.content,
+        tool_calls: collected.tool_calls,
+        invalid_tool_calls: collected.invalid_tool_calls,
+        usage_metadata: collected.usage_metadata,
+        additional_kwargs: collected.additional_kwargs,
+        response_metadata: collected.response_metadata,
+        id: collected.id,
+        name: collected.name,
+    });
+}
 
 /**
  * Implements resilient LLM invocation with key rotation, retry, fallback, and
@@ -162,8 +233,9 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
                             onStatusUpdate?.({ type: beforeInvokeStatus });
                         }
 
-                        const result = await getModel(key).invoke(filtered, {
-                            timeout: timeoutMs ?? this.globalTimeoutMs,
+                        const result = await streamingInvoke(getModel(key), filtered, undefined, {
+                            firstChunkTimeoutMs: timeoutMs ?? this.globalTimeoutMs,
+                            span,
                         });
                         span.setAttributes({
                             "llm.attempt_count": attempt + 1,
@@ -200,8 +272,9 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
                             );
                             try {
                                 // Reuse filtered — same key, same messages, no re-refresh needed
-                                const fallbackResult = await fallbackModel.invoke(filtered, {
-                                    timeout: timeoutMs ?? this.globalTimeoutMs,
+                                const fallbackResult = await streamingInvoke(fallbackModel, filtered, undefined, {
+                                    firstChunkTimeoutMs: timeoutMs ?? this.globalTimeoutMs,
+                                    span,
                                 });
                                 span.setAttributes({
                                     "llm.attempt_count": attempt + 1,

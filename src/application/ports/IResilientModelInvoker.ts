@@ -1,4 +1,4 @@
-import type { AIMessageChunk, BaseMessage } from "@langchain/core/messages";
+import type { AIMessage, AIMessageChunk, BaseMessage } from "@langchain/core/messages";
 import type { GeminiApiKey } from "../../domain/entities/GeminiApiKey.ts";
 import type { ApiKeyType } from "../config/AppConfig.ts";
 import type { AgentStatusType, OnStatusUpdate } from "../types/AgentStatus.ts";
@@ -6,11 +6,12 @@ import type { AgentStatusType, OnStatusUpdate } from "../types/AgentStatus.ts";
 /** Minimal invokable model interface used by the resilient invoker. */
 export interface IInvokableModel {
     invoke(messages: BaseMessage[], options?: unknown): Promise<AIMessageChunk>;
+    stream(messages: BaseMessage[], options?: unknown): Promise<AsyncIterable<AIMessageChunk>>;
 }
 
 /** Result of a resilient model invocation. */
 export interface ModelInvocationResult {
-    result: AIMessageChunk;
+    result: AIMessage;
     /** True when the primary model was unavailable and a fallback model was substituted. */
     usedFallback: boolean;
 }
