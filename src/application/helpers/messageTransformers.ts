@@ -1,12 +1,18 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import {
     AIMessage,
+    AIMessageChunk,
     ChatMessage,
+    ChatMessageChunk,
     FunctionMessage,
+    FunctionMessageChunk,
     HumanMessage,
+    HumanMessageChunk,
     RemoveMessage,
     SystemMessage,
+    SystemMessageChunk,
     ToolMessage,
+    ToolMessageChunk,
 } from "@langchain/core/messages";
 import type { PersistedChatMessage } from "../../domain/entities/Message.ts";
 import { AppError } from "../../domain/errors/AppError.ts";
@@ -57,28 +63,47 @@ function deserializeMessage(json: Record<string, unknown>, logger: Logger): Base
     switch (className) {
         case "HumanMessage":
             return new HumanMessage(kwargs);
+        case "HumanMessageChunk":
+            return new HumanMessageChunk(kwargs);
         case "AIMessage":
             return new AIMessage(kwargs);
+        case "AIMessageChunk":
+            return new AIMessageChunk(kwargs);
         case "ToolMessage":
             // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
             // ToolMessage's strict constructor union type; double cast through unknown is required.
             return new ToolMessage(kwargs as unknown as ConstructorParameters<typeof ToolMessage>[0]);
+        case "ToolMessageChunk":
+            // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
+            // ToolMessageChunk's strict constructor union type; double cast through unknown is required.
+            return new ToolMessageChunk(kwargs as unknown as ConstructorParameters<typeof ToolMessageChunk>[0]);
         case "ChatMessage":
             logger.warn({ className }, "Unexpected message type in history chain");
             // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
             // ChatMessage's strict constructor union type; double cast through unknown is required.
             return new ChatMessage(kwargs as unknown as ConstructorParameters<typeof ChatMessage>[0]);
+        case "ChatMessageChunk":
+            logger.warn({ className }, "Unexpected message type in history chain");
+            // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
+            // ChatMessageChunk's strict constructor union type; double cast through unknown is required.
+            return new ChatMessageChunk(kwargs as unknown as ConstructorParameters<typeof ChatMessageChunk>[0]);
         case "FunctionMessage":
             logger.warn({ className }, "Unexpected message type in history chain");
             // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
             // FunctionMessage's strict constructor union type; double cast through unknown is required.
             return new FunctionMessage(kwargs as unknown as ConstructorParameters<typeof FunctionMessage>[0]);
+        case "FunctionMessageChunk":
+            logger.warn({ className }, "Unexpected message type in history chain");
+            // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
+            // FunctionMessageChunk's strict constructor union type; double cast through unknown is required.
+            return new FunctionMessageChunk(kwargs as unknown as ConstructorParameters<typeof FunctionMessageChunk>[0]);
         case "RemoveMessage":
             logger.warn({ className }, "Unexpected message type in history chain");
             // TYPE COERCION: kwargs is Record<string, unknown> which doesn't satisfy
             // RemoveMessage's strict constructor union type; double cast through unknown is required.
             return new RemoveMessage(kwargs as unknown as ConstructorParameters<typeof RemoveMessage>[0]);
-        case "SystemMessage": {
+        case "SystemMessage":
+        case "SystemMessageChunk": {
             logger.error(
                 { className },
                 "SystemMessage found in stored history — this is a programmatic error; SystemMessages should be injected dynamically, not persisted",
@@ -89,7 +114,7 @@ function deserializeMessage(json: Record<string, unknown>, logger: Logger): Base
                     "SystemMessage must not be stored in history — inject it dynamically instead",
                 );
             }
-            return new SystemMessage(kwargs);
+            return className === "SystemMessageChunk" ? new SystemMessageChunk(kwargs) : new SystemMessage(kwargs);
         }
         default:
             logger.warn({ className }, "Unknown message type in history chain");
