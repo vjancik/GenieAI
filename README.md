@@ -224,7 +224,7 @@ Alerts can be routed to email, a Discord webhook, Slack, and many others via Sen
 
 ### Run tests
 
-> **Never run `bun test` directly** — it loads `.env` by default, which may point to your production database.
+> **Don't run `bun test` directly** — it loads `.env` by default, which may polute the environment variables. (Although right now there are no side effects from this)
 > Always use `bun run test` (uses `.env.test`) or the filter patterns below.
 
 ```bash

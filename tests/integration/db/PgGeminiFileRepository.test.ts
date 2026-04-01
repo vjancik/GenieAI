@@ -13,7 +13,7 @@ import { geminiFiles, geminiFileUploads, messages } from "../../../src/infrastru
  *
  * Prerequisites:
  *   - Test DB running: `bun db:test:up && bun db:test:migrate`
- *   - DATABASE_URL env var set to the test DB connection string
+ *   - DATABASE_TEST_URL env var set to the test DB connection string
  *
  * FK dependency chain:
  *   messages → gemini_files → gemini_file_uploads
@@ -22,7 +22,7 @@ import { geminiFiles, geminiFileUploads, messages } from "../../../src/infrastru
  * Each test group sets up prerequisite rows in beforeAll and cleans up in afterEach.
  */
 
-const TEST_DB_URL = process.env.DATABASE_URL ?? "postgresql://genie_test:genie_test@localhost:5433/genie_test";
+const TEST_DB_URL = process.env.DATABASE_TEST_URL ?? "postgresql://genie_test:genie_test@localhost:5433/genie_test";
 
 const testLogger = pino({ level: "silent" });
 
