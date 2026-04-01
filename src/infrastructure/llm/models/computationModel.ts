@@ -21,6 +21,7 @@ export function buildComputationSystemPrompt(basePrompt: string): string {
     return (
         basePrompt +
         "\n" +
+        "Always report the result of your computation in text as the code output may not always be shown to the user.\n" +
         `You should assume the current date is ${dateStr} and your base knowledge is outdated by more than a year. Do not mention the date unless the user asks about it.\n` +
         SYSTEM_PROMPT_FOOTER
     );

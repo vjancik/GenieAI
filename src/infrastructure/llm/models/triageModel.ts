@@ -44,9 +44,10 @@ const routeToPythonTool = tool(async () => JSON.stringify({ route: "python" }), 
     name: "route_to_python",
     description:
         "Route to the Python agent. Use this when the request would benefit from executing Python code " +
-        "to produce a result: numerical computation, data processing, statistics, graphing, plotting, " +
+        "to produce a result: numerical computation, graphing, plotting, " +
         "math problems where a calculated answer is expected, or any task that benefits from running " +
-        "actual code.",
+        "actual code. DO NOT call this agent for file processing as it can't load external files at " +
+        "the moment.",
     schema: z.object({}),
 });
 

@@ -65,18 +65,18 @@ describe("extractContent", () => {
         expect(extractContent(msg.content)).toBe("visible");
     });
 
-    it("renders executableCode as a fenced code block", () => {
+    it("suppresses executableCode parts (rendered by computation model prompt instead)", () => {
         const msg = new AIMessage({
             content: [{ type: "executableCode", executableCode: { language: "PYTHON", code: "print(1)" } }],
         });
-        expect(extractContent(msg.content)).toBe("\n```python\nprint(1)\n```\n");
+        expect(extractContent(msg.content)).toBe("");
     });
 
-    it("renders executableCode with LANGUAGE_UNSPECIFIED as a plain fence", () => {
+    it("suppresses executableCode with LANGUAGE_UNSPECIFIED", () => {
         const msg = new AIMessage({
             content: [{ type: "executableCode", executableCode: { language: "LANGUAGE_UNSPECIFIED", code: "x = 1" } }],
         });
-        expect(extractContent(msg.content)).toBe("\n```\nx = 1\n```\n");
+        expect(extractContent(msg.content)).toBe("");
     });
 
     it("omits executableCode block when code is empty", () => {
@@ -86,7 +86,7 @@ describe("extractContent", () => {
         expect(extractContent(msg.content)).toBe("");
     });
 
-    it("renders codeExecutionResult with output", () => {
+    it("suppresses codeExecutionResult parts (rendered by computation model prompt instead)", () => {
         const msg = new AIMessage({
             content: [
                 {
@@ -95,7 +95,7 @@ describe("extractContent", () => {
                 },
             ],
         });
-        expect(extractContent(msg.content)).toBe("\n```\n42\n```\n");
+        expect(extractContent(msg.content)).toBe("");
     });
 
     it("omits codeExecutionResult block when output is empty", () => {
@@ -112,7 +112,7 @@ describe("extractContent", () => {
         expect(extractContent(msg.content)).toBe("");
     });
 
-    it("interleaves text and code blocks preserving text whitespace", () => {
+    it("interleaves text parts and suppresses code blocks", () => {
         const msg = new AIMessage({
             content: [
                 { type: "text", text: "Here is the code:\n" },
@@ -121,9 +121,7 @@ describe("extractContent", () => {
                 { type: "codeExecutionResult", codeExecutionResult: { outcome: "OUTCOME_OK", output: "1" } },
             ],
         });
-        expect(extractContent(msg.content)).toBe(
-            "Here is the code:\n\n```python\nprint(1)\n```\nAnd the output:\n\n```\n1\n```\n",
-        );
+        expect(extractContent(msg.content)).toBe("Here is the code:\nAnd the output:\n");
     });
 
     it("ignores non-extractable parts like tool_use", () => {

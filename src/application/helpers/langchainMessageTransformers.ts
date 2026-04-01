@@ -171,17 +171,20 @@ function isTextExtractable(part: unknown): part is TextContentPart | ExecutableC
 function contentPartToText(part: TextContentPart | ExecutableCodePart | CodeExecutionResultPart): string {
     if (part.type === "text") return part.text;
 
-    if (part.type === "executableCode") {
-        const { language, code } = part.executableCode;
-        if (!code.trim()) return "";
-        const lang = language.toLowerCase() === "language_unspecified" ? "" : language.toLowerCase();
-        return `\n\`\`\`${lang}\n${code.trim()}\n\`\`\`\n`;
-    }
+    // if (part.type === "executableCode") {
+    //     const { language, code } = part.executableCode;
+    //     if (!code.trim()) return "";
+    //     const lang = language.toLowerCase() === "language_unspecified" ? "" : language.toLowerCase();
+    //     return `\n\`\`\`${lang}\n${code.trim()}\n\`\`\`\n`;
+    // }
 
-    // codeExecutionResult
-    const { output } = part.codeExecutionResult;
-    if (!output?.trim()) return "";
-    return `\n\`\`\`\n${output.trim()}\n\`\`\`\n`;
+    // if (part.type === "codeExecutionResult") {
+    //     const { output } = part.codeExecutionResult;
+    //     if (!output?.trim()) return "";
+    //     return `\n\`\`\`\n${output.trim()}\n\`\`\`\n`;
+    // }
+
+    return "";
 }
 
 /**
