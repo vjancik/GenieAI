@@ -20,6 +20,48 @@ import { buildSearchSystemPrompt } from "../models/searchModel.ts";
 import { buildTriageSystemPrompt } from "../models/triageModel.ts";
 import { safeParseTavilyResponse } from "../tools/tavilySearchTool.ts";
 
+/**
+ * Scans the message history for ToolMessages from content-fetching tools and
+ * collects all URLs that were successfully fetched (i.e. the result entry has
+ * no `error` field).
+ *
+ * Returns a Set of keys in the format `"tool_name:url"` so that a new triage
+ * tool call can be checked against already-fetched content, preventing the LLM
+ * from re-fetching URLs whose results are already in context.
+ */
+const CONTENT_TOOLS = new Set(["get_website", "get_video_captions"]);
+
+function collectFetchedUrls(messages: BaseMessage[]): Set<string> {
+    const fetched = new Set<string>();
+
+    for (const msg of messages) {
+        if (!(msg instanceof ToolMessage) || !msg.name || !CONTENT_TOOLS.has(msg.name)) continue;
+
+        let entries: unknown;
+        try {
+            entries = typeof msg.content === "string" ? JSON.parse(msg.content) : msg.content;
+        } catch {
+            continue;
+        }
+
+        if (!Array.isArray(entries)) {
+            throw new AppError(
+                "ORCHESTRATOR_INVALID_TOOL_MESSAGE",
+                `ToolMessage content for ${msg.name} is not an array`,
+            );
+        }
+
+        for (const entry of entries) {
+            // Only collect successful results — entries with an `error` field are failures
+            if (entry !== null && typeof entry === "object" && "url" in entry && !("error" in entry)) {
+                fetched.add(`${msg.name}:${(entry as { url: string }).url}`);
+            }
+        }
+    }
+
+    return fetched;
+}
+
 // ⚠️  TEMPORARY WORKAROUND — remove once fixed upstream in @langchain/google
 // BUG: AIMessage content blocks of type "executableCode" and "codeExecutionResult"
 // are forwarded to the Gemini API with the LangChain `type` discriminant field
@@ -387,7 +429,6 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             // A single triage response may request multiple content tools (e.g. two URLs
             // of different types), all of which must be executed before the general node runs.
             // TODO: populate dynamically instead of hard coding
-            const CONTENT_TOOLS = new Set(["get_website", "get_video_captions"]);
             const contentCalls = toolCalls.filter((tc) => CONTENT_TOOLS.has(tc.name));
             const routingCalls = toolCalls.filter((tc) => !CONTENT_TOOLS.has(tc.name));
 
@@ -398,11 +439,38 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             span.setAttribute("agent.triage_route", toolCalls.map((tc) => tc.name).join(","));
 
             if (contentCalls.length > 0) {
+                // Filter out URLs already fetched in this history chain to avoid
+                // re-fetching content whose results are already in context.
+                const alreadyFetched = collectFetchedUrls(state.messages);
+                // Filter each call's URLs in-place, then drop calls with no remaining URLs.
+                // TYPE COERCION: tool_call args typed as Record<string, unknown>; Zod schema guarantees urls: string[]
+                const deduplicatedCalls = contentCalls.filter((tc) => {
+                    const args = tc.args as { urls: string[] };
+                    args.urls = args.urls.filter((url) => !alreadyFetched.has(`${tc.name}:${url}`));
+                    return args.urls.length > 0;
+                });
+
+                if (deduplicatedCalls.length === 0) {
+                    // All requested URLs are already in history — skip fetch, go straight to general
+                    this.logger.info(
+                        { skipped: contentCalls.map((tc) => tc.name) },
+                        "All content tool URLs already in history, routing directly to general",
+                    );
+                    return new Command({ goto: OrchestratorNode.GENERAL });
+                }
+
+                // Rebuild the triage AIMessage with the pruned tool calls so that
+                // fetchContentNode and the persisted history reflect only the new URLs.
+                const prunedTriageResponse = new AIMessage({
+                    ...triageResponse,
+                    tool_calls: deduplicatedCalls,
+                });
+
                 // Real tool calls: add triage AIMessage to state so each ToolMessage
                 // created in fetchContentNode has a valid tool_call_id in history.
                 return new Command({
                     goto: OrchestratorNode.FETCH_CONTENT,
-                    update: { messages: [triageResponse] },
+                    update: { messages: [prunedTriageResponse] },
                 });
             }
 
