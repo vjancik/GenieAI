@@ -2,6 +2,7 @@ import { FileState } from "@google/genai";
 import * as Sentry from "@sentry/bun";
 import { file as bunFile } from "bun";
 import type { FileConfig } from "../../application/config/AppConfig.ts";
+import { normalizeGeminiMimeType } from "../../application/helpers/geminiMimeType.ts";
 import type { IGeminiFileUploader, UploadedGeminiFile } from "../../application/ports/IGeminiFileUploader.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import { AppError } from "../../domain/errors/AppError.ts";
@@ -68,7 +69,7 @@ export class GenaiFileUploader implements IGeminiFileUploader {
             async (span) => {
                 let file = await this.ai.uploadStream(stream, {
                     name: fileName,
-                    mimeType,
+                    mimeType: normalizeGeminiMimeType(mimeType),
                     displayName,
                     byteLength,
                 });

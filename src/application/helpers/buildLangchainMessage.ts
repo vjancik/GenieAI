@@ -4,6 +4,7 @@ import { EMBED_MEDIA_KEYS } from "../../domain/entities/GeminiFile.ts";
 import type { IChatClientMessageAttachment, IChatClientMessageEmbed } from "../ports/chat/IChatClient.ts";
 import type { Logger } from "../types/Logger.ts";
 import { buildAttachmentTokenUrl, buildEmbedTokenUrl } from "./discordTokenUrl.ts";
+import { normalizeGeminiMimeType } from "./geminiMimeType.ts";
 import { parseMimeType } from "./parseMimeType.ts";
 
 /** Returns true if at least one embed contains a URL for any of the tracked media keys. */
@@ -70,7 +71,7 @@ async function buildTokenContentParts(
             guildId && channelId && discordMessageId
                 ? buildAttachmentTokenUrl(guildId, channelId, discordMessageId, attachment.id)
                 : attachment.url;
-        mediaBlocks.push({ type: "media", mimeType, url: tokenUrl });
+        mediaBlocks.push({ type: "media", mimeType: normalizeGeminiMimeType(mimeType), url: tokenUrl });
     }
 
     if (embeds) {
@@ -107,7 +108,7 @@ async function buildTokenContentParts(
                     return null;
                 }
 
-                return { type: "media" as const, mimeType, url: tokenUrl };
+                return { type: "media" as const, mimeType: normalizeGeminiMimeType(mimeType), url: tokenUrl };
             }),
         );
 
