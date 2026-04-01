@@ -108,7 +108,7 @@ describe("ResilientModelInvoker.invokeWithPaidKey", () => {
 
         const result = await invoker.invokeWithPaidKey(() => model, undefined, []);
 
-        expect(extractContent(result.result)).toBe("paid response");
+        expect(extractContent(result.result.content)).toBe("paid response");
         expect(result.usedFallback).toBe(false);
     });
 
@@ -133,7 +133,7 @@ describe("ResilientModelInvoker.invokeWithPaidKey", () => {
             [],
         );
 
-        expect(extractContent(result.result)).toBe("fallback response");
+        expect(extractContent(result.result.content)).toBe("fallback response");
         expect(result.usedFallback).toBe(true);
     });
 
@@ -184,7 +184,7 @@ describe("ResilientModelInvoker.invokeWithFreeKeys — fallback model", () => {
             [],
         );
 
-        expect(extractContent(result.result)).toBe("fallback ok");
+        expect(extractContent(result.result.content)).toBe("fallback ok");
         expect(result.usedFallback).toBe(true);
     });
 

@@ -3,6 +3,7 @@ import type { IMessagePageRepository } from "../../domain/ports/IMessagePageRepo
 import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
 import { splitMarkdown } from "../formatters/markdownSplitter.ts";
 import { llmTextToDiscordText } from "../formatters/textTransformers.ts";
+import { extractContent } from "../helpers/messageTransformers.ts";
 import type {
     IChatClientBot,
     IChatClientButtonInteraction,
@@ -26,38 +27,6 @@ function withoutButton(
     removeId: string,
 ): IChatClientButtonInteraction["message"]["buttons"] {
     return message.buttons.filter((b) => b.customId !== removeId);
-}
-
-/**
- * Extracts visible text content from a serialized LangChain BaseMessage JSON object.
- *
- * Handles both string content and structured content arrays.
- * Filters out Gemini thought chunks (parts with `thought: true`) — these are internal
- * reasoning that must be preserved in storage but must not be shown to users.
- *
- * @param json - A serialized BaseMessage as stored in the `langchain_messages` column
- * @returns The concatenated visible text, or an empty string if none found
- */
-function extractTextFromMessageJson(json: Record<string, unknown>): string {
-    // TYPE COERCION: json.kwargs is unknown in the generic record; cast to the known
-    // LangChain serialization shape where kwargs holds named constructor arguments.
-    const kwargs = json.kwargs as Record<string, unknown> | undefined;
-    const content = kwargs?.content;
-
-    if (typeof content === "string") return content;
-    if (!Array.isArray(content)) return "";
-
-    // Filter and join visible text parts (exclude thought chunks)
-    return content
-        .filter((part): part is { type: "text"; text: string } => {
-            if (typeof part !== "object" || part === null) return false;
-            // TYPE COERCION: part is narrowed to object but doesn't allow index access;
-            // cast to Record to read structured content fields by name.
-            const p = part as Record<string, unknown>;
-            return p.type === "text" && typeof p.text === "string" && p.thought !== true;
-        })
-        .map((part) => part.text)
-        .join("");
 }
 
 /** Result of a successful page computation. */
@@ -299,7 +268,10 @@ export class HandleNextPageUseCase {
             return null;
         }
 
-        const rawText = extractTextFromMessageJson(lastMsgJson);
+        // TYPE COERCION: lastMsgJson.kwargs.content is unknown; LangChain serialization always stores
+        // content as string | unknown[] in kwargs, matching the extractContent parameter type.
+        const kwargs = lastMsgJson.kwargs as Record<string, unknown> | undefined;
+        const rawText = extractContent(kwargs?.content as string | unknown[]);
         const fullDiscordText = llmTextToDiscordText(rawText);
 
         const { currentPage, totalPages, endOffset, endedInCodeBlock, codeBlockType } = data;

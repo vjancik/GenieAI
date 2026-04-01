@@ -42,7 +42,7 @@ function makeDiscordMessage(langchainMessages: Record<string, unknown>[]): Persi
 describe("extractContent", () => {
     it("returns string content as-is", () => {
         const msg = new AIMessage("hello world");
-        expect(extractContent(msg)).toBe("hello world");
+        expect(extractContent(msg.content)).toBe("hello world");
     });
 
     it("joins plain text parts", () => {
@@ -52,7 +52,7 @@ describe("extractContent", () => {
                 { type: "text", text: "bar" },
             ],
         });
-        expect(extractContent(msg)).toBe("foobar");
+        expect(extractContent(msg.content)).toBe("foobar");
     });
 
     it("filters out thought chunks", () => {
@@ -62,28 +62,28 @@ describe("extractContent", () => {
                 { type: "text", text: "hidden", thought: true },
             ],
         });
-        expect(extractContent(msg)).toBe("visible");
+        expect(extractContent(msg.content)).toBe("visible");
     });
 
     it("renders executableCode as a fenced code block", () => {
         const msg = new AIMessage({
             content: [{ type: "executableCode", executableCode: { language: "PYTHON", code: "print(1)" } }],
         });
-        expect(extractContent(msg)).toBe("\n**Code:**\n```python\nprint(1)\n```\n");
+        expect(extractContent(msg.content)).toBe("\n```python\nprint(1)\n```\n");
     });
 
     it("renders executableCode with LANGUAGE_UNSPECIFIED as a plain fence", () => {
         const msg = new AIMessage({
             content: [{ type: "executableCode", executableCode: { language: "LANGUAGE_UNSPECIFIED", code: "x = 1" } }],
         });
-        expect(extractContent(msg)).toBe("\n**Code:**\n```\nx = 1\n```\n");
+        expect(extractContent(msg.content)).toBe("\n```\nx = 1\n```\n");
     });
 
     it("omits executableCode block when code is empty", () => {
         const msg = new AIMessage({
             content: [{ type: "executableCode", executableCode: { language: "PYTHON", code: "   " } }],
         });
-        expect(extractContent(msg)).toBe("");
+        expect(extractContent(msg.content)).toBe("");
     });
 
     it("renders codeExecutionResult with output", () => {
@@ -95,21 +95,21 @@ describe("extractContent", () => {
                 },
             ],
         });
-        expect(extractContent(msg)).toBe("\n**Code Output:**\n*Status: OUTCOME_OK*\n```\n42\n```\n");
+        expect(extractContent(msg.content)).toBe("\n```\n42\n```\n");
     });
 
     it("omits codeExecutionResult block when output is empty", () => {
         const msg = new AIMessage({
             content: [{ type: "codeExecutionResult", codeExecutionResult: { outcome: "OUTCOME_OK", output: "" } }],
         });
-        expect(extractContent(msg)).toBe("");
+        expect(extractContent(msg.content)).toBe("");
     });
 
     it("omits codeExecutionResult block when output is absent", () => {
         const msg = new AIMessage({
             content: [{ type: "codeExecutionResult", codeExecutionResult: { outcome: "OUTCOME_FAILED" } }],
         });
-        expect(extractContent(msg)).toBe("");
+        expect(extractContent(msg.content)).toBe("");
     });
 
     it("interleaves text and code blocks preserving text whitespace", () => {
@@ -121,8 +121,8 @@ describe("extractContent", () => {
                 { type: "codeExecutionResult", codeExecutionResult: { outcome: "OUTCOME_OK", output: "1" } },
             ],
         });
-        expect(extractContent(msg)).toBe(
-            "Here is the code:\n\n**Code:**\n```python\nprint(1)\n```\nAnd the output:\n\n**Code Output:**\n*Status: OUTCOME_OK*\n```\n1\n```\n",
+        expect(extractContent(msg.content)).toBe(
+            "Here is the code:\n\n```python\nprint(1)\n```\nAnd the output:\n\n```\n1\n```\n",
         );
     });
 
@@ -133,12 +133,12 @@ describe("extractContent", () => {
                 { type: "tool_use", id: "t1", name: "myTool", input: {} },
             ],
         });
-        expect(extractContent(msg)).toBe("ok");
+        expect(extractContent(msg.content)).toBe("ok");
     });
 
     it("returns empty string for empty content array", () => {
         const msg = new AIMessage({ content: [] });
-        expect(extractContent(msg)).toBe("");
+        expect(extractContent(msg.content)).toBe("");
     });
 });
 

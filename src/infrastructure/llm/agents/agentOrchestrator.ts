@@ -250,7 +250,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
 
                 span.setAttribute("agent.new_messages_count", newMessages.length);
                 return {
-                    content: extractContent(lastMessage),
+                    content: extractContent(lastMessage.content),
                     newMessages,
                     isRetryable: result.isRetryable,
                     usedFallback: result.usedFallback,

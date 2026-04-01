@@ -215,7 +215,7 @@ export class HandleExportUseCase {
             for (let i = langchainMessages.length - 1; i >= 0; i--) {
                 const msg = langchainMessages[i];
                 if (msg === undefined) continue;
-                const content = extractContent(msg);
+                const content = extractContent(msg.content);
                 if (content.trim().length > 0) return content;
             }
         }

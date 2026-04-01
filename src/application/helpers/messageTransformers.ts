@@ -175,17 +175,17 @@ function contentPartToText(part: TextContentPart | ExecutableCodePart | CodeExec
         const { language, code } = part.executableCode;
         if (!code.trim()) return "";
         const lang = language.toLowerCase() === "language_unspecified" ? "" : language.toLowerCase();
-        return `\n**Code:**\n\`\`\`${lang}\n${code.trim()}\n\`\`\`\n`;
+        return `\n\`\`\`${lang}\n${code.trim()}\n\`\`\`\n`;
     }
 
     // codeExecutionResult
-    const { outcome, output } = part.codeExecutionResult;
+    const { output } = part.codeExecutionResult;
     if (!output?.trim()) return "";
-    return `\n**Code Output:**\n*Status: ${outcome}*\n\`\`\`\n${output.trim()}\n\`\`\`\n`;
+    return `\n\`\`\`\n${output.trim()}\n\`\`\`\n`;
 }
 
 /**
- * Extracts the displayable text content from a model response, handling both
+ * Extracts the displayable text content from a message's content value, handling both
  * string and structured array formats. Filters out Gemini thought chunks
  * (internal reasoning marked with thought: true) which should not be shown to users,
  * while preserving them in the stored message for context continuity.
@@ -194,17 +194,16 @@ function contentPartToText(part: TextContentPart | ExecutableCodePart | CodeExec
  * (e.g. tool use) are ignored. Parts are joined with "" — text parts carry their own
  * whitespace, and custom-formatted blocks (executableCode, codeExecutionResult) wrap
  * themselves with leading/trailing newlines.
+ *
+ * Accepts the raw content value directly — either `message.content` from a LangChain
+ * `BaseMessage`, or `kwargs.content` from a serialized message JSON object.
  */
-export function extractContent(response: BaseMessage): string {
-    if (typeof response.content === "string") {
-        return response.content;
+export function extractContent(content: BaseMessage["content"] | unknown[]): string {
+    if (typeof content === "string") {
+        return content;
     }
-    return response.content
-        .filter(isNotThoughtChunk)
-        .filter(isTextExtractable)
-        .map(contentPartToText)
-        .filter(Boolean)
-        .join("");
+    if (!Array.isArray(content)) return "";
+    return content.filter(isNotThoughtChunk).filter(isTextExtractable).map(contentPartToText).filter(Boolean).join("");
 }
 
 /**
