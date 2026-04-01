@@ -195,6 +195,41 @@ describe("concatMessageChunks — fixed stream reduction", () => {
         expect(collected.content[2]).toMatchObject({ type: "text", text: "After" });
     });
 
+    test("array chunk with originalTextContentBlock carrying thoughtSignature stamps it onto the first text block", () => {
+        const collected = reduce([
+            new AIMessageChunk({ content: "Hello " }),
+            new AIMessageChunk({
+                content: [{ type: "text", text: "world" }],
+                additional_kwargs: {
+                    originalTextContentBlock: { type: "text", text: "world", thoughtSignature: "sig-y" },
+                },
+            }),
+        ]);
+
+        expect(collected.content).toHaveLength(1);
+        expect(collected.content[0]).toMatchObject({ type: "text", text: "Hello world", thoughtSignature: "sig-y" });
+    });
+
+    test("mixed array chunk with originalTextContentBlock thoughtSignature stamps onto first text block, not first block", () => {
+        const collected = reduce([
+            new AIMessageChunk({ content: "before " }),
+            new AIMessageChunk({
+                content: [
+                    { type: "executableCode", executableCode: { language: "PYTHON", code: "print(1)" } },
+                    { type: "text", text: "result" },
+                ],
+                additional_kwargs: {
+                    originalTextContentBlock: { type: "text", text: "result", thoughtSignature: "sig-z" },
+                },
+            }),
+        ]);
+
+        expect(collected.content).toHaveLength(3);
+        expect(collected.content[0]).toMatchObject({ type: "text", text: "before " });
+        expect(collected.content[1]).toMatchObject({ type: "executableCode" });
+        expect(collected.content[2]).toMatchObject({ type: "text", text: "result", thoughtSignature: "sig-z" });
+    });
+
     test("text chunk with thoughtSignature merges into preceding plain text chunk, carrying the signature", () => {
         const collected = reduce([
             new AIMessageChunk({ content: "Thinking..." }),

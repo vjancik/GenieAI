@@ -1,4 +1,4 @@
-import { AIMessage, type AIMessageChunk, type BaseMessage } from "@langchain/core/messages";
+import { AIMessage, AIMessageChunk, type BaseMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import type { Span } from "@sentry/core";
 import {
@@ -20,7 +20,7 @@ import { AllFreeKeysExhaustedError, PaidKeyExhaustedError } from "../../domain/e
 import { is429Error } from "./errors/is429Error.ts";
 import { isModelFallbackError } from "./errors/isModelFallbackError.ts";
 import { filterHistoryForInlineSize } from "./utils/inlineAttachmentFilter.ts";
-import { concatMessageChunks } from "./utils/langchainUtils.ts";
+import { concatMessageChunks, normalizeContent } from "./utils/langchainUtils.ts";
 
 /**
  * Streams a model, collecting all chunks into a single concatenated `AIMessage`.
@@ -69,7 +69,10 @@ async function streamingInvoke(
 
     extraOptions?.span?.setAttribute("llm.time_to_first_chunk_ms", Date.now() - invokedAt);
 
-    let collected: AIMessageChunk = firstResult.value;
+    let collected: AIMessageChunk = new AIMessageChunk({
+        ...firstResult.value.lc_kwargs,
+        content: normalizeContent(firstResult.value),
+    });
     try {
         for await (const chunk of { [Symbol.asyncIterator]: () => iterator }) {
             collected = concatMessageChunks(collected, chunk);

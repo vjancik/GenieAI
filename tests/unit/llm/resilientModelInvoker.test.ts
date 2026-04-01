@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { AIMessageChunk } from "@langchain/core/messages";
 import pino from "pino";
 import { AttachmentMode } from "../../../src/application/config/AppConfig.ts";
+import { extractContent } from "../../../src/application/helpers/messageTransformers.ts";
 import type { IInvokableModel } from "../../../src/application/ports/IResilientModelInvoker.ts";
 import type { IRoundRobinKeyProvider } from "../../../src/application/ports/IRoundRobinKeyProvider.ts";
 import type { GeminiApiKey } from "../../../src/domain/entities/GeminiApiKey.ts";
@@ -107,7 +108,7 @@ describe("ResilientModelInvoker.invokeWithPaidKey", () => {
 
         const result = await invoker.invokeWithPaidKey(() => model, undefined, []);
 
-        expect(result.result.content).toBe("paid response");
+        expect(extractContent(result.result)).toBe("paid response");
         expect(result.usedFallback).toBe(false);
     });
 
@@ -132,7 +133,7 @@ describe("ResilientModelInvoker.invokeWithPaidKey", () => {
             [],
         );
 
-        expect(result.result.content).toBe("fallback response");
+        expect(extractContent(result.result)).toBe("fallback response");
         expect(result.usedFallback).toBe(true);
     });
 
@@ -183,7 +184,7 @@ describe("ResilientModelInvoker.invokeWithFreeKeys — fallback model", () => {
             [],
         );
 
-        expect(result.result.content).toBe("fallback ok");
+        expect(extractContent(result.result)).toBe("fallback ok");
         expect(result.usedFallback).toBe(true);
     });
 

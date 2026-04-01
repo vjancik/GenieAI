@@ -22,19 +22,39 @@ type ContentBlock = Record<string, unknown> & { type: string };
  * `additional_kwargs.originalTextContentBlock`. We prefer that over a synthetic
  * `{ type: "text", text: "..." }` block so that `thoughtSignature` and other
  * metadata carried on the original block are preserved.
+ *
+ * Also exported so callers can normalize a single-chunk stream that never goes
+ * through {@link concatMessageChunks}.
  */
-function normalizeContent(chunk: AIMessageChunk): ContentBlock[] {
+export function normalizeContent(chunk: AIMessageChunk): ContentBlock[] {
+    const original = chunk.additional_kwargs?.originalTextContentBlock;
+    const hasOriginal = original !== null && original !== undefined && typeof original === "object";
+
     if (typeof chunk.content === "string") {
-        const original = chunk.additional_kwargs?.originalTextContentBlock;
-        if (original !== null && original !== undefined && typeof original === "object") {
-            return [original as ContentBlock];
-        }
+        if (hasOriginal) return [original as ContentBlock];
         return [{ type: "text", text: chunk.content }];
     }
 
     if (!Array.isArray(chunk.content)) {
         throw new Error(`concatMessageChunks: unexpected content type "${typeof chunk.content}"`);
     }
+
+    // If originalTextContentBlock carries a thoughtSignature, stamp it onto the first
+    // text block in the array — the array may have mixed block types so we iterate.
+    const originalSignature = hasOriginal ? (original as ContentBlock).thoughtSignature : undefined;
+    if (originalSignature !== undefined) {
+        const blocks = chunk.content as ContentBlock[];
+        const firstTextIndex = blocks.findIndex((b) => b.type === "text");
+        if (firstTextIndex !== -1) {
+            const patched = [...blocks];
+            patched[firstTextIndex] = {
+                ...patched[firstTextIndex],
+                thoughtSignature: originalSignature,
+            } as ContentBlock;
+            return patched;
+        }
+    }
+
     return chunk.content;
 }
 
@@ -89,7 +109,7 @@ export function concatMessageChunks(chunkA: AIMessageChunk, chunkB: AIMessageChu
     const mergedContent = joinNormalizedContents(normalizeContent(chunkA), normalizeContent(chunkB));
 
     return new AIMessageChunk({
-        ...upstream,
+        ...upstream.lc_kwargs,
         content: mergedContent,
     });
 }
