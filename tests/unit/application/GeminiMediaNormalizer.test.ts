@@ -53,6 +53,7 @@ const testConfig = {
                     apiKeyType: "free" as const,
                 },
                 general: { model: "gemini-test", timeoutMs: 120_000, apiKeyType: "free" as const },
+                computation: { model: "gemini-test", timeoutMs: 120_000, apiKeyType: "free" as const },
                 search: {
                     model: "gemini-test",
                     timeoutMs: 120_000,

@@ -23,6 +23,11 @@ agent:
       fallbackModel: "gemini-flash"
       timeoutMs: 120000
       apiKeyType: "free"
+    computation:
+      model: "gemini-flash"
+      fallbackModel: "gemini-flash"
+      timeoutMs: 120000
+      apiKeyType: "free"
     search:
       model: "gemini-pro"
       fallbackModel: "gemini-flash"
@@ -49,6 +54,10 @@ agent:
       timeoutMs: 60000
       apiKeyType: "free"
     general:
+      model: "gemini-flash"
+      timeoutMs: 120000
+      apiKeyType: "free"
+    computation:
       model: "gemini-flash"
       timeoutMs: 120000
       apiKeyType: "free"
@@ -160,6 +169,10 @@ agent:
       model: "gemini-flash"
       timeoutMs: 120000
       apiKeyType: "free"
+    computation:
+      model: "gemini-flash"
+      timeoutMs: 120000
+      apiKeyType: "free"
     search:
       model: "gemini-pro"
       timeoutMs: 120000
@@ -188,6 +201,10 @@ agent:
       model: "gemini-flash"
       timeoutMs: 120000
       apiKeyType: "free"
+    computation:
+      model: "gemini-flash"
+      timeoutMs: 120000
+      apiKeyType: "free"
     search:
       model: "gemini-pro"
       timeoutMs: 120000
@@ -210,6 +227,10 @@ agent:
       timeoutMs: 60000
       apiKeyType: "free"
     general:
+      model: "gemini-flash"
+      timeoutMs: 120000
+      apiKeyType: "free"
+    computation:
       model: "gemini-flash"
       timeoutMs: 120000
       apiKeyType: "free"
@@ -236,6 +257,10 @@ agent:
       model: "gemini-flash"
       timeoutMs: 120000
       apiKeyType: "free"
+    computation:
+      model: "gemini-flash"
+      timeoutMs: 120000
+      apiKeyType: "free"
     search:
       model: "gemini-pro"
       timeoutMs: 120000
@@ -255,6 +280,10 @@ agent:
       timeoutMs: 60000
       apiKeyType: "free"
     general:
+      model: "gemini-flash"
+      timeoutMs: 120000
+      apiKeyType: "free"
+    computation:
       model: "gemini-flash"
       timeoutMs: 120000
       apiKeyType: "free"

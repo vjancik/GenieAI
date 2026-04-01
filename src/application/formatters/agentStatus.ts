@@ -18,6 +18,8 @@ export function agentStatusLabel(update: AgentStatusUpdate): string {
             return "Generating response";
         case AgentStatusType.SEARCHING:
             return "Searching the web";
+        case AgentStatusType.COMPUTING:
+            return "Running computation";
         default:
             return assertNever(update.type);
     }

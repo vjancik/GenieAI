@@ -31,9 +31,22 @@ const routeToGoogleSearchTool = tool(async () => JSON.stringify({ route: "search
 const routeToGeneralTool = tool(async () => JSON.stringify({ route: "general" }), {
     name: "route_to_general",
     description:
-        "Route to the general-purpose agent for all other questions: " +
-        "creative writing, coding, math, computation, rendering, general knowledge, explanations, " +
-        "and anything that doesn't require real-time data or external content.",
+        "Route to the general-purpose agent for: creative writing, coding questions, general knowledge, " +
+        "explanations, and anything that doesn't require real-time data, external content, or Python execution.",
+    schema: z.object({}),
+});
+
+/**
+ * Sentinel tool that signals routing to the computation agent.
+ * Used when the request requires running Python code for computation, data processing, or math.
+ */
+const routeToPythonTool = tool(async () => JSON.stringify({ route: "python" }), {
+    name: "route_to_python",
+    description:
+        "Route to the Python agent. Use this when the request would benefit from executing Python code " +
+        "to produce a result: numerical computation, data processing, statistics, graphing, plotting, " +
+        "math problems where a calculated answer is expected, or any task that benefits from running " +
+        "actual code.",
     schema: z.object({}),
 });
 
@@ -52,7 +65,7 @@ export function buildTriageSystemPrompt(searchMode: SearchMode): string {
     return (
         "You are a request analysis agent. Your job is to intelligently respond to the user's message with the right " +
         "tools and call exactly one route tool to route the request to another agent or one or more data retrieval " +
-        "tools to retrieve the necessary information to satisfy the request." +
+        "tools to retrieve the necessary information to satisfy the request.\n" +
         "Rules:\n" +
         "- If the message contains web page URLs to analyze: call get_website\n" +
         "- If the message contains video URLs (YouTube, social media, etc.): call get_video_captions\n" +
@@ -61,6 +74,7 @@ export function buildTriageSystemPrompt(searchMode: SearchMode): string {
         "- If the question needs current/live information or very niche topics: call " +
         searchToolName +
         "\n" +
+        "- If the request requires running Python code to compute or process a result: call route_to_python\n" +
         "- For everything else: call route_to_general"
     );
 }
@@ -119,7 +133,13 @@ function createTriageModel(
             ? (options.tavilyTool ?? routeToGoogleSearchTool)
             : routeToGoogleSearchTool;
 
-    const tools = [options.getWebsiteTool, options.getVideoCaptionsTool, searchTool, routeToGeneralTool];
+    const tools = [
+        options.getWebsiteTool,
+        options.getVideoCaptionsTool,
+        searchTool,
+        routeToPythonTool,
+        routeToGeneralTool,
+    ];
     return llm.bindTools(tools, { tool_choice: "any" });
 }
 

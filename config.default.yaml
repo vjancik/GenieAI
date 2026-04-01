@@ -74,6 +74,13 @@ agent:
       # Maximum milliseconds to wait for a general model first chunk before aborting.
       timeoutMs: 120000                 # <required>
 
+    computation:
+      model: "gemini-3-flash-preview"   # <required>
+      apiKeyType: "free"                # <required>
+      fallbackModel: "gemini-2.5-flash" # <optional>
+      # Maximum milliseconds to wait for a computation model first chunk before aborting.
+      timeoutMs: 120000                 # <required>
+
     search:
       model: "gemini-3-flash-preview"   # <required>
       apiKeyType: "paid"                # <required>

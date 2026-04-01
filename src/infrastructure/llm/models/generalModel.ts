@@ -75,7 +75,6 @@ function createGeneralModel(
     });
 
     // Workaround for https://github.com/langchain-ai/langchainjs/issues/10432 — tool_choice: "none" is ignored on empty arrays
-    // return llm.bindTools([{ codeExecution: {} }]);
     return llm.bindTools([neverTool], { tool_choice: "none" });
 }
 

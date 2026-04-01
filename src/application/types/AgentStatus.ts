@@ -11,6 +11,7 @@ export const AgentStatusType = {
     FETCHING_CONTENT: "FETCHING_CONTENT",
     GENERATING: "GENERATING",
     SEARCHING: "SEARCHING",
+    COMPUTING: "COMPUTING",
 } as const;
 
 export type AgentStatusType = (typeof AgentStatusType)[keyof typeof AgentStatusType];

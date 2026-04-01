@@ -249,6 +249,7 @@ const fileConfigSchema = z.object({
         nodes: z.object({
             triage: triageModelSchema,
             general: agentModelSchema,
+            computation: agentModelSchema,
             search: searchModelSchema,
         }),
     }),
@@ -530,8 +531,12 @@ export function validateConfig(config: AppConfig, logger?: Logger): void {
     const nodes = config.file.agent.nodes;
 
     // Ensure required API key env vars are present for the configured node apiKeyTypes.
-    const needsFree = [nodes.triage, nodes.general, nodes.search].some((n) => n.apiKeyType === ApiKeyType.free);
-    const needsPaid = [nodes.triage, nodes.general, nodes.search].some((n) => n.apiKeyType === ApiKeyType.paid);
+    const needsFree = [nodes.triage, nodes.general, nodes.computation, nodes.search].some(
+        (n) => n.apiKeyType === ApiKeyType.free,
+    );
+    const needsPaid = [nodes.triage, nodes.general, nodes.computation, nodes.search].some(
+        (n) => n.apiKeyType === ApiKeyType.paid,
+    );
     if (needsFree && config.googleFreeApiKeys === null) {
         throw new ConfigError(
             'GOOGLE_FREE_API_KEYS is required because one or more agent nodes use apiKeyType: "free"',
@@ -567,6 +572,7 @@ export function validateConfig(config: AppConfig, logger?: Logger): void {
     const providers: { name: string; model: string }[] = [
         { name: "agent.nodes.triage.model", model: nodes.triage.model },
         { name: "agent.nodes.general.model", model: nodes.general.model },
+        { name: "agent.nodes.computation.model", model: nodes.computation.model },
         { name: "agent.nodes.search.model", model: nodes.search.model },
     ];
     for (const { name, model } of providers) {

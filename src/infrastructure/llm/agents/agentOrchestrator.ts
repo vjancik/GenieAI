@@ -15,6 +15,7 @@ import type { Logger } from "../../../application/types/Logger.ts";
 import type { PersistedChatMessage } from "../../../domain/entities/Message.ts";
 import { AppError, LlmError } from "../../../domain/errors/AppError.ts";
 import { MessageIntent } from "../../../domain/value-objects/MessageIntent.ts";
+import { buildComputationSystemPrompt } from "../models/computationModel.ts";
 import { buildGeneralSystemPrompt } from "../models/generalModel.ts";
 import { buildSearchSystemPrompt } from "../models/searchModel.ts";
 import { buildTriageSystemPrompt } from "../models/triageModel.ts";
@@ -153,6 +154,7 @@ export const OrchestratorNode = {
     TRIAGE: "triage",
     FETCH_CONTENT: "fetchContent",
     GENERAL: "general",
+    COMPUTATION: "computation",
     SEARCH: "search",
 } as const;
 
@@ -168,6 +170,8 @@ export interface ModelTimeouts {
     triage: number;
     /** Maximum ms to wait for a general model response before aborting. */
     general: number;
+    /** Maximum ms to wait for a computation model response before aborting. */
+    computation: number;
     /** Maximum ms to wait for a search model response before aborting. */
     search: number;
 }
@@ -177,9 +181,9 @@ export interface ModelTimeouts {
  *
  * Graph topology:
  *   START → triage → fetchContent → general → END
- *                  ↘            ↘ END (all tools failed)
- *                  ↘ general → END
- *                  ↘ search  → END
+ *                  ↘ general      → END
+ *                  ↘ computation  → END
+ *                  ↘ search       → END
  *
  * Routing decisions are made in the triage node via Command.goto.
  * Routing-only tool calls (route_to_search, route_to_general) are NOT added
@@ -197,6 +201,7 @@ export interface ModelTimeouts {
 interface NodeApiKeyTypes {
     triage: ApiKeyType;
     general: ApiKeyType;
+    computation: ApiKeyType;
     search: ApiKeyType;
 }
 
@@ -210,6 +215,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     constructor(
         private readonly triageProvider: IModelProvider,
         private readonly generalProvider: IModelProvider,
+        private readonly computationProvider: IModelProvider,
         private readonly searchProvider: IModelProvider,
         private readonly invoker: IResilientModelInvoker,
         private readonly getWebsiteTool: IModelTool<{ urls: string[] }>,
@@ -225,11 +231,13 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         this.nodeTimeoutsMs = {
             triage: config.file.agent.nodes.triage.timeoutMs,
             general: config.file.agent.nodes.general.timeoutMs,
+            computation: config.file.agent.nodes.computation.timeoutMs,
             search: config.file.agent.nodes.search.timeoutMs,
         };
         this.nodeApiKeyTypes = {
             triage: config.file.agent.nodes.triage.apiKeyType,
             general: config.file.agent.nodes.general.apiKeyType,
+            computation: config.file.agent.nodes.computation.apiKeyType,
             search: config.file.agent.nodes.search.apiKeyType,
         };
         this.graph = this.buildGraph();
@@ -340,12 +348,18 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     private buildGraph() {
         let graph = new StateGraph(OrchestratorStateSchema, OrchestratorContextSchema)
             .addNode(OrchestratorNode.TRIAGE, this.triageNode.bind(this), {
-                ends: [OrchestratorNode.FETCH_CONTENT, OrchestratorNode.GENERAL, OrchestratorNode.SEARCH],
+                ends: [
+                    OrchestratorNode.FETCH_CONTENT,
+                    OrchestratorNode.GENERAL,
+                    OrchestratorNode.COMPUTATION,
+                    OrchestratorNode.SEARCH,
+                ],
             })
             .addNode(OrchestratorNode.FETCH_CONTENT, this.fetchContentNode.bind(this), {
                 ends: [OrchestratorNode.GENERAL, END],
             })
             .addNode(OrchestratorNode.GENERAL, this.generalNode.bind(this))
+            .addNode(OrchestratorNode.COMPUTATION, this.computationNode.bind(this))
             .addNode(OrchestratorNode.SEARCH, this.searchNode.bind(this))
             .addConditionalEdges(START, this.routeFromIntent.bind(this), [
                 OrchestratorNode.TRIAGE,
@@ -353,6 +367,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 OrchestratorNode.SEARCH,
             ])
             .addEdge(OrchestratorNode.GENERAL, END)
+            .addEdge(OrchestratorNode.COMPUTATION, END)
             .addEdge(OrchestratorNode.SEARCH, END);
 
         // automatic Sentry instrumentation doesn't work in Bun
@@ -495,6 +510,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                         goto: OrchestratorNode.SEARCH,
                         update: { messages: [triageResponse] },
                     });
+
+                case "route_to_python":
+                    // Routing sentinel: do NOT add triage message to state
+                    return new Command({ goto: OrchestratorNode.COMPUTATION });
 
                 case "route_to_general":
                     // Routing sentinel: do NOT add triage message to state
@@ -655,6 +674,37 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 );
                 throw new LlmError("User-facing general model produced an illegal tool call");
             }
+
+            return { messages: [response], isRetryable: usedFallback, usedFallback };
+        });
+    }
+
+    /**
+     * Computation node: generates an answer using the code-execution-capable model.
+     *
+     * A simplified single-pass node — no tool pre-fetching or video caption hints.
+     * The model has the native `codeExecution` tool bound, allowing it to run Python
+     * to produce accurate numerical or data-processing results.
+     */
+    private async computationNode(
+        state: GraphState,
+        config: NodeConfig,
+    ): Promise<{ messages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean }> {
+        return Sentry.startSpan({ name: "Computation agent node", op: "agent.node.computation" }, async () => {
+            const invokeMessages: BaseMessage[] = [
+                new SystemMessage(buildComputationSystemPrompt(this.basePrompt)),
+                ...state.messages,
+            ];
+
+            const { result: response, usedFallback } = await this.invoker.invoke(
+                this.nodeApiKeyTypes.computation,
+                this.computationProvider.get.bind(this.computationProvider),
+                this.computationProvider.getFallback.bind(this.computationProvider),
+                invokeMessages,
+                this.nodeTimeoutsMs.computation,
+                config.context?.onStatusUpdate,
+                AgentStatusType.COMPUTING,
+            );
 
             return { messages: [response], isRetryable: usedFallback, usedFallback };
         });

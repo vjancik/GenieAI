@@ -55,6 +55,7 @@ flowchart TD
     TRIAGE["Triage\n(fast model, thinking)"]
     FETCH["Fetch Content\n(get_website / get_video_captions)"]
     GENERAL["General\n(answer model)"]
+    COMPUTATION["Computation\n(code execution model)"]
     SEARCH["Search\n(search model + grounding)"]
     END(["END"])
 
@@ -64,6 +65,7 @@ flowchart TD
     START -- "!aisearch, Tavily mode (SEARCH intent)" --> TRIAGE
 
     TRIAGE -- "route_to_general" --> GENERAL
+    TRIAGE -- "route_to_python" --> COMPUTATION
     TRIAGE -- "route_to_search (Google)" --> SEARCH
     TRIAGE -- "web_search tool call (Tavily)" --> SEARCH
     TRIAGE -- "get_website / get_video_captions" --> FETCH
@@ -71,17 +73,19 @@ flowchart TD
     FETCH --> GENERAL
 
     GENERAL --> END
+    COMPUTATION --> END
     SEARCH --> END
 ```
 
-**Triage** is a lightweight model. It inspects only the latest turn and chooses one of four actions:
+**Triage** is a lightweight model. It inspects only the latest turn and chooses one of five actions:
 
 - Call `get_website` or `get_video_captions` → **Fetch Content**, then **General**
 - Call `route_to_search` → **Search** directly
+- Call `route_to_python` → **Computation** directly (Python code execution)
 - Call `route_to_general` → **General** directly
 - No tool call (fallback) → **General** directly
 
-Routing sentinel calls (`route_to_search`, `route_to_general`) are consumed by the triage node and are never written to message state, keeping conversation history clean. Real tool calls (`get_website`, `get_video_captions`, `web_search`) are added to state so their `ToolMessage` responses have valid `tool_call_id` pairings.
+Routing sentinel calls (`route_to_search`, `route_to_python`, `route_to_general`) are consumed by the triage node and are never written to message state, keeping conversation history clean. Real tool calls (`get_website`, `get_video_captions`, `web_search`) are added to state so their `ToolMessage` responses have valid `tool_call_id` pairings.
 
 ## Requirements
 
@@ -129,7 +133,7 @@ cp config.default.yaml config.local.yaml
 
 Key things to configure:
 
-- **Models** — set the Gemini model and `apiKeyType` (`"free"` / `"paid"`) for each of the three agent nodes (`triage`, `general`, `search`)
+- **Models** — set the Gemini model and `apiKeyType` (`"free"` / `"paid"`) for each of the four agent nodes (`triage`, `general`, `computation`, `search`)
 - **Search backend** — `agent.nodes.search.mode`: `"google"` (Gemini grounding) or `"tavily"`
 - **Attachment mode** — `agent.uploadAttachmentMode`: `"upload"` (Gemini Files API) or `"inline"` (base64)
 - **DMs** — `discord.enableInDMs: true` to allow the bot to respond in Direct Messages

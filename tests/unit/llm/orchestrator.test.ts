@@ -41,6 +41,7 @@ const testConfig = {
                     apiKeyType: "free" as const,
                 },
                 general: { model: "gemini-test", timeoutMs: 120_000, apiKeyType: "free" as const },
+                computation: { model: "gemini-test", timeoutMs: 120_000, apiKeyType: "free" as const },
                 search: {
                     model: "gemini-test",
                     timeoutMs: 120_000,
@@ -422,6 +423,7 @@ describe("Orchestrator.process", () => {
         const orchestrator = new AgentOrchestrator(
             asProvider(triageModel) as never,
             asProvider(generalModel) as never,
+            asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeInvoker(),
             websiteTool as never,
@@ -448,6 +450,7 @@ describe("Orchestrator.process", () => {
 
         const orchestrator = new AgentOrchestrator(
             asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeInvoker(),
@@ -477,6 +480,7 @@ describe("Orchestrator.process", () => {
 
         const orchestrator = new AgentOrchestrator(
             asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeInvoker(),
@@ -513,6 +517,7 @@ describe("Orchestrator.process", () => {
         const orchestrator = new AgentOrchestrator(
             asProvider(triageModel) as never,
             asProvider(generalModel) as never,
+            asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeInvoker(),
             websiteTool as never,
@@ -542,6 +547,7 @@ describe("Orchestrator.process", () => {
         const orchestrator = new AgentOrchestrator(
             asProvider(triageModel) as never,
             asProvider(generalModel) as never,
+            asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeInvoker(),
             websiteTool as never,
@@ -566,6 +572,7 @@ describe("Orchestrator.process", () => {
 
         const orchestrator = new AgentOrchestrator(
             asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeInvoker(),
@@ -607,6 +614,7 @@ describe("Orchestrator.process", () => {
         const orchestrator = new AgentOrchestrator(
             asProvider(triageModel) as never,
             asProvider(generalModel) as never,
+            asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeInvoker(),
             websiteTool as never,
@@ -634,6 +642,7 @@ describe("Orchestrator.process", () => {
         const orchestrator = new AgentOrchestrator(
             asProvider(triageModel) as never,
             asProvider(generalModel) as never,
+            asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeInvoker(),
             websiteTool as never,
@@ -657,6 +666,7 @@ describe("Orchestrator.process", () => {
 
         const orchestrator = new AgentOrchestrator(
             asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeInvoker(),
@@ -685,6 +695,7 @@ describe("Orchestrator.process", () => {
 
         const orchestrator = new AgentOrchestrator(
             asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeInvoker(),
@@ -715,6 +726,7 @@ describe("Orchestrator.process", () => {
 
         const orchestrator = new AgentOrchestrator(
             asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
             asProvider(generalModel) as never,
             asProvider(searchModel) as never,
             makeInvoker(),
@@ -777,6 +789,7 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
     ) {
         return new AgentOrchestrator(
             asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
             asProvider(generalModel) as never,
             asProvider(makeModel("search")) as never,
             makeInvoker(provider),
@@ -887,6 +900,7 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
         const orchestrator = new AgentOrchestrator(
             asProvider(makeTriageWithNoToolCall()) as never,
             generalProvider as never,
+            generalProvider as never,
             asProvider(makeModel("search")) as never,
             makeInvoker(provider),
             makeTool("w") as never,
@@ -928,6 +942,7 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
 
         const orchestrator = new AgentOrchestrator(
             asProvider(makeTriageWithNoToolCall()) as never,
+            generalProvider as never,
             generalProvider as never,
             asProvider(makeModel("search")) as never,
             makeInvoker(provider),

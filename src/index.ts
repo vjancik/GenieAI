@@ -45,6 +45,7 @@ import { RateLimiter } from "./infrastructure/discord/RateLimiter.ts";
 import { HtmlToImageRenderer } from "./infrastructure/exporters/HtmlToImageRenderer.ts";
 import { MarkdownToHtmlRenderer } from "./infrastructure/exporters/MarkdownToHtmlRenderer.ts";
 import { AgentOrchestrator } from "./infrastructure/llm/agents/agentOrchestrator.ts";
+import { ComputationModelProvider } from "./infrastructure/llm/models/computationModel.ts";
 import { GeneralModelProvider } from "./infrastructure/llm/models/generalModel.ts";
 import { SearchModelProvider } from "./infrastructure/llm/models/searchModel.ts";
 import { TavilyOnlyTriageModelProvider, TriageModelProvider } from "./infrastructure/llm/models/triageModel.ts";
@@ -134,6 +135,11 @@ const generalProvider = new GeneralModelProvider({
     fallbackModelName: config.file.agent.nodes.general.fallbackModel,
     includeThoughts: config.file.geminiModels.includeThoughts,
 });
+const computationProvider = new ComputationModelProvider({
+    modelName: config.file.agent.nodes.computation.model,
+    fallbackModelName: config.file.agent.nodes.computation.fallbackModel,
+    includeThoughts: config.file.geminiModels.includeThoughts,
+});
 const searchProvider = new SearchModelProvider({
     modelName: config.file.agent.nodes.search.model,
     fallbackModelName: config.file.agent.nodes.search.fallbackModel,
@@ -184,6 +190,7 @@ const resilientInvoker = new ResilientModelInvoker(
 const agentOrchestrator = new AgentOrchestrator(
     triageProvider,
     generalProvider,
+    computationProvider,
     searchProvider,
     resilientInvoker,
     getWebsiteTool,

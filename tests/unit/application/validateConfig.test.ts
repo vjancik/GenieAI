@@ -56,6 +56,11 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
                         timeoutMs: 120_000,
                         apiKeyType: "free",
                     },
+                    computation: {
+                        model: "gemini-2.5-flash",
+                        timeoutMs: 120_000,
+                        apiKeyType: "free",
+                    },
                     search: {
                         model: "gemini-2.5-flash",
                         timeoutMs: 120_000,
@@ -91,6 +96,10 @@ describe("validateConfig", () => {
             ...config.file.agent.nodes.general,
             apiKeyType: "paid",
         };
+        (config.file.agent.nodes as Record<string, unknown>).computation = {
+            ...config.file.agent.nodes.computation,
+            apiKeyType: "paid",
+        };
         (config.file.agent.nodes as Record<string, unknown>).search = {
             ...config.file.agent.nodes.search,
             apiKeyType: "paid",
@@ -112,6 +121,10 @@ describe("validateConfig", () => {
         };
         (config.file.agent.nodes as Record<string, unknown>).general = {
             ...config.file.agent.nodes.general,
+            apiKeyType: "paid",
+        };
+        (config.file.agent.nodes as Record<string, unknown>).computation = {
+            ...config.file.agent.nodes.computation,
             apiKeyType: "paid",
         };
         (config.file.agent.nodes as Record<string, unknown>).search = {
