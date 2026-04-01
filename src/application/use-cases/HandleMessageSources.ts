@@ -1,4 +1,5 @@
 import { AIMessage } from "@langchain/core/messages";
+import { LRUCache } from "lru-cache";
 import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
 import { shortenRedirectUrl } from "../../infrastructure/http/redirectUrl.ts";
 import { SearchMode } from "../config/AppConfig.ts";
@@ -19,6 +20,8 @@ const GOOGLE_REDIRECT_PREFIX = "https://vertexaisearch.cloud.google.com";
  * an ephemeral error message is sent instead.
  */
 export class HandleSourcesUseCase {
+    private readonly redirectCache = new LRUCache<string, string>({ max: 100 });
+
     /**
      * @param messageRepo - Repository for looking up the bot message row by Discord ID
      * @param searchMode - Whether Google Search or Tavily is active (affects URL shortening)
@@ -86,7 +89,11 @@ export class HandleSourcesUseCase {
                         );
                         return { title, url: uri };
                     }
-                    return { title, url: await shortenRedirectUrl(uri) };
+                    const cached = this.redirectCache.get(uri);
+                    if (cached !== undefined) return { title, url: cached };
+                    const resolved = await shortenRedirectUrl(uri);
+                    this.redirectCache.set(uri, resolved);
+                    return { title, url: resolved };
                 }
                 return { title, url: uri };
             }),
