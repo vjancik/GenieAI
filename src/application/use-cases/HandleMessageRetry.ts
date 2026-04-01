@@ -1,7 +1,7 @@
 import * as Sentry from "@sentry/bun";
 import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
 import { MessageIntent } from "../../domain/value-objects/MessageIntent.ts";
-import { parseMessageIntent } from "../helpers/parseMessageIntent.ts";
+import { parseMessageIntent } from "../helpers/chatMessageTransformers.ts";
 import type { IChatClientButtonInteraction, IChatClientMessage } from "../ports/chat/IChatClient.ts";
 import type { IInteractionLock } from "../ports/IInteractionLock.ts";
 import { DM_GUILD_TOKEN, RETRY_BUTTON_ID } from "../shared/tokens.ts";

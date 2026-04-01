@@ -6,7 +6,7 @@ import {
     extractContent,
     extractInlineDataBlocksAsAttachments,
     replaceInlineDataBlocksWithDiscordTokenUrls,
-} from "../../../src/application/helpers/messageTransformers.ts";
+} from "../../../src/application/helpers/langchainMessageTransformers.ts";
 import type { PersistedChatMessage } from "../../../src/domain/entities/Message.ts";
 import { AppError } from "../../../src/domain/errors/AppError.ts";
 

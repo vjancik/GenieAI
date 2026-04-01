@@ -4,7 +4,7 @@ import type { IMessageRepository } from "../../domain/ports/IMessageRepository.t
 import { shortenRedirectUrl } from "../../infrastructure/http/redirectUrl.ts";
 import { SearchMode } from "../config/AppConfig.ts";
 import { extractWebGroundingChunks, formatGroundingSources } from "../formatters/groundingSources.ts";
-import { dbMessagesToLangchain } from "../helpers/messageTransformers.ts";
+import { dbMessagesToLangchain } from "../helpers/langchainMessageTransformers.ts";
 import type { IChatClientButtonInteraction } from "../ports/chat/IChatClient.ts";
 import { DM_GUILD_TOKEN } from "../shared/tokens.ts";
 import type { Logger } from "../types/Logger.ts";

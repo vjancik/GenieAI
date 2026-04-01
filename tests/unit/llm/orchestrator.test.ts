@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, ChatMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import pino from "pino";
-import { dbMessagesToLangchain } from "../../../src/application/helpers/messageTransformers.ts";
+import { dbMessagesToLangchain } from "../../../src/application/helpers/langchainMessageTransformers.ts";
 import type { AgentStatusUpdate } from "../../../src/application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
 import type { PersistedChatMessage } from "../../../src/domain/entities/Message.ts";

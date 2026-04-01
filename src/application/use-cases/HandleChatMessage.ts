@@ -10,13 +10,12 @@ import { extractWebGroundingChunks } from "../formatters/groundingSources.ts";
 import { splitMarkdown } from "../formatters/markdownSplitter.ts";
 import { discordMessageToLlmText, llmTextToDiscordText } from "../formatters/textTransformers.ts";
 import { buildLangchainMessage } from "../helpers/buildLangchainMessage.ts";
-import { extractUserContent } from "../helpers/extractUserContent.ts";
+import { parseMessageIntent, removeMentionsAndCommandPrefix } from "../helpers/chatMessageTransformers.ts";
 import { hasExtendedMarkdown } from "../helpers/hasExtendedMarkdown.ts";
 import {
     extractInlineDataBlocksAsAttachments,
     replaceInlineDataBlocksWithDiscordTokenUrls,
-} from "../helpers/messageTransformers.ts";
-import { parseMessageIntent } from "../helpers/parseMessageIntent.ts";
+} from "../helpers/langchainMessageTransformers.ts";
 import type {
     IChatClientBot,
     IChatClientMessage,
@@ -154,7 +153,7 @@ export class HandleChatMessageUseCase {
                     return;
                 }
 
-                const userContent = extractUserContent(message.content, this.bot.userId, message.botRoleId);
+                const userContent = removeMentionsAndCommandPrefix(message.content, this.bot.userId, message.botRoleId);
                 const attachments = message.attachments;
 
                 // No usable content after stripping mentions/commands, no attachments, and no reply

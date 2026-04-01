@@ -3,7 +3,7 @@ import type { IMessagePageRepository } from "../../domain/ports/IMessagePageRepo
 import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
 import { splitMarkdown } from "../formatters/markdownSplitter.ts";
 import { llmTextToDiscordText } from "../formatters/textTransformers.ts";
-import { extractContent } from "../helpers/messageTransformers.ts";
+import { extractContent } from "../helpers/langchainMessageTransformers.ts";
 import type {
     IChatClientBot,
     IChatClientButtonInteraction,

@@ -32,7 +32,7 @@ import {
 import { and, eq, gt } from "drizzle-orm";
 import pino from "pino";
 import { extractWebGroundingChunks } from "../../src/application/formatters/groundingSources.ts";
-import { dbMessagesToLangchain } from "../../src/application/helpers/messageTransformers.ts";
+import { dbMessagesToLangchain } from "../../src/application/helpers/langchainMessageTransformers.ts";
 import { SOURCES_BUTTON_ID } from "../../src/application/shared/tokens.ts";
 import { createDb } from "../../src/infrastructure/db/connection.ts";
 import { messages } from "../../src/infrastructure/db/schema.ts";

@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { Message } from "discord.js";
 import { MessageType } from "discord.js";
-import { extractUserContent } from "../../../src/application/helpers/extractUserContent.ts";
-import { parseMessageIntent } from "../../../src/application/helpers/parseMessageIntent.ts";
+import {
+    parseMessageIntent,
+    removeMentionsAndCommandPrefix,
+} from "../../../src/application/helpers/chatMessageTransformers.ts";
 import { MessageIntent } from "../../../src/domain/value-objects/MessageIntent.ts";
 import { DiscordClientMessage } from "../../../src/infrastructure/discord/adapters/DiscordClientMessage.ts";
 
@@ -129,73 +131,77 @@ describe("parseMessageIntent", () => {
 
 describe("extractUserContent", () => {
     test("strips <@userId> mention format", () => {
-        expect(extractUserContent(`<@${BOT_ID}> hello there`, BOT_ID, null)).toBe("hello there");
+        expect(removeMentionsAndCommandPrefix(`<@${BOT_ID}> hello there`, BOT_ID, null)).toBe("hello there");
     });
 
     test("strips <@!userId> legacy nickname mention format", () => {
-        expect(extractUserContent(`<@!${BOT_ID}> what is 2+2?`, BOT_ID, null)).toBe("what is 2+2?");
+        expect(removeMentionsAndCommandPrefix(`<@!${BOT_ID}> what is 2+2?`, BOT_ID, null)).toBe("what is 2+2?");
     });
 
     test("strips multiple bot mentions", () => {
-        expect(extractUserContent(`<@${BOT_ID}> hey <@${BOT_ID}> test`, BOT_ID, null)).toBe("hey  test");
+        expect(removeMentionsAndCommandPrefix(`<@${BOT_ID}> hey <@${BOT_ID}> test`, BOT_ID, null)).toBe("hey  test");
     });
 
     test("trims surrounding whitespace", () => {
-        expect(extractUserContent(`  <@${BOT_ID}>   tell me a joke   `, BOT_ID, null)).toBe("tell me a joke");
+        expect(removeMentionsAndCommandPrefix(`  <@${BOT_ID}>   tell me a joke   `, BOT_ID, null)).toBe(
+            "tell me a joke",
+        );
     });
 
     test("returns empty string when only a mention is present", () => {
-        expect(extractUserContent(`<@${BOT_ID}>`, BOT_ID, null)).toBe("");
+        expect(removeMentionsAndCommandPrefix(`<@${BOT_ID}>`, BOT_ID, null)).toBe("");
     });
 
     test("does not strip other users' mentions", () => {
-        expect(extractUserContent(`<@${BOT_ID}> hey <@${OTHER_USER_ID}> what do you think?`, BOT_ID, null)).toBe(
-            `hey <@${OTHER_USER_ID}> what do you think?`,
-        );
+        expect(
+            removeMentionsAndCommandPrefix(`<@${BOT_ID}> hey <@${OTHER_USER_ID}> what do you think?`, BOT_ID, null),
+        ).toBe(`hey <@${OTHER_USER_ID}> what do you think?`);
     });
 
     test("strips the bot's role mention (<@&roleId>) when botRoleId is provided", () => {
         const BOT_ROLE_ID = "111222333";
-        expect(extractUserContent(`<@&${BOT_ROLE_ID}> <@${BOT_ID}> what is 2+2?`, BOT_ID, BOT_ROLE_ID)).toBe(
-            "what is 2+2?",
-        );
+        expect(
+            removeMentionsAndCommandPrefix(`<@&${BOT_ROLE_ID}> <@${BOT_ID}> what is 2+2?`, BOT_ID, BOT_ROLE_ID),
+        ).toBe("what is 2+2?");
     });
 
     test("does not strip other role mentions when botRoleId is provided", () => {
         const BOT_ROLE_ID = "111222333";
         const OTHER_ROLE_ID = "999888777";
-        expect(extractUserContent(`<@&${OTHER_ROLE_ID}> <@${BOT_ID}> what is 2+2?`, BOT_ID, BOT_ROLE_ID)).toBe(
-            `<@&${OTHER_ROLE_ID}>  what is 2+2?`,
-        );
+        expect(
+            removeMentionsAndCommandPrefix(`<@&${OTHER_ROLE_ID}> <@${BOT_ID}> what is 2+2?`, BOT_ID, BOT_ROLE_ID),
+        ).toBe(`<@&${OTHER_ROLE_ID}>  what is 2+2?`);
     });
 
     test("does not strip role mentions when botRoleId is null (DM)", () => {
-        expect(extractUserContent(`<@&111222333> <@${BOT_ID}> what is 2+2?`, BOT_ID, null)).toBe(
+        expect(removeMentionsAndCommandPrefix(`<@&111222333> <@${BOT_ID}> what is 2+2?`, BOT_ID, null)).toBe(
             "<@&111222333>  what is 2+2?",
         );
     });
 
     test("strips !ai command prefix", () => {
-        expect(extractUserContent("!ai tell me a joke", BOT_ID, null)).toBe("tell me a joke");
+        expect(removeMentionsAndCommandPrefix("!ai tell me a joke", BOT_ID, null)).toBe("tell me a joke");
     });
 
     test("strips !aisearch command prefix", () => {
-        expect(extractUserContent("!aisearch latest news", BOT_ID, null)).toBe("latest news");
+        expect(removeMentionsAndCommandPrefix("!aisearch latest news", BOT_ID, null)).toBe("latest news");
     });
 
     test("strips !aisummary command prefix", () => {
-        expect(extractUserContent("!aisummary this article", BOT_ID, null)).toBe("this article");
+        expect(removeMentionsAndCommandPrefix("!aisummary this article", BOT_ID, null)).toBe("this article");
     });
 
     test("strips command prefix case-insensitively", () => {
-        expect(extractUserContent("!AI what is TypeScript?", BOT_ID, null)).toBe("what is TypeScript?");
+        expect(removeMentionsAndCommandPrefix("!AI what is TypeScript?", BOT_ID, null)).toBe("what is TypeScript?");
     });
 
     test("strips command prefix when it appears before a bot mention", () => {
-        expect(extractUserContent(`!aisearch <@${BOT_ID}> find something`, BOT_ID, null)).toBe("find something");
+        expect(removeMentionsAndCommandPrefix(`!aisearch <@${BOT_ID}> find something`, BOT_ID, null)).toBe(
+            "find something",
+        );
     });
 
     test("does not strip command prefix without trailing whitespace", () => {
-        expect(extractUserContent("!aiquery something", BOT_ID, null)).toBe("!aiquery something");
+        expect(removeMentionsAndCommandPrefix("!aiquery something", BOT_ID, null)).toBe("!aiquery something");
     });
 });

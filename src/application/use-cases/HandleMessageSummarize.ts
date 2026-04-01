@@ -1,7 +1,7 @@
 import * as Sentry from "@sentry/bun";
 import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
 import { MessageIntent } from "../../domain/value-objects/MessageIntent.ts";
-import { extractUserContent } from "../helpers/extractUserContent.ts";
+import { removeMentionsAndCommandPrefix } from "../helpers/chatMessageTransformers.ts";
 import type {
     IChatClientBot,
     IChatClientContextMenuInteraction,
@@ -86,7 +86,11 @@ export class HandleSummarizeUseCase {
                 );
                 const attachments = targetMessage.attachments;
                 const embeds = targetMessage.embeds;
-                const userContent = extractUserContent(targetMessage.content, botUserId, targetMessage.botRoleId);
+                const userContent = removeMentionsAndCommandPrefix(
+                    targetMessage.content,
+                    botUserId,
+                    targetMessage.botRoleId,
+                );
 
                 // ACK the interaction with a visible ephemeral reply so Discord doesn't show
                 // "interaction failed". Deleted after 5 seconds — the thinking placeholder on

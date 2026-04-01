@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { AIMessageChunk } from "@langchain/core/messages";
 import pino from "pino";
 import { AttachmentMode } from "../../../src/application/config/AppConfig.ts";
-import { extractContent } from "../../../src/application/helpers/messageTransformers.ts";
+import { extractContent } from "../../../src/application/helpers/langchainMessageTransformers.ts";
 import type { IInvokableModel } from "../../../src/application/ports/IResilientModelInvoker.ts";
 import type { IRoundRobinKeyProvider } from "../../../src/application/ports/IRoundRobinKeyProvider.ts";
 import type { GeminiApiKey } from "../../../src/domain/entities/GeminiApiKey.ts";

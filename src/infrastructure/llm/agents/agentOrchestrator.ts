@@ -4,7 +4,7 @@ import { Command, END, MessagesValue, ReducedValue, START, StateGraph, StateSche
 import * as Sentry from "@sentry/bun";
 import { z } from "zod/v4";
 import { type ApiKeyType, type AppConfig, SearchMode } from "../../../application/config/AppConfig.ts";
-import { dbMessagesToLangchain, extractContent } from "../../../application/helpers/messageTransformers.ts";
+import { dbMessagesToLangchain, extractContent } from "../../../application/helpers/langchainMessageTransformers.ts";
 import type { IAgentOrchestrator } from "../../../application/ports/IAgentOrchestrator.ts";
 import type { IModelProvider } from "../../../application/ports/IModelProvider.ts";
 import type { IModelTool } from "../../../application/ports/IModelTool.ts";
