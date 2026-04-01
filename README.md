@@ -155,7 +155,7 @@ Genie only responds to explicit @mentions or `!ai` / `!aisearch` prefixes — re
 
 ### Run locally with docker-compose
 
-The included `docker-compose.local.yml` starts a PostgreSQL database and the bot together, building the image from source. If you don't want to or can't build the image yourself, `docker-compose/docker-compose.local-prebuilt.yml` uses the prebuilt image from Docker Hub (`vjancik/genieai:main`) instead — note it is currently only available for `linux/amd64` and `linux/arm64` architectures.
+The included `docker-compose.local.yml` starts a PostgreSQL database and the bot together, building the image from source. If you don't want to or can't build the image yourself, `docker-compose/docker-compose.local-prebuilt.yml` uses the prebuilt image from Docker Hub (`vjancik/genieai:latest`) instead — note it is currently only available for `linux/amd64` and `linux/arm64` architectures.
 
 **1. Prepare your files**
 

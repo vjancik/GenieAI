@@ -174,7 +174,7 @@ GenieAIV2/
 ├── docker-compose/
 │   ├── docker-compose.dev-db.yml                      # Dev PostgreSQL instance (port 5432)
 │   ├── docker-compose.test-db.yml                     # Test PostgreSQL instance (port 5433)
-│   └── docker-compose.local-prebuilt.yml              # Local stack using prebuilt Docker Hub image (vjancik/genieai:main)
+│   └── docker-compose.local-prebuilt.yml              # Local stack using prebuilt Docker Hub image (vjancik/genieai:latest)
 ├── drizzle.config.ts                                  # Drizzle Kit config (migration output path, DB connection)
 ├── config.default.yaml                                # Default configuration with all supported options documented
 ├── config.local.yaml                                  # Local overrides (gitignored)
