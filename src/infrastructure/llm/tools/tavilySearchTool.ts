@@ -1,3 +1,4 @@
+import { tool } from "@langchain/core/tools";
 import { TavilySearch } from "@langchain/tavily";
 import { z } from "zod/v4";
 
@@ -13,22 +14,22 @@ const TavilySearchResponseResultsSchema = z.object({
     results: z.array(TavilySearchResultSchema),
 });
 
-const TavilySearchResponseOptionalMetadataSchema = z.object({
-    query: z.string().optional(),
-    follow_up_questions: z.unknown().optional().nullish(),
-    answer: z.string().optional().nullish(),
-    images: z.array(z.unknown()).optional(),
-    response_time: z.number().optional(),
-    usage: z.record(z.string(), z.unknown()).optional(),
-    request_id: z.string().optional(),
-});
+// const TavilySearchResponseOptionalMetadataSchema = z.object({
+//     query: z.string().optional(),
+//     follow_up_questions: z.unknown().optional().nullish(),
+//     answer: z.string().optional().nullish(),
+//     images: z.array(z.unknown()).optional(),
+//     response_time: z.number().optional(),
+//     usage: z.record(z.string(), z.unknown()).optional(),
+//     request_id: z.string().optional(),
+// });
 
-const TavilySearchResponseSchema = TavilySearchResponseResultsSchema.extend(
-    TavilySearchResponseOptionalMetadataSchema.shape,
-);
+// const TavilySearchResponseSchema = TavilySearchResponseResultsSchema.extend(
+//     TavilySearchResponseOptionalMetadataSchema.shape,
+// );
 
-export type TavilySearchResult = z.infer<typeof TavilySearchResultSchema>;
-export type TavilySearchResponse = z.infer<typeof TavilySearchResponseSchema>;
+// export type TavilySearchResult = z.infer<typeof TavilySearchResultSchema>;
+// export type TavilySearchResponse = z.infer<typeof TavilySearchResponseSchema>;
 
 /**
  * Safely parses a raw Tavily invoke result (which may be a pre-parsed object or a JSON string).
@@ -42,19 +43,21 @@ export function safeParseTavilyResponse(raw: unknown) {
     return { objResponse, parsed: TavilySearchResponseResultsSchema.safeParse(objResponse) };
 }
 
-const ROUTE_TO_SEARCH_NAME = "web_search";
-const ROUTE_TO_SEARCH_DESCRIPTION =
-    "Use this when the question requires " +
+const TAVILY_SEARCH_NAME = "web_search";
+const TAVILY_SEARCH_DESCRIPTION =
+    "Use this tool when the question requires " +
     "up-to-date information, current events, recent news, live data, or " +
-    "niche topics where web search would significantly improve accuracy.\n" +
-    "The input query should be a one sentence natural language query that can span multiple topics.\n" +
+    "niche topics where web search would significantly improve accuracy. " +
     "You must not call this tool with the same query more than once.";
 
-/** Creates a TavilySearch tool instance. Must only be called when TAVILY_API_KEY is set. */
+const QUERY_DESCRIPTION = "A one sentence natural language search query that can span multiple topics.";
+
+/**
+ * Creates a LangChain tool that wraps TavilySearch and exposes a simple { query } schema.
+ * Must only be called when TAVILY_API_KEY is set.
+ */
 export function createTavilyTool() {
-    return new TavilySearch({
-        name: ROUTE_TO_SEARCH_NAME,
-        description: ROUTE_TO_SEARCH_DESCRIPTION,
+    const inner = new TavilySearch({
         maxResults: 10,
         includeUsage: true,
         responseFormat: "content",
@@ -67,4 +70,14 @@ export function createTavilyTool() {
         // TODO: debug env var
         verbose: false,
     });
+
+    return tool(({ query }) => inner.invoke({ query }), {
+        name: TAVILY_SEARCH_NAME,
+        description: TAVILY_SEARCH_DESCRIPTION,
+        schema: z.object({
+            query: z.string().describe(QUERY_DESCRIPTION),
+        }),
+    });
 }
+
+// export type TavilyTool = ReturnType<typeof createTavilyTool>;
