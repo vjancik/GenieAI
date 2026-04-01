@@ -67,14 +67,19 @@ function mockFetch(responses: Response[]): CapturedCall[] {
     // TYPE COERCION: Bun's fetch type includes a `preconnect` property not present in test doubles
     spyOn(globalThis, "fetch").mockImplementation((async (input: string | URL | Request, init?: RequestInit) => {
         const url = input instanceof Request ? input.url : String(input);
-        const headers = Object.fromEntries(new Headers(init?.headers as Record<string, string>).entries());
+        const parsedHeaders = new Headers(init?.headers as Record<string, string>);
+        // TYPE COERCION: Bun's Headers type omits entries() but it is present at runtime
+        const headers = Object.fromEntries((parsedHeaders as unknown as Map<string, string>).entries());
         const rawBody = init?.body;
-        const body =
+        /* TYPE COERCION: BodyInit includes string but the source only ever passes
+           Uint8Array/ArrayBuffer to fetch — the string branch is unreachable here */
+        const body = (
             rawBody instanceof Uint8Array
                 ? rawBody.slice()
                 : rawBody instanceof ArrayBuffer
                   ? new Uint8Array(rawBody.slice(0))
-                  : null;
+                  : null
+        ) as Uint8Array | null;
         calls.push({ url, headers, body, rawBody });
         return responses[i++] ?? new Response("unexpected fetch call", { status: 500 });
     }) as unknown as typeof fetch);

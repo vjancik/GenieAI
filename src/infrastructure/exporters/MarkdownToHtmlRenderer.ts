@@ -1,5 +1,7 @@
+import hljs from "highlight.js";
 import katex from "katex";
 import { Marked } from "marked";
+import { markedHighlight } from "marked-highlight";
 import markedKatex from "marked-katex-extension";
 import type { IMarkdownRenderer } from "../../application/ports/IMarkdownRenderer.ts";
 
@@ -9,6 +11,7 @@ import type { IMarkdownRenderer } from "../../application/ports/IMarkdownRendere
  * Supported features:
  * - Standard Markdown (headings, lists, code blocks, blockquotes, links, etc.)
  * - GitHub-Flavored Markdown tables
+ * - Syntax highlighting for fenced code blocks (highlight.js, atom-one-dark theme)
  * - Inline LaTeX: `$...$`
  * - Block LaTeX: `$$...$$`
  */
@@ -17,6 +20,15 @@ export class MarkdownToHtmlRenderer implements IMarkdownRenderer {
 
     constructor() {
         this.marked = new Marked();
+        this.marked.use(
+            markedHighlight({
+                langPrefix: "hljs language-",
+                highlight(code, lang) {
+                    const language = hljs.getLanguage(lang) ? lang : "plaintext";
+                    return hljs.highlight(code, { language }).value;
+                },
+            }),
+        );
         this.marked.use(
             markedKatex({
                 throwOnError: false,
@@ -51,6 +63,11 @@ export class MarkdownToHtmlRenderer implements IMarkdownRenderer {
     href="https://cdn.jsdelivr.net/npm/katex@${katexCssVersion}/dist/katex.min.css"
     crossorigin="anonymous"
   />
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/highlight.js@${hljs.versionString}/styles/atom-one-dark.min.css"
+    crossorigin="anonymous"
+  />
   <style>
     @font-face {
       font-family: "gg sans";
@@ -81,8 +98,8 @@ export class MarkdownToHtmlRenderer implements IMarkdownRenderer {
       --channeltextarea-bg: #383a40;
       --blockquote-bar:   #4e5058;
       --border-subtle:    #3f4147;
-      --code-inline-bg:   #2b2d31;
-      --code-block-bg:    #1e1f22;
+      --code-inline-bg:   #383a40;
+      --code-block-bg:    #2b2d31;
       --table-row-alt:    #2e3035;
     }
 
@@ -130,22 +147,24 @@ export class MarkdownToHtmlRenderer implements IMarkdownRenderer {
       color: #f8f8f2;
       padding: 0.15em 0.4em;
       border-radius: 3px;
+      border: 1px solid var(--border-subtle);
       font-family: "Consolas", "Andale Mono WT", "Andale Mono", "Lucida Console", monospace;
       font-size: 0.875em;
     }
 
     /* ── Code blocks ──────────────────────────────── */
     pre {
-      background: var(--code-block-bg);
+      background: var(--code-block-bg) !important;
       border: 1px solid var(--border-subtle);
       border-radius: 4px;
-      padding: 0.75rem 1rem;
+      padding: 1rem 0.75rem !important;
       overflow-x: auto;
       margin: 0.5rem 0;
     }
     pre code {
-      background: none;
-      padding: 0;
+      background: none !important;
+      border: none;
+      padding: 0 !important;
       font-size: 0.8125rem;
       color: #f8f8f2;
       border-radius: 0;

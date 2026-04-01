@@ -72,24 +72,151 @@ Nested:
 
 Call `MarkdownToHtmlRenderer.render(markdown)` to get an HTML string.
 
-### Block (TypeScript)
+### TypeScript
 
 ```typescript
 import { MarkdownToHtmlRenderer } from "./MarkdownToHtmlRenderer.ts";
 
-const renderer = new MarkdownToHtmlRenderer();
-const html = renderer.render("# Hello, world!\n\nThis is **bold**.");
-console.log(html);
+interface RenderOptions {
+    markdown: string;
+    title?: string;
+}
+
+export function renderDoc({ markdown, title = "Untitled" }: RenderOptions): string {
+    const renderer = new MarkdownToHtmlRenderer();
+    const html = renderer.render(`# ${title}\n\n${markdown}`);
+    console.log(`Rendered ${html.length} bytes`);
+    return html;
+}
 ```
 
-### Block (Python)
+### Python
 
 ```python
-def quadratic(a, b, c):
-    """Return both roots of ax² + bx + c = 0."""
+from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class QuadraticResult:
+    root1: float
+    root2: float
+
+def quadratic(a: float, b: float, c: float) -> Optional[QuadraticResult]:
+    """Return both roots of ax² + bx + c = 0, or None if no real roots."""
     discriminant = b**2 - 4*a*c
+    if discriminant < 0:
+        return None
     sqrt_d = discriminant ** 0.5
-    return (-b + sqrt_d) / (2*a), (-b - sqrt_d) / (2*a)
+    return QuadraticResult(
+        root1=(-b + sqrt_d) / (2*a),
+        root2=(-b - sqrt_d) / (2*a),
+    )
+```
+
+### C++
+
+```cpp
+#include <iostream>
+#include <vector>
+#include <algorithm>
+#include <stdexcept>
+
+template <typename T>
+class MinHeap {
+public:
+    void push(T value) {
+        data_.push_back(std::move(value));
+        std::push_heap(data_.begin(), data_.end(), std::greater<T>{});
+    }
+
+    T pop() {
+        if (data_.empty()) throw std::underflow_error("heap is empty");
+        std::pop_heap(data_.begin(), data_.end(), std::greater<T>{});
+        T top = std::move(data_.back());
+        data_.pop_back();
+        return top;
+    }
+
+    [[nodiscard]] bool empty() const noexcept { return data_.empty(); }
+
+private:
+    std::vector<T> data_;
+};
+
+int main() {
+    MinHeap<int> heap;
+    for (int x : {5, 3, 8, 1, 4}) heap.push(x);
+    while (!heap.empty()) std::cout << heap.pop() << ' ';
+}
+```
+
+### Rust
+
+```rust
+use std::collections::HashMap;
+
+fn word_frequencies(text: &str) -> HashMap<&str, usize> {
+    let mut freq = HashMap::new();
+    for word in text.split_whitespace() {
+        *freq.entry(word).or_insert(0) += 1;
+    }
+    freq
+}
+
+fn main() {
+    let text = "the quick brown fox jumps over the lazy dog the fox";
+    let freq = word_frequencies(text);
+
+    let mut pairs: Vec<_> = freq.iter().collect();
+    pairs.sort_by(|a, b| b.1.cmp(a.1));
+
+    for (word, count) in pairs.iter().take(5) {
+        println!("{word:>10}: {count}");
+    }
+}
+```
+
+### Shell (Bash)
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+LOG_DIR="${1:-/var/log/app}"
+DAYS_OLD="${2:-30}"
+
+echo "Rotating logs older than ${DAYS_OLD} days in ${LOG_DIR}"
+
+find "$LOG_DIR" -name "*.log" -mtime +"$DAYS_OLD" | while read -r file; do
+    gzip "$file" && echo "Compressed: $file"
+done
+
+# Remove already-compressed archives older than 90 days
+find "$LOG_DIR" -name "*.log.gz" -mtime +90 -delete
+echo "Done."
+```
+
+### SQL
+
+```sql
+-- Top 5 users by message count in the last 30 days
+WITH recent_messages AS (
+    SELECT
+        user_id,
+        COUNT(*)        AS msg_count,
+        MAX(created_at) AS last_seen
+    FROM messages
+    WHERE created_at >= NOW() - INTERVAL '30 days'
+    GROUP BY user_id
+)
+SELECT
+    u.username,
+    rm.msg_count,
+    rm.last_seen
+FROM recent_messages rm
+JOIN users u ON u.id = rm.user_id
+ORDER BY rm.msg_count DESC
+LIMIT 5;
 ```
 
 ---
