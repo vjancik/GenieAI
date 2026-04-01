@@ -106,6 +106,6 @@ async function runCodeExecution(outputVersion: MessageOutputVersion, stream = fa
     }
 }
 
-await runCodeExecution("v0", true);
+await runCodeExecution("v0", false);
 
-// await runCodeExecution("v1", true);
+// await runCodeExecution("v1", false);

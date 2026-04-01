@@ -20,6 +20,29 @@ import { buildSearchSystemPrompt } from "../models/searchModel.ts";
 import { buildTriageSystemPrompt } from "../models/triageModel.ts";
 import { safeParseTavilyResponse } from "../tools/tavilySearchTool.ts";
 
+// ⚠️  TEMPORARY WORKAROUND — remove once fixed upstream in @langchain/google
+// BUG: AIMessage content blocks of type "executableCode" and "codeExecutionResult"
+// are forwarded to the Gemini API with the LangChain `type` discriminant field
+// intact (e.g. `{ type: "executableCode", executableCode: {...} }`). The Gemini
+// API rejects any part that carries an unrecognised top-level field — it only
+// accepts the nested payload key alone (e.g. `{ executableCode: {...} }`).
+// Tracked in: tests/unit/llm/langchainGoogleBugs.test.ts
+//   "AIMessage executableCode and codeExecutionResult blocks are serialized with type field present"
+function stripCodeExecutionTypeFields(messages: BaseMessage[]): BaseMessage[] {
+    const CODE_EXECUTION_TYPES = new Set(["executableCode", "codeExecutionResult"]);
+    for (const message of messages) {
+        if (!Array.isArray(message.content)) continue;
+        const content = message.content as Record<string, unknown>[];
+        for (const part of content) {
+            if (CODE_EXECUTION_TYPES.has(part.type as string)) {
+                delete part.type;
+            }
+        }
+    }
+    return messages;
+}
+// ⚠️  END TEMPORARY WORKAROUND
+
 /**
  * Graph state schema: extends the prebuilt messages reducer with an `intent` field.
  * Intent is seeded once at invocation and never mutated by nodes — the plain Zod
@@ -213,7 +236,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             },
             async (span) => {
                 const result = await this.graph.invoke(
-                    { messages, intent },
+                    { messages: stripCodeExecutionTypeFields(messages), intent },
                     // TODO: factor out into it's own service that uses a fire-and-forget messaging pattern
                     { context: { onStatusUpdate } },
                 );

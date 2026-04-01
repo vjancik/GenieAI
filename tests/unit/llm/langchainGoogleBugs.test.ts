@@ -266,6 +266,120 @@ describe("@langchain/google — HumanMessage multimodal serialization", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Bug: AIMessage with executableCode/codeExecutionResult blocks serialized with
+// `type` property left in the Gemini API part, causing API rejection.
+// ---------------------------------------------------------------------------
+
+describe("@langchain/google — AIMessage code execution block serialization", () => {
+    /**
+     * An AIMessage containing executableCode and codeExecutionResult content blocks
+     * must serialize to clean Gemini parts with no `type` discriminant field.
+     *
+     * BUG (@langchain/google): the content blocks are forwarded with the LangChain
+     * `type` field intact (e.g. `{ type: "executableCode", executableCode: {...} }`),
+     * which the Gemini API rejects. The correct shape is `{ executableCode: {...} }`.
+     *
+     * This snapshot test documents the current (buggy) serialization so that any
+     * library upgrade that fixes the issue is surfaced as a snapshot diff.
+     */
+    test("AIMessage executableCode and codeExecutionResult blocks are serialized with type field present (snapshot)", async () => {
+        const model = new ChatGoogle({
+            model: "gemini-2.5-flash",
+            apiKey: "test-api-key-fake",
+        });
+
+        const messages = [
+            new HumanMessage("Plot a normal distribution for IQ scores."),
+            new AIMessage({
+                content: [
+                    {
+                        type: "text",
+                        text: "To render the IQ normal distribution, we need to consider its standard parameters: a mean (μ) of 100 and a standard deviation (σ) of 15.\n\n",
+                    },
+                    {
+                        type: "executableCode",
+                        executableCode: {
+                            language: "PYTHON",
+                            code: 'import math\n\nmu = 100\nsigma = 15\n\ndef normal_pdf(x, mu, sigma):\n    coefficient = 1 / (sigma * math.sqrt(2 * math.pi))\n    exponent = -((x - mu)**2) / (2 * sigma**2)\n    return coefficient * math.exp(exponent)\n\niq_scores = [70, 85, 100, 115, 130]\nfor score in iq_scores:\n    print(f"IQ {score}: {normal_pdf(score, mu, sigma):.6f}")\n',
+                        },
+                    },
+                    {
+                        type: "codeExecutionResult",
+                        codeExecutionResult: {
+                            outcome: "OUTCOME_OK",
+                            output: "IQ 70: 0.003599\nIQ 85: 0.016131\nIQ 100: 0.026596\nIQ 115: 0.016131\nIQ 130: 0.003599\n",
+                        },
+                    },
+                    {
+                        type: "text",
+                        text: "These values show the characteristic bell curve shape.",
+                    },
+                ],
+            }),
+        ];
+
+        const body = await captureGenerateContentBody(() => model.invoke(messages));
+        const contents = body.contents as Array<{ role: string; parts: Array<Record<string, unknown>> }>;
+
+        // The AIMessage turn is the second content entry (index 1).
+        const aiParts = contents[1]?.parts ?? [];
+
+        // BUG: executableCode and codeExecutionResult parts carry a `type` field that
+        // the Gemini API does not accept. A fixed library would omit `type` entirely.
+        expect(aiParts).toMatchInlineSnapshot(`
+[
+  {
+    "text": 
+"To render the IQ normal distribution, we need to consider its standard parameters: a mean (μ) of 100 and a standard deviation (σ) of 15.
+
+"
+,
+  },
+  {
+    "executableCode": {
+      "code": 
+"import math
+
+mu = 100
+sigma = 15
+
+def normal_pdf(x, mu, sigma):
+    coefficient = 1 / (sigma * math.sqrt(2 * math.pi))
+    exponent = -((x - mu)**2) / (2 * sigma**2)
+    return coefficient * math.exp(exponent)
+
+iq_scores = [70, 85, 100, 115, 130]
+for score in iq_scores:
+    print(f"IQ {score}: {normal_pdf(score, mu, sigma):.6f}")
+"
+,
+      "language": "PYTHON",
+    },
+    "type": "executableCode",
+  },
+  {
+    "codeExecutionResult": {
+      "outcome": "OUTCOME_OK",
+      "output": 
+"IQ 70: 0.003599
+IQ 85: 0.016131
+IQ 100: 0.026596
+IQ 115: 0.016131
+IQ 130: 0.003599
+"
+,
+    },
+    "type": "codeExecutionResult",
+  },
+  {
+    "text": "These values show the characteristic bell curve shape.",
+  },
+]
+`);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // Bug: ToolMessage is silently dropped when its content is a plain object
 // Introduced in @langchain/google@0.1.8, fixed in TBD
 // (reported upstream — tracked by the regression test below)
