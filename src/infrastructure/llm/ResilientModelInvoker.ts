@@ -79,7 +79,7 @@ async function streamingInvoke(
         throw err;
     }
 
-    return new AIMessage({ ...collected });
+    return new AIMessage(collected.lc_kwargs);
 }
 
 /**

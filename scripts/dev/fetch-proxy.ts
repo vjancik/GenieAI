@@ -9,7 +9,7 @@ const originalFetch = globalThis.fetch;
 globalThis.fetch = async function proxiedFetch(input: Request | string | URL, init?: RequestInit): Promise<Response> {
     const url = input instanceof Request ? input.url : String(input);
 
-    if (url.includes("generateContent")) {
+    if (url.includes("generateContent") || url.includes("streamGenerateContent")) {
         let body: unknown = "(unreadable)";
         try {
             const rawBody = init?.body ?? (input instanceof Request ? await input.clone().text() : undefined);

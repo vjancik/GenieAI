@@ -32,7 +32,7 @@ const routeToGeneralTool = tool(async () => JSON.stringify({ route: "general" })
     name: "route_to_general",
     description:
         "Route to the general-purpose agent for all other questions: " +
-        "creative writing, coding, math, general knowledge, explanations, " +
+        "creative writing, coding, math, computation, rendering, general knowledge, explanations, " +
         "and anything that doesn't require real-time data or external content.",
     schema: z.object({}),
 });
@@ -171,6 +171,7 @@ function createTavilyOnlyTriageModel(
     const llm = new ChatGoogle({
         model: modelName,
         apiKey,
+        outputVersion: "v0",
         thinkingConfig: {
             thinkingLevel: options.thinkingLevel,
             includeThoughts: options.includeThoughts,

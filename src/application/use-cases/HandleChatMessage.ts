@@ -12,6 +12,10 @@ import { discordMessageToLlmText, llmTextToDiscordText } from "../formatters/tex
 import { buildLangchainMessage } from "../helpers/buildLangchainMessage.ts";
 import { extractUserContent } from "../helpers/extractUserContent.ts";
 import { hasExtendedMarkdown } from "../helpers/hasExtendedMarkdown.ts";
+import {
+    extractInlineDataBlocksAsAttachments,
+    replaceInlineDataBlocksWithDiscordTokenUrls,
+} from "../helpers/messageTransformers.ts";
 import { parseMessageIntent } from "../helpers/parseMessageIntent.ts";
 import type {
     IChatClientBot,
@@ -712,9 +716,11 @@ export class HandleChatMessageUseCase {
                 ...(sourcesButton ? [sourcesButton] : []),
             ];
 
+            const inlineAttachments = extractInlineDataBlocksAsAttachments(newMessages);
             const botReply = await replyTarget.reply({
                 content: (replyPrefix ? `${replyPrefix} ` : "") + page1Content + fallbackFooter,
                 buttons: firstPageButtons,
+                ...(inlineAttachments.length > 0 && { files: inlineAttachments }),
                 ...(!pingUser && {
                     allowedMentions: {
                         repliedUser: false,
@@ -728,6 +734,17 @@ export class HandleChatMessageUseCase {
                 "chat.response.total_pages": totalPages,
             });
 
+            const persistedMessages =
+                inlineAttachments.length > 0
+                    ? replaceInlineDataBlocksWithDiscordTokenUrls(
+                          newMessages,
+                          botReply.attachments.map((a) => a.id),
+                          botReply.id,
+                          botReply.channelId,
+                          botReply.guildId ?? DM_GUILD_TOKEN,
+                      )
+                    : newMessages;
+
             // messages row must exist before messagePageRepo.save (FK constraint)
             const savedBotMsg = await this.messageRepo.saveBotMessage({
                 discordMessageId: botReply.id,
@@ -735,7 +752,7 @@ export class HandleChatMessageUseCase {
                 channelId: botReply.channelId,
                 guildId: botReply.guildId ?? DM_GUILD_TOKEN,
                 discordAuthorId: this.bot.userId,
-                langchainMessages: newMessages,
+                langchainMessages: persistedMessages,
                 retriesLeft: isRetryable ? effectiveRetriesLeft : null,
                 usedFallback: usedFallback ?? false,
                 interactionType: interactionType ?? null,
@@ -766,9 +783,11 @@ export class HandleChatMessageUseCase {
                 ...(sourcesButton ? [sourcesButton] : []),
             ];
 
+            const inlineAttachments = extractInlineDataBlocksAsAttachments(newMessages);
             const botReply = await replyTarget.reply({
                 content: (replyPrefix ? `${replyPrefix} ` : "") + responseWithFooter,
                 ...(nonPaginatedButtons.length > 0 && { buttons: nonPaginatedButtons }),
+                ...(inlineAttachments.length > 0 && { files: inlineAttachments }),
                 ...(!pingUser && {
                     allowedMentions: {
                         repliedUser: false,
@@ -779,13 +798,24 @@ export class HandleChatMessageUseCase {
 
             span.setAttributes({ "chat.paginated": false });
 
+            const persistedMessages =
+                inlineAttachments.length > 0
+                    ? replaceInlineDataBlocksWithDiscordTokenUrls(
+                          newMessages,
+                          botReply.attachments.map((a) => a.id),
+                          botReply.id,
+                          botReply.channelId,
+                          botReply.guildId ?? DM_GUILD_TOKEN,
+                      )
+                    : newMessages;
+
             await this.messageRepo.saveBotMessage({
                 discordMessageId: botReply.id,
                 repliesToDiscordId: replyTarget.id,
                 channelId: botReply.channelId,
                 guildId: botReply.guildId ?? DM_GUILD_TOKEN,
                 discordAuthorId: this.bot.userId,
-                langchainMessages: newMessages,
+                langchainMessages: persistedMessages,
                 retriesLeft: isRetryable ? effectiveRetriesLeft : null,
                 usedFallback: usedFallback ?? false,
                 interactionType: interactionType ?? null,

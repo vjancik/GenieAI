@@ -65,6 +65,7 @@ function createGeneralModel(
     const llm = new ChatGoogle({
         model: modelName,
         apiKey,
+        outputVersion: "v0",
         thinkingConfig: {
             thinkingLevel: "HIGH" satisfies ThinkingLevel,
             includeThoughts: options.includeThoughts,
