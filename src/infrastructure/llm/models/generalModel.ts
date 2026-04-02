@@ -35,6 +35,7 @@ export function buildGeneralSystemPrompt(
         (hasToolResult
             ? "If previous tool calls all failed, you should inform the user of the failure and carefully decide whether you have sufficient context and information to answer user's request regardless. If not, telling the user about the tool failure is sufficient.\n"
             : "") +
+        "You are not allowed to call any tools.\n" +
         "In the absence of a specific query or request regarding a provided link, assume the user is requesting a summary of the content." +
         SYSTEM_PROMPT_FOOTER
     );
