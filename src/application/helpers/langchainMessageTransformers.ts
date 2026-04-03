@@ -244,7 +244,7 @@ type InlineDataPart = {
     inlineData: { mimeType: string; data: string };
 };
 
-function isInlineDataPart(part: unknown): part is InlineDataPart {
+export function isInlineDataPart(part: unknown): part is InlineDataPart {
     if (typeof part !== "object" || part === null) return false;
     // TYPE COERCION: cast to Record to read the type discriminant by name.
     const p = part as Record<string, unknown>;

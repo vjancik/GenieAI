@@ -5,6 +5,7 @@ import {
     dbMessagesToLangchain,
     extractContent,
     extractInlineDataBlocksAsAttachments,
+    isInlineDataPart,
     replaceInlineDataBlocksWithDiscordTokenUrls,
 } from "../../../src/application/helpers/langchainMessageTransformers.ts";
 import type { PersistedChatMessage } from "../../../src/domain/entities/Message.ts";
@@ -341,5 +342,28 @@ describe("dbMessagesToLangchain — known types", () => {
         expect(result).toHaveLength(2);
         expect(result[0]).toBeInstanceOf(HumanMessage);
         expect(result[1]).toBeInstanceOf(AIMessage);
+    });
+});
+
+describe("isInlineDataPart", () => {
+    it("returns true for a valid inlineData part", () => {
+        expect(isInlineDataPart({ type: "inlineData", inlineData: { mimeType: "image/png", data: "abc123" } })).toBe(
+            true,
+        );
+    });
+
+    it("returns false for a text part", () => {
+        expect(isInlineDataPart({ type: "text", text: "hello" })).toBe(false);
+    });
+
+    it("returns false when inlineData fields are missing", () => {
+        expect(isInlineDataPart({ type: "inlineData", inlineData: {} })).toBe(false);
+        expect(isInlineDataPart({ type: "inlineData" })).toBe(false);
+    });
+
+    it("returns false for null and non-objects", () => {
+        expect(isInlineDataPart(null)).toBe(false);
+        expect(isInlineDataPart("inlineData")).toBe(false);
+        expect(isInlineDataPart(42)).toBe(false);
     });
 });

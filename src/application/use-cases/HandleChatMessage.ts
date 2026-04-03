@@ -14,6 +14,7 @@ import { parseMessageIntent, removeMentionsAndCommandPrefix } from "../helpers/c
 import { hasExtendedMarkdown } from "../helpers/hasExtendedMarkdown.ts";
 import {
     extractInlineDataBlocksAsAttachments,
+    isInlineDataPart,
     replaceInlineDataBlocksWithDiscordTokenUrls,
 } from "../helpers/langchainMessageTransformers.ts";
 import type {
@@ -567,7 +568,7 @@ export class HandleChatMessageUseCase {
                     const { content, newMessages, isRetryable, usedFallback, wasInterrupted } =
                         await this.orchestrator.process(llmHistory, params.intent, params.onStatusUpdate);
 
-                    if (!content) {
+                    if (!content && !this.hasInlineData(newMessages)) {
                         this.logger.warn(
                             { discordMessageId: params.discordMessageId },
                             "Orchestrator returned empty content",
@@ -844,6 +845,11 @@ export class HandleChatMessageUseCase {
      * Returns true when the last message in `newMessages` contains web grounding chunks,
      * indicating the Sources button should be shown.
      */
+    /** Returns true if any message in `newMessages` contains at least one inlineData content part (e.g. a generated image). */
+    private hasInlineData(newMessages: BaseMessage[]): boolean {
+        return newMessages.some((msg) => Array.isArray(msg.content) && msg.content.some(isInlineDataPart));
+    }
+
     private countResponseSources(newMessages: BaseMessage[]): number {
         const lastMessage = newMessages.at(-1);
         if (!lastMessage) return 0;
