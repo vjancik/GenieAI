@@ -122,6 +122,12 @@ const OrchestratorStateSchema = new StateSchema({
      * why response quality may be degraded, independent of retry eligibility.
      */
     usedFallback: new ReducedValue(z.boolean().default(false), booleanOrReducer),
+    /**
+     * Set to true by generalNode, searchNode, or computationNode when the model stream
+     * terminated without a finishReason, indicating a premature upstream termination.
+     * The response content may be incomplete. Implies isRetryable.
+     */
+    wasInterrupted: new ReducedValue(z.boolean().default(false), booleanOrReducer),
 });
 
 /**
@@ -270,7 +276,13 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         messages: BaseMessage[],
         intent: MessageIntent,
         onStatusUpdate?: OnStatusUpdate,
-    ): Promise<{ content: string; newMessages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean }> {
+    ): Promise<{
+        content: string;
+        newMessages: BaseMessage[];
+        isRetryable: boolean;
+        usedFallback: boolean;
+        wasInterrupted: boolean;
+    }> {
         const lastMessage = messages.at(-1);
         if (!(lastMessage instanceof HumanMessage)) {
             throw new Error(
@@ -304,6 +316,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     newMessages,
                     isRetryable: result.isRetryable,
                     usedFallback: result.usedFallback,
+                    wasInterrupted: result.wasInterrupted,
                 };
             },
         );
@@ -637,7 +650,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     private async generalNode(
         state: GraphState,
         config: NodeConfig,
-    ): Promise<{ messages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean }> {
+    ): Promise<{ messages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean; wasInterrupted: boolean }> {
         return Sentry.startSpan({ name: "General agent node", op: "agent.node.general" }, async (span) => {
             const lastMsg = state.messages.at(-1);
             const hasToolResult = lastMsg instanceof ToolMessage;
@@ -657,7 +670,11 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 ...state.messages,
             ];
 
-            const { result: response, usedFallback } = await this.invoker.invoke(
+            const {
+                result: response,
+                usedFallback,
+                wasInterrupted,
+            } = await this.invoker.invoke(
                 this.nodeApiKeyTypes.general,
                 this.generalProvider.get.bind(this.generalProvider),
                 this.generalProvider.getFallback.bind(this.generalProvider),
@@ -675,7 +692,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 throw new LlmError("User-facing general model produced an illegal tool call");
             }
 
-            return { messages: [response], isRetryable: usedFallback, usedFallback };
+            return { messages: [response], isRetryable: usedFallback || wasInterrupted, usedFallback, wasInterrupted };
         });
     }
 
@@ -689,14 +706,18 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     private async computationNode(
         state: GraphState,
         config: NodeConfig,
-    ): Promise<{ messages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean }> {
+    ): Promise<{ messages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean; wasInterrupted: boolean }> {
         return Sentry.startSpan({ name: "Computation agent node", op: "agent.node.computation" }, async () => {
             const invokeMessages: BaseMessage[] = [
                 new SystemMessage(buildComputationSystemPrompt(this.basePrompt)),
                 ...state.messages,
             ];
 
-            const { result: response, usedFallback } = await this.invoker.invoke(
+            const {
+                result: response,
+                usedFallback,
+                wasInterrupted,
+            } = await this.invoker.invoke(
                 this.nodeApiKeyTypes.computation,
                 this.computationProvider.get.bind(this.computationProvider),
                 this.computationProvider.getFallback.bind(this.computationProvider),
@@ -706,7 +727,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 AgentStatusType.COMPUTING,
             );
 
-            return { messages: [response], isRetryable: usedFallback, usedFallback };
+            return { messages: [response], isRetryable: usedFallback || wasInterrupted, usedFallback, wasInterrupted };
         });
     }
 
@@ -724,7 +745,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     private async searchNode(
         state: GraphState,
         config: NodeConfig,
-    ): Promise<{ messages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean }> {
+    ): Promise<{ messages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean; wasInterrupted: boolean }> {
         return Sentry.startSpan({ name: "Search agent node", op: "agent.node.search" }, async () => {
             if (this.searchMode === SearchMode.tavily) {
                 if (!this.tavilyTool) {
@@ -788,7 +809,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     tavilyResultMessage,
                 ];
 
-                const { result, usedFallback } = await this.invoker.invoke(
+                const { result, usedFallback, wasInterrupted } = await this.invoker.invoke(
                     this.nodeApiKeyTypes.search,
                     this.searchProvider.get.bind(this.searchProvider),
                     this.searchProvider.getFallback.bind(this.searchProvider),
@@ -810,8 +831,9 @@ export class AgentOrchestrator implements IAgentOrchestrator {
 
                 return {
                     messages: [tavilyResultMessage, result],
-                    isRetryable: usedFallback,
+                    isRetryable: usedFallback || wasInterrupted,
                     usedFallback,
+                    wasInterrupted: wasInterrupted,
                 };
             }
 
@@ -819,7 +841,11 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 new SystemMessage(buildSearchSystemPrompt(this.basePrompt, this.searchMode)),
                 ...state.messages,
             ];
-            const { result: response, usedFallback } = await this.invoker.invoke(
+            const {
+                result: response,
+                usedFallback,
+                wasInterrupted,
+            } = await this.invoker.invoke(
                 this.nodeApiKeyTypes.search,
                 this.searchProvider.get.bind(this.searchProvider),
                 this.searchProvider.getFallback.bind(this.searchProvider),
@@ -837,7 +863,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 throw new LlmError("User-facing search model produced an illegal tool call");
             }
 
-            return { messages: [response], isRetryable: usedFallback, usedFallback };
+            return { messages: [response], isRetryable: usedFallback || wasInterrupted, usedFallback, wasInterrupted };
         });
     }
 }

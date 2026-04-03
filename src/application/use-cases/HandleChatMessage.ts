@@ -51,6 +51,7 @@ type AgentResult = {
     isFailure?: boolean;
     isRetryable?: boolean;
     usedFallback?: boolean;
+    wasInterrupted?: boolean;
     thinkingMessagePromise: Promise<IChatClientMessage>;
 };
 
@@ -253,22 +254,23 @@ export class HandleChatMessageUseCase {
                 });
             };
 
-            const { response, newMessages, isFailure, isRetryable, usedFallback } = await this.processMessage({
-                discordMessageId: message.id,
-                referencedMessageId: message.referencedMessageId,
-                channelId: message.channelId,
-                guildId: message.guildId ?? DM_GUILD_TOKEN,
-                discordAuthorId: message.authorId,
-                message: userContent !== null ? message : null,
-                strippedContent: userContent,
-                attachments: attachments ?? [],
-                embeds: embeds ?? message.embeds,
-                intent,
-                onStatusUpdate,
-                reuseHumanMessage,
-                fetchHistory,
-                ephemeralInstructionMessage,
-            });
+            const { response, newMessages, isFailure, isRetryable, usedFallback, wasInterrupted } =
+                await this.processMessage({
+                    discordMessageId: message.id,
+                    referencedMessageId: message.referencedMessageId,
+                    channelId: message.channelId,
+                    guildId: message.guildId ?? DM_GUILD_TOKEN,
+                    discordAuthorId: message.authorId,
+                    message: userContent !== null ? message : null,
+                    strippedContent: userContent,
+                    attachments: attachments ?? [],
+                    embeds: embeds ?? message.embeds,
+                    intent,
+                    onStatusUpdate,
+                    reuseHumanMessage,
+                    fetchHistory,
+                    ephemeralInstructionMessage,
+                });
 
             return {
                 response,
@@ -276,6 +278,7 @@ export class HandleChatMessageUseCase {
                 isFailure,
                 isRetryable,
                 usedFallback,
+                wasInterrupted,
                 // TYPE COERCION: thinkingMessagePromise is always assigned before any await
                 // that could skip the assignment — the undefined case is structurally impossible.
                 thinkingMessagePromise,
@@ -395,6 +398,7 @@ export class HandleChatMessageUseCase {
         isFailure?: boolean;
         isRetryable?: boolean;
         usedFallback?: boolean;
+        wasInterrupted?: boolean;
     }> {
         try {
             return await Sentry.startSpan(
@@ -560,11 +564,8 @@ export class HandleChatMessageUseCase {
                         "Processing message with history",
                     );
 
-                    const { content, newMessages, isRetryable, usedFallback } = await this.orchestrator.process(
-                        llmHistory,
-                        params.intent,
-                        params.onStatusUpdate,
-                    );
+                    const { content, newMessages, isRetryable, usedFallback, wasInterrupted } =
+                        await this.orchestrator.process(llmHistory, params.intent, params.onStatusUpdate);
 
                     if (!content) {
                         this.logger.warn(
@@ -584,6 +585,7 @@ export class HandleChatMessageUseCase {
                         newMessages,
                         isRetryable: isRetryable || undefined,
                         usedFallback: usedFallback || undefined,
+                        wasInterrupted: wasInterrupted || undefined,
                     };
                 },
             );
@@ -612,6 +614,7 @@ export class HandleChatMessageUseCase {
         isFailure?: boolean;
         isRetryable?: boolean;
         usedFallback?: boolean;
+        wasInterrupted?: boolean;
         retriesLeft?: number | null;
         thinkingMessagePromise: Promise<IChatClientMessage>;
         span: Sentry.Span;
@@ -627,6 +630,7 @@ export class HandleChatMessageUseCase {
             isFailure,
             isRetryable,
             usedFallback,
+            wasInterrupted,
             retriesLeft,
             thinkingMessagePromise,
             span,
@@ -655,8 +659,16 @@ export class HandleChatMessageUseCase {
         // refer to positions within discordResponse — subsequent pages are served from that
         // string and must not be offset by the footer length.
         const fallbackFooter = usedFallback
-            ? "\n*This response was generated using a fallback model. If it's unsatisfactory you can try to Retry later to see if the primary model is available again.*"
+            ? "\n*This response was generated using a fallback model. If it's unsatisfactory you can Retry later to see if the primary model is available again.*"
             : "";
+
+        // Informational footer appended when the stream terminated prematurely (no finishReason).
+        const interruptedFooter = wasInterrupted
+            ? "\n*This response may be incomplete. If it's unsatisfactory you can Retry.*"
+            : "";
+
+        // Combined footer — both may be present simultaneously (e.g. fallback model that also got cut off).
+        const combinedFooter = fallbackFooter + interruptedFooter;
 
         // Determine whether the response has grounding sources so the Sources button can be appended.
         // Skipped on failure responses — the error message has no meaningful sources to cite,
@@ -683,8 +695,8 @@ export class HandleChatMessageUseCase {
             ? { customId: RENDER_BUTTON_ID, label: "Render", style: "secondary" }
             : undefined;
 
-        // Space reserved on the first page for replyPrefix (+ trailing space) and fallbackFooter.
-        const page1Overhead = (replyPrefix ? replyPrefix.length + 1 : 0) + fallbackFooter.length;
+        // Space reserved on the first page for replyPrefix (+ trailing space) and combined footers.
+        const page1Overhead = (replyPrefix ? replyPrefix.length + 1 : 0) + combinedFooter.length;
 
         if (discordResponse.length + page1Overhead > MESSAGE_LENGTH_LIMIT) {
             // --- PAGINATED PATH ---
@@ -717,7 +729,7 @@ export class HandleChatMessageUseCase {
 
             const inlineAttachments = extractInlineDataBlocksAsAttachments(newMessages);
             const botReply = await replyTarget.reply({
-                content: (replyPrefix ? `${replyPrefix} ` : "") + page1Content + fallbackFooter,
+                content: (replyPrefix ? `${replyPrefix} ` : "") + page1Content + combinedFooter,
                 buttons: firstPageButtons,
                 ...(inlineAttachments.length > 0 && { files: inlineAttachments }),
                 ...(!pingUser && {
@@ -769,7 +781,7 @@ export class HandleChatMessageUseCase {
         } else {
             // --- NON-PAGINATED PATH ---
 
-            const responseWithFooter = discordResponse + fallbackFooter;
+            const responseWithFooter = discordResponse + combinedFooter;
 
             const sourcesButton: IChatClientMessageButton | undefined =
                 sourceCount > 0

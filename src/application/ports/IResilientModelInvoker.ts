@@ -14,6 +14,12 @@ export interface ModelInvocationResult {
     result: AIMessage;
     /** True when the primary model was unavailable and a fallback model was substituted. */
     usedFallback: boolean;
+    /**
+     * True when the model stream terminated without a `finishReason` in the final message,
+     * indicating a premature upstream termination (e.g. Google dropped the connection or
+     * returned a malformed SSE frame). The response content may be incomplete.
+     */
+    wasInterrupted: boolean;
 }
 
 /**

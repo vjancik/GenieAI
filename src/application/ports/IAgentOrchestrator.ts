@@ -32,5 +32,11 @@ export interface IAgentOrchestrator {
         messages: BaseMessage[],
         intent: MessageIntent,
         onStatusUpdate?: OnStatusUpdate,
-    ): Promise<{ content: string; newMessages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean }>;
+    ): Promise<{
+        content: string;
+        newMessages: BaseMessage[];
+        isRetryable: boolean;
+        usedFallback: boolean;
+        wasInterrupted: boolean;
+    }>;
 }

@@ -28,13 +28,15 @@ import { concatMessageChunks, normalizeContent } from "./utils/langchainUtils.ts
  * - `invokeOptions` is forwarded directly to `model.stream()`.
  * - `firstChunkTimeoutMs` races against the arrival of the first streamed chunk; if no
  *   chunk arrives within that window the stream is cancelled and a TimeoutError is thrown.
+ * - `wasInterrupted` is true when the final message carries no `finishReason` in either
+ *   `response_metadata` or `additional_kwargs`, indicating a premature upstream termination.
  */
 async function streamingInvoke(
     model: IInvokableModel,
     messages: BaseMessage[],
     invokeOptions?: unknown,
     extraOptions?: { firstChunkTimeoutMs?: number; span?: Span },
-): Promise<AIMessage> {
+): Promise<{ message: AIMessage; wasInterrupted: boolean }> {
     const iterable = await model.stream(messages, invokeOptions);
     const iterator = iterable[Symbol.asyncIterator]();
 
@@ -82,7 +84,12 @@ async function streamingInvoke(
         throw err;
     }
 
-    return new AIMessage(collected.lc_kwargs);
+    const message = new AIMessage(collected.lc_kwargs);
+
+    const finishReason = message.response_metadata?.finishReason ?? message.additional_kwargs?.finishReason;
+    const wasInterrupted = !finishReason;
+
+    return { message, wasInterrupted };
 }
 
 /**
@@ -227,15 +234,17 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
                             onStatusUpdate?.({ type: beforeInvokeStatus });
                         }
 
-                        const result = await streamingInvoke(getModel(key), filtered, undefined, {
-                            firstChunkTimeoutMs: timeoutMs ?? this.globalTimeoutMs,
-                            span,
-                        });
+                        const { message: result, wasInterrupted } = await streamingInvoke(
+                            getModel(key),
+                            filtered,
+                            undefined,
+                            { firstChunkTimeoutMs: timeoutMs ?? this.globalTimeoutMs, span },
+                        );
                         span.setAttributes({
                             "llm.attempt_count": attempt + 1,
                             "llm.api_key_id": key.id,
                         });
-                        return { result, usedFallback: false };
+                        return { result, usedFallback: false, wasInterrupted };
                     } catch (err) {
                         if (is429Error(err)) {
                             this.logger.warn(
@@ -266,16 +275,21 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
                             );
                             try {
                                 // Reuse filtered — same key, same messages, no re-refresh needed
-                                const fallbackResult = await streamingInvoke(fallbackModel, filtered, undefined, {
-                                    firstChunkTimeoutMs: timeoutMs ?? this.globalTimeoutMs,
-                                    span,
-                                });
+                                const { message: fallbackResult, wasInterrupted: fallbackInterrupted } =
+                                    await streamingInvoke(fallbackModel, filtered, undefined, {
+                                        firstChunkTimeoutMs: timeoutMs ?? this.globalTimeoutMs,
+                                        span,
+                                    });
                                 span.setAttributes({
                                     "llm.attempt_count": attempt + 1,
                                     "llm.api_key_id": key.id,
                                     "llm.used_fallback": true,
                                 });
-                                return { result: fallbackResult, usedFallback: true };
+                                return {
+                                    result: fallbackResult,
+                                    usedFallback: true,
+                                    wasInterrupted: fallbackInterrupted,
+                                };
                             } catch (fallbackErr) {
                                 if (is429Error(fallbackErr)) {
                                     this.logger.warn(
