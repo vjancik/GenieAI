@@ -150,6 +150,7 @@ function makeMessageRepo(overrides: Partial<IMessageRepository> = {}): IMessageR
 function makePageRepo(): IMessagePageRepository {
     return {
         save: mock(async (p) => ({ ...p, id: "page-uuid-1", createdAt: BASE_DATE })),
+        findFirstPageMessageIdByMessageId: mock(async () => null),
     };
 }
 
@@ -286,7 +287,8 @@ describe("HandleNextPageUseCase", () => {
             unknown
         >;
         expect(replyCall).not.toHaveProperty("buttons");
-        expect(pageRepo.save).not.toHaveBeenCalled();
+        // Page state is saved for all pages (including last) so export can resolve firstPageMessageId
+        expect(pageRepo.save).toHaveBeenCalledTimes(1);
     });
 
     // 31

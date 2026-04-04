@@ -1,4 +1,5 @@
 import { DiscordError, isMissingPermissionsError } from "../../domain/errors/AppError.ts";
+import type { IMessagePageRepository } from "../../domain/ports/IMessagePageRepository.ts";
 import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
 import { sanitizeForLog } from "../helpers/errorHelpers.ts";
 import { dbMessagesToLangchain, extractContent } from "../helpers/langchainMessageTransformers.ts";
@@ -33,6 +34,7 @@ function withoutButton(message: IChatClientMessage, removeId: string): IChatClie
 export class HandleExportUseCase {
     /**
      * @param messageRepo - Repository for finding message rows and persisting render replies
+     * @param messagePageRepo - Repository for resolving page state (used to walk to the first-page row)
      * @param markdownRenderer - Port for rendering Markdown to HTML
      * @param imageRenderer - Port for rendering HTML to a PNG image buffer
      * @param bot - Chat client bot adapter for reading the current bot user ID
@@ -43,6 +45,7 @@ export class HandleExportUseCase {
      */
     constructor(
         private readonly messageRepo: IMessageRepository,
+        private readonly messagePageRepo: IMessagePageRepository,
         private readonly markdownRenderer: IMarkdownRenderer,
         private readonly imageRenderer: IImageRenderer,
         private readonly bot: IChatClientBot,
@@ -197,21 +200,29 @@ export class HandleExportUseCase {
      * Resolves the full markdown content for a bot message to export.
      *
      * Looks up the DB row for the target message and extracts text from its
-     * persisted LangChain messages (which may contain the full multi-page content).
-     * Falls back to the Discord message content if no DB row exists.
+     * persisted LangChain messages. For pages 2+, `langchainMessages` is empty —
+     * the `message_pages` row is consulted to find the first-page row which holds
+     * the real content. Falls back to the Discord message content if no DB row exists.
      */
     private async resolveExportContent(target: IChatClientMessage): Promise<string> {
         const guildId = target.guildId ?? DM_GUILD_TOKEN;
-        const row = await this.messageRepo.findByDiscordMessageId({
+        let row = await this.messageRepo.findByDiscordMessageId({
             discordMessageId: target.id,
             channelId: target.channelId,
             guildId,
         });
 
+        if (row && row.langchainMessages.length === 0) {
+            // Pages 2+ are saved with empty langchainMessages — resolve the first-page row
+            // via the message_pages table, which stores firstPageMessageId for all pages.
+            const firstPageMessageId = await this.messagePageRepo.findFirstPageMessageIdByMessageId(row.id);
+            if (firstPageMessageId) {
+                row = await this.messageRepo.findById(firstPageMessageId);
+            }
+        }
+
         if (row && row.langchainMessages.length > 0) {
-            // Find the last AI message in the stored LangChain messages and extract its content
             const langchainMessages = dbMessagesToLangchain([row], this.logger);
-            // Walk from the end to find the last substantive AI response
             for (let i = langchainMessages.length - 1; i >= 0; i--) {
                 const msg = langchainMessages[i];
                 if (msg === undefined) continue;

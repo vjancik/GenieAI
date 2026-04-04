@@ -200,24 +200,21 @@ export class HandleNextPageUseCase {
                     });
 
                     await Promise.allSettled([
-                        // Save new pending page state if there are more pages after this one.
-                        // firstPageMessageId is propagated from the page state so all rows
-                        // in this response chain point to the same first-page messages row.
-                        !result.isLast
-                            ? this.messagePageRepo
-                                  .save({
-                                      messageId: savedNextBotMsg.id,
-                                      firstPageMessageId: result.firstPageMessageId,
-                                      endOffset: result.newOffset,
-                                      currentPage: result.currentPage,
-                                      totalPages: result.totalPages,
-                                      endedInCodeBlock: result.endedInCodeBlock,
-                                      codeBlockType: result.codeBlockType,
-                                  })
-                                  .catch((err) => {
-                                      this.logger.error({ err }, "Failed to save next message page state");
-                                  })
-                            : Promise.resolve(),
+                        // Save page state for all pages — including the last — so the
+                        // firstPageMessageId link is always available (e.g. for export lookups).
+                        this.messagePageRepo
+                            .save({
+                                messageId: savedNextBotMsg.id,
+                                firstPageMessageId: result.firstPageMessageId,
+                                endOffset: result.newOffset,
+                                currentPage: result.currentPage,
+                                totalPages: result.totalPages,
+                                endedInCodeBlock: result.endedInCodeBlock,
+                                codeBlockType: result.codeBlockType,
+                            })
+                            .catch((err) => {
+                                this.logger.error({ err }, "Failed to save next message page state");
+                            }),
 
                         // Remove only the Next Page button from the OLD bot message,
                         // preserving any Retry button that may also be present.

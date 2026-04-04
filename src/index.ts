@@ -265,6 +265,7 @@ const handleSummarizeUseCase = new HandleSummarizeUseCase(
 );
 const handleExportUseCase = new HandleExportUseCase(
     messageRepository,
+    messagePageRepository,
     markdownToHtml,
     htmlToImage,
     discordClientBot,

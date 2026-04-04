@@ -126,57 +126,37 @@ describe("PgMessagePageRepository.save", () => {
     });
 });
 
-describe("PgMessagePageRepository.findByMessageId", () => {
+describe("PgMessagePageRepository.findFirstPageMessageIdByMessageId", () => {
     test("returns null for a non-existent messageId", async () => {
-        const result = await pageRepo.findByMessageId("00000000-0000-0000-0000-000000000000");
+        const result = await pageRepo.findFirstPageMessageIdByMessageId("00000000-0000-0000-0000-000000000000");
         expect(result).toBeNull();
     });
 
-    test("returns the saved page by its messageId", async () => {
+    test("returns the firstPageMessageId for a saved page", async () => {
         const parent = await saveParentMessage("bot-find-001");
-        await pageRepo.save(
-            pagePayload(parent.id, parent.id, {
-                currentPage: 2,
-                totalPages: 5,
-                endOffset: 500,
-            }),
-        );
+        await pageRepo.save(pagePayload(parent.id, parent.id, { currentPage: 2, totalPages: 5, endOffset: 500 }));
 
-        const result = await pageRepo.findByMessageId(parent.id);
+        const result = await pageRepo.findFirstPageMessageIdByMessageId(parent.id);
 
-        expect(result).not.toBeNull();
-        expect(result?.messageId).toBe(parent.id);
-        expect(result?.firstPageMessageId).toBe(parent.id);
-        expect(result?.currentPage).toBe(2);
-        expect(result?.totalPages).toBe(5);
-        expect(result?.endOffset).toBe(500);
-        expect(result?.createdAt).toBeInstanceOf(Date);
+        expect(result).toBe(parent.id);
     });
 
-    test("returns the correct page when multiple pages exist for different messages", async () => {
+    test("returns the correct firstPageMessageId when multiple pages exist", async () => {
         const p1 = await saveParentMessage("bot-multi-1");
         const p2 = await saveParentMessage("bot-multi-2");
 
         await pageRepo.save(pagePayload(p1.id, p1.id, { currentPage: 1, totalPages: 2 }));
         await pageRepo.save(pagePayload(p2.id, p2.id, { currentPage: 3, totalPages: 4 }));
 
-        const result = await pageRepo.findByMessageId(p2.id);
-
-        expect(result?.messageId).toBe(p2.id);
-        expect(result?.currentPage).toBe(3);
-        expect(result?.totalPages).toBe(4);
+        expect(await pageRepo.findFirstPageMessageIdByMessageId(p2.id)).toBe(p2.id);
     });
 
-    test("finds a subsequent-page row by its messageId", async () => {
+    test("returns the first-page message ID for a subsequent-page row", async () => {
         const firstPage = await saveParentMessage("first-page-lookup");
         const page2Msg = await saveParentMessage("page-2-lookup");
         await pageRepo.save(pagePayload(page2Msg.id, firstPage.id, { currentPage: 2 }));
 
-        const result = await pageRepo.findByMessageId(page2Msg.id);
-
-        expect(result?.messageId).toBe(page2Msg.id);
-        expect(result?.firstPageMessageId).toBe(firstPage.id);
-        expect(result?.currentPage).toBe(2);
+        expect(await pageRepo.findFirstPageMessageIdByMessageId(page2Msg.id)).toBe(firstPage.id);
     });
 });
 
@@ -191,9 +171,9 @@ describe("PgMessagePageRepository — cascade behaviour", () => {
         // Delete page 2's messages row — its page row should cascade
         await db.execute(sql`DELETE FROM messages WHERE id = ${page2Msg.id}`);
 
-        expect(await pageRepo.findByMessageId(page2Msg.id)).toBeNull();
+        expect(await pageRepo.findFirstPageMessageIdByMessageId(page2Msg.id)).toBeNull();
         // page 3 is unaffected
-        expect(await pageRepo.findByMessageId(page3Msg.id)).not.toBeNull();
+        expect(await pageRepo.findFirstPageMessageIdByMessageId(page3Msg.id)).not.toBeNull();
     });
 
     test("deleting the first-page parent message cascades and removes all page rows", async () => {
@@ -206,7 +186,7 @@ describe("PgMessagePageRepository — cascade behaviour", () => {
         // Delete the first page's messages row — all page rows should cascade via firstPageMessageId FK
         await db.execute(sql`DELETE FROM messages WHERE id = ${firstPage.id}`);
 
-        expect(await pageRepo.findByMessageId(page2Msg.id)).toBeNull();
-        expect(await pageRepo.findByMessageId(page3Msg.id)).toBeNull();
+        expect(await pageRepo.findFirstPageMessageIdByMessageId(page2Msg.id)).toBeNull();
+        expect(await pageRepo.findFirstPageMessageIdByMessageId(page3Msg.id)).toBeNull();
     });
 });

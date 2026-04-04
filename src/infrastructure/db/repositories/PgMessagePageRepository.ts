@@ -24,14 +24,14 @@ function buildInsertPageStmt(db: Db) {
         .prepare("message_page_insert");
 }
 
-/** Prepared statement: find a message page by the UUID of the bot messages row showing the button. */
-function buildFindByMessageIdStmt(db: Db) {
+/** Prepared statement: fetch only `first_page_message_id` for a given `message_id`. */
+function buildFindFirstPageMessageIdStmt(db: Db) {
     return db
-        .select()
+        .select({ firstPageMessageId: messagePages.firstPageMessageId })
         .from(messagePages)
         .where(eq(messagePages.messageId, sql.placeholder("messageId")))
         .limit(1)
-        .prepare("message_page_find_by_message_id");
+        .prepare("message_page_find_first_page_message_id");
 }
 
 /**
@@ -44,14 +44,14 @@ function buildFindByMessageIdStmt(db: Db) {
  */
 export class PgMessagePageRepository implements IMessagePageRepository {
     private readonly stmtInsertPage: ReturnType<typeof buildInsertPageStmt>;
-    private readonly stmtFindByMessageId: ReturnType<typeof buildFindByMessageIdStmt>;
+    private readonly stmtFindFirstPageMessageId: ReturnType<typeof buildFindFirstPageMessageIdStmt>;
 
     constructor(
         db: Db,
         private readonly logger: Logger,
     ) {
         this.stmtInsertPage = buildInsertPageStmt(db);
-        this.stmtFindByMessageId = buildFindByMessageIdStmt(db);
+        this.stmtFindFirstPageMessageId = buildFindFirstPageMessageIdStmt(db);
     }
 
     async save(page: Omit<MessagePage, "id" | "createdAt">): Promise<MessagePage> {
@@ -93,10 +93,12 @@ export class PgMessagePageRepository implements IMessagePageRepository {
         );
     }
 
-    async findByMessageId(messageId: MessagePage["id"]): Promise<MessagePage | null> {
+    async findFirstPageMessageIdByMessageId(
+        messageId: MessagePage["messageId"],
+    ): Promise<MessagePage["firstPageMessageId"] | null> {
         return Sentry.startSpan(
             {
-                name: "Find message page by message ID",
+                name: "Find first page message ID by message ID",
                 op: "db.query",
                 attributes: {
                     "db.table": "message_pages",
@@ -105,10 +107,10 @@ export class PgMessagePageRepository implements IMessagePageRepository {
             },
             async () => {
                 try {
-                    const [result] = await this.stmtFindByMessageId.execute({ messageId });
-                    return result ?? null;
+                    const [result] = await this.stmtFindFirstPageMessageId.execute({ messageId });
+                    return result?.firstPageMessageId ?? null;
                 } catch (err) {
-                    throw new DatabaseError("Failed to find message page", err);
+                    throw new DatabaseError("Failed to find first page message ID", err);
                 }
             },
         );

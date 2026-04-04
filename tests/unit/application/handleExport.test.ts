@@ -9,6 +9,7 @@ import type { IImageRenderer } from "../../../src/application/ports/IImageRender
 import type { IInteractionLock } from "../../../src/application/ports/IInteractionLock.ts";
 import type { IMarkdownRenderer } from "../../../src/application/ports/IMarkdownRenderer.ts";
 import { HandleExportUseCase } from "../../../src/application/use-cases/HandleMessageExport.ts";
+import type { IMessagePageRepository } from "../../../src/domain/ports/IMessagePageRepository.ts";
 import type { IMessageRepository } from "../../../src/domain/ports/IMessageRepository.ts";
 
 // ---------------------------------------------------------------------------
@@ -121,6 +122,14 @@ function makeButtonInteraction(overrides: {
     };
 }
 
+function makePageRepo(overrides: Partial<IMessagePageRepository> = {}): IMessagePageRepository {
+    return {
+        save: mock(async (p) => ({ ...p, id: "page-uuid-1", createdAt: BASE_DATE })),
+        findFirstPageMessageIdByMessageId: mock(async () => null),
+        ...overrides,
+    };
+}
+
 function makeMessageRepo(overrides: Partial<IMessageRepository> = {}): IMessageRepository {
     return {
         save: mock(async () => ({ id: "row-uuid-1" })),
@@ -163,6 +172,7 @@ function makeLock(): IInteractionLock {
 function makeUseCase(
     overrides: {
         messageRepo?: IMessageRepository;
+        messagePageRepo?: IMessagePageRepository;
         markdownRenderer?: IMarkdownRenderer;
         imageRenderer?: IImageRenderer;
         bot?: IChatClientBot;
@@ -172,6 +182,7 @@ function makeUseCase(
 ): HandleExportUseCase {
     return new HandleExportUseCase(
         overrides.messageRepo ?? makeMessageRepo(),
+        overrides.messagePageRepo ?? makePageRepo(),
         overrides.markdownRenderer ?? makeMarkdownRenderer(),
         overrides.imageRenderer ?? makeImageRenderer(),
         overrides.bot ?? makeBot(),
