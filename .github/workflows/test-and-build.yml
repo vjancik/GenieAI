@@ -67,6 +67,8 @@ jobs:
       id-token: write
     steps:
       -
+        uses: actions/checkout@v6
+      -
         name: Docker extract build metadata
         id: meta
         uses: docker/metadata-action@v6
