@@ -90,34 +90,6 @@ jobs:
         uses: docker/setup-buildx-action@v4
         id: setup-buildx
       -
-        name: Cache apt (amd64)
-        uses: actions/cache@v5
-        with:
-          path: apt-cache-amd64
-          key: apt-cache-amd64-${{ hashFiles('Dockerfile') }}
-          restore-keys: apt-cache-amd64-
-      -
-        name: Cache apt (arm64)
-        uses: actions/cache@v5
-        with:
-          path: apt-cache-arm64
-          key: apt-cache-arm64-${{ hashFiles('Dockerfile') }}
-          restore-keys: apt-cache-arm64-
-      -
-        name: Cache apt-lib (amd64)
-        uses: actions/cache@v5
-        with:
-          path: apt-lib-amd64
-          key: apt-lib-amd64-${{ hashFiles('Dockerfile') }}
-          restore-keys: apt-lib-amd64-
-      -
-        name: Cache apt-lib (arm64)
-        uses: actions/cache@v5
-        with:
-          path: apt-lib-arm64
-          key: apt-lib-arm64-${{ hashFiles('Dockerfile') }}
-          restore-keys: apt-lib-arm64-
-      -
         name: Cache bun store (amd64)
         uses: actions/cache@v5
         with:
@@ -138,10 +110,6 @@ jobs:
           builder: ${{ steps.setup-buildx.outputs.name }}
           cache-map: |
             {
-              "apt-cache-amd64": { "target": "/var/cache/apt", "id": "apt-cache-amd64" },
-              "apt-cache-arm64": { "target": "/var/cache/apt", "id": "apt-cache-arm64" },
-              "apt-lib-amd64": { "target": "/var/lib/apt", "id": "apt-lib-amd64" },
-              "apt-lib-arm64": { "target": "/var/lib/apt", "id": "apt-lib-arm64" },
               "bun-cache-amd64": { "target": "/root/.bun/install/cache", "id": "bun-amd64" },
               "bun-cache-arm64": { "target": "/root/.bun/install/cache", "id": "bun-arm64" }
             }
