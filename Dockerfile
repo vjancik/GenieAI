@@ -50,10 +50,12 @@ RUN --mount=type=cache,id=deno-v2-7-9-$TARGETARCH,target=/cache \
     && chmod +x ./bin/deno
 
 FROM base AS install
+ARG TARGETARCH
 # install with --production (exclude devDependencies)
 RUN mkdir -p /temp/prod
 COPY package.json bunfig.toml bun.lock /temp/prod/
-RUN cd /temp/prod && bun install --frozen-lockfile --production
+RUN --mount=type=cache,id=bun-$TARGETARCH,target=/root/.bun/install/cache \
+    cd /temp/prod && bun install --frozen-lockfile --production
 
 FROM base AS prerelease
 COPY . .
