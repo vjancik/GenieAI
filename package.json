@@ -54,7 +54,7 @@
     "dependencies": {
         "@google/genai": "^1.47.0",
         "@langchain/core": "^1.1.38",
-        "@langchain/google": "^0.1.9",
+        "@langchain/google": "^0.1.10",
         "@langchain/langgraph": "^1.2.6",
         "@langchain/tavily": "^1.2.0",
         "@sentry/bun": "^10.47.0",
