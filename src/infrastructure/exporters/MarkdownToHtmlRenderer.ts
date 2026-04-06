@@ -32,8 +32,8 @@ export class MarkdownToHtmlRenderer implements IMarkdownRenderer {
         this.marked.use(
             markedKatex({
                 throwOnError: false,
-                // Render display-mode ($$...$$) equations as block elements
-                displayMode: true,
+                // Allow $expr$ without requiring surrounding whitespace
+                nonStandard: true,
             }),
         );
     }
