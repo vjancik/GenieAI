@@ -52,7 +52,7 @@
         "typescript": "^6.0.2"
     },
     "dependencies": {
-        "@google/genai": "^1.47.0",
+        "@google/genai": "^1.48.0",
         "@langchain/core": "^1.1.38",
         "@langchain/google": "^0.1.10",
         "@langchain/langgraph": "^1.2.6",
