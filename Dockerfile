@@ -7,10 +7,12 @@ ARG TARGETARCH
 # this will cache them and speed up future builds
 RUN --mount=type=cache,id=apt-cache-$TARGETARCH,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib-$TARGETARCH,target=/var/lib/apt,sharing=locked \
-    bunx playwright@1.58.2 install-deps chromium-headless-shell
+    --mount=type=cache,id=bun-$TARGETARCH,target=/root/.bun/install/cache \
+    bunx playwright@1.59.1 install-deps chromium-headless-shell
 # Install to a fixed path accessible by all users (including the 'bun' user at runtime)
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN bunx playwright@1.58.2 install --only-shell chromium-headless-shell
+RUN --mount=type=cache,id=bun-$TARGETARCH,target=/root/.bun/install/cache \
+    bunx playwright@1.59.1 install --only-shell chromium-headless-shell
 # Load custom fonts into the system font cache
 COPY src/infrastructure/exporters/fonts /usr/local/share/fonts/genie
 RUN fc-cache -f -v
