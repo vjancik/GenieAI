@@ -8,7 +8,7 @@ ARG TARGETARCH
 RUN --mount=type=cache,id=apt-cache-$TARGETARCH,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib-$TARGETARCH,target=/var/lib/apt,sharing=locked \
     --mount=type=cache,id=bun-$TARGETARCH,target=/root/.bun/install/cache \
-    bunx playwright@1.59.1 install-deps chromium-headless-shell
+    DEBIAN_FRONTEND=noninteractive bunx playwright@1.59.1 install-deps chromium-headless-shell
 # Install to a fixed path accessible by all users (including the 'bun' user at runtime)
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN --mount=type=cache,id=bun-$TARGETARCH,target=/root/.bun/install/cache \
