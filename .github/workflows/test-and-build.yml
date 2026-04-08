@@ -105,7 +105,7 @@ jobs:
           restore-keys: bun-arm64-
       -
         name: Restore cache mounts into BuildKit
-        uses: reproducible-containers/buildkit-cache-dance@v3
+        uses: vjancik/buildkit-cache-dance@v1
         with:
           builder: ${{ steps.setup-buildx.outputs.name }}
           cache-map: |
