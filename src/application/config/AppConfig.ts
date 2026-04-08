@@ -1,5 +1,5 @@
 import { file } from "bun";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { ConfigError } from "../../domain/errors/AppError.ts";
 import type { Logger } from "../types/Logger.ts";
 import { THINKING_LEVELS } from "../types/ThinkingLevel.ts";

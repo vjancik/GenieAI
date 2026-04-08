@@ -1,6 +1,6 @@
 import path from "node:path";
 import pino, { type LevelWithSilent } from "pino";
-import { z } from "zod/v4";
+import { z } from "zod";
 import type { Logger } from "../../application/types/Logger.ts";
 import { withSentryLogging } from "./withSentryLogging.ts";
 

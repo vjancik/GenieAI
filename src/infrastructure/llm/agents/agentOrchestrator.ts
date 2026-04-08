@@ -2,7 +2,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import { Command, END, MessagesValue, ReducedValue, START, StateGraph, StateSchema } from "@langchain/langgraph";
 import * as Sentry from "@sentry/bun";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { type ApiKeyType, type AppConfig, SearchMode } from "../../../application/config/AppConfig.ts";
 import { dbMessagesToLangchain, extractContent } from "../../../application/helpers/langchainMessageTransformers.ts";
 import type { IAgentOrchestrator } from "../../../application/ports/IAgentOrchestrator.ts";

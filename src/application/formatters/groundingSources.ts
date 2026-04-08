@@ -6,7 +6,7 @@
  * types (web, retrievedContext, etc.). Only `web` chunks are surfaced here.
  */
 
-import { z } from "zod/v4";
+import { z } from "zod";
 
 const WebChunkSchema = z.object({ uri: z.string(), title: z.string() });
 

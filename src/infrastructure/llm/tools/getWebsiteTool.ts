@@ -1,6 +1,6 @@
 import { tool } from "@langchain/core/tools";
 import TurndownService from "turndown";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { parseMimeType } from "../../../application/helpers/parseMimeType.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
 import { ToolError } from "../../../domain/errors/AppError.ts";

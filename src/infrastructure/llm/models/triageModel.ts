@@ -1,7 +1,7 @@
 import { tool } from "@langchain/core/tools";
 import { ChatGoogle } from "@langchain/google/node";
 import * as Sentry from "@sentry/bun";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { SearchMode } from "../../../application/config/AppConfig.ts";
 import type { IModelTool } from "../../../application/ports/IModelTool.ts";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
