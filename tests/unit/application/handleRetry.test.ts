@@ -324,6 +324,70 @@ describe("HandleRetryUseCase", () => {
         expect(handleChatMessage.invokeAgentAndReply).not.toHaveBeenCalled();
     });
 
+    it("allows retry when interaction userId matches interactionAuthorDiscordId on a fallback summary response", async () => {
+        const originalMsg = makeMessage({ id: "orig-1", content: "some prose", authorId: "message-author" });
+        const channel: IChatClientChannel = {
+            fetchMessage: mock(async () => originalMsg),
+            fetchMessagesAfter: mock(async () => []),
+        };
+        const messageRepo = makeMessageRepo({
+            fetchChain: mock(async () => [
+                makeHumanRecord({ discordAuthorId: "message-author" }),
+                makeBotRecord({
+                    usedFallback: true,
+                    interactionType: "summary_command",
+                    interactionAuthorDiscordId: "summarizer-user",
+                }),
+            ]),
+            deleteByDiscordMessageId: mock(async () => {}),
+        });
+        const handleChatMessage = makeChatMessageUseCase();
+        const useCase = makeUseCase({ handleChatMessage, messageRepo });
+        // The summarizer (not the message author) clicks Retry
+        const interaction = makeButtonInteraction({
+            messageId: "bot-msg-1",
+            referencedMessageId: "orig-1",
+            channel,
+            userId: "summarizer-user",
+        });
+
+        await useCase.execute(interaction);
+
+        expect(interaction.followUp).not.toHaveBeenCalled();
+        expect(handleChatMessage.invokeAgentAndReply).toHaveBeenCalled();
+    });
+
+    it("blocks retry when userId matches neither originalAuthorId nor interactionAuthorDiscordId on a fallback summary response", async () => {
+        const originalMsg = makeMessage({ id: "orig-1", content: "some prose", authorId: "message-author" });
+        const channel: IChatClientChannel = {
+            fetchMessage: mock(async () => originalMsg),
+            fetchMessagesAfter: mock(async () => []),
+        };
+        const messageRepo = makeMessageRepo({
+            fetchChain: mock(async () => [
+                makeHumanRecord({ discordAuthorId: "message-author" }),
+                makeBotRecord({
+                    usedFallback: true,
+                    interactionType: "summary_command",
+                    interactionAuthorDiscordId: "summarizer-user",
+                }),
+            ]),
+        });
+        const handleChatMessage = makeChatMessageUseCase();
+        const useCase = makeUseCase({ handleChatMessage, messageRepo });
+        const interaction = makeButtonInteraction({
+            messageId: "bot-msg-1",
+            referencedMessageId: "orig-1",
+            channel,
+            userId: "unrelated-user",
+        });
+
+        await useCase.execute(interaction);
+
+        expect(interaction.followUp).toHaveBeenCalledWith(expect.objectContaining({ isEphemeral: true }));
+        expect(handleChatMessage.invokeAgentAndReply).not.toHaveBeenCalled();
+    });
+
     it("uses MessageIntent.SUMMARY when interactionType is summary_command", async () => {
         const originalMsg = makeMessage({ id: "orig-1", content: "some prose, no command prefix" });
         const channel: IChatClientChannel = {

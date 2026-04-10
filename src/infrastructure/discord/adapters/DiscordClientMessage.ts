@@ -145,6 +145,10 @@ export class DiscordClientMessage implements IChatClientMessage {
         return this.discordMessage.mentions.has(botUserId, { ignoreRepliedUser: true });
     }
 
+    // hasMention(userId: string) {
+    //     return this.discordMessage.mentions.has(userId);
+    // }
+
     async reply(options: ChatReplyOptions) {
         const { buttons, ...rest } = options;
         const sent = await this.discordMessage.reply({

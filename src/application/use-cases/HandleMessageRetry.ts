@@ -150,9 +150,14 @@ export class HandleRetryUseCase {
                 // Gate: when the response was a successful fallback (usedFallback=true, isFailure=false),
                 // only the original prompter may retry — it's their call whether the response is
                 // unsatisfactory. Failed responses are open to anyone since retrying benefits all.
+                // For summary commands the prompter is interactionAuthorDiscordId (the invoker of
+                // /summarize), which may differ from the summarized message's author.
                 if (botRecord?.usedFallback && humanRecord?.role === "human") {
                     const originalAuthorId = humanRecord.discordAuthorId;
-                    if (interaction.userId !== originalAuthorId) {
+                    const interactionAuthorId = botRecord.interactionAuthorDiscordId;
+                    const isEligible =
+                        interaction.userId === originalAuthorId || interaction.userId === interactionAuthorId;
+                    if (!isEligible) {
                         await interaction.followUp({
                             content: "*This message was generated for someone else and can only be retried by them.*",
                             isEphemeral: true,

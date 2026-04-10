@@ -139,6 +139,8 @@ export interface IChatClientMessage {
      */
     hasExplicitMention(botUserId: string): boolean;
 
+    // hasMention(userId: string): boolean;
+
     /**
      * Send a reply to this message.
      * Returns the sent reply as an `IChatClientMessage`.
