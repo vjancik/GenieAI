@@ -6,6 +6,7 @@ import type {
     IChatClientMessageAttachment,
     IChatClientMessageEmbed,
 } from "../../../src/application/ports/chat/IChatClient.ts";
+import { makeHeadResponse, spyFetch, spyFetchWith } from "../../helpers/fetchHelpers.ts";
 
 const testLogger = pino({ level: "silent" });
 
@@ -41,25 +42,17 @@ function makeEmbed(imageUrl: string): IChatClientMessageEmbed {
     };
 }
 
-function mockFetch(contentType: string | null, ok = true) {
-    return mock(
-        async (_url: string, _init?: RequestInit) =>
-            new Response(null, {
-                status: ok ? 200 : 404,
-                headers: contentType ? { "content-type": contentType } : {},
-            }),
-    );
-}
-
 describe("buildLangchainMessage", () => {
-    let originalFetch: typeof fetch;
+    let fetchSpy: ReturnType<typeof spyFetch>;
 
     beforeEach(() => {
-        originalFetch = globalThis.fetch;
+        // Default: unused — individual tests install their own spy as needed.
+        // We still track it so afterEach can always call mockRestore() safely.
+        fetchSpy = spyFetch(makeHeadResponse("text/html"));
     });
 
     afterEach(() => {
-        globalThis.fetch = originalFetch;
+        fetchSpy.mockRestore();
     });
 
     test("returns HumanMessage for role human", async () => {
@@ -93,9 +86,10 @@ describe("buildLangchainMessage", () => {
     });
 
     test("attachment: uses contentType from metadata, no HEAD request", async () => {
-        globalThis.fetch = mock(async () => {
+        fetchSpy.mockRestore();
+        fetchSpy = spyFetchWith(() => {
             throw new Error("should not be called");
-        }) as unknown as typeof fetch;
+        });
 
         const result = await buildLangchainMessage({
             ...BASE_PARAMS,
@@ -107,7 +101,7 @@ describe("buildLangchainMessage", () => {
         const blocks = result.content as unknown[];
         const media = blocks.find((b) => (b as Record<string, unknown>).type === "media") as Record<string, unknown>;
         expect(media.mimeType).toBe("image/png");
-        expect(globalThis.fetch).not.toHaveBeenCalled();
+        expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     test("attachment: skips block and logs error when contentType is null", async () => {
@@ -130,7 +124,8 @@ describe("buildLangchainMessage", () => {
     });
 
     test("embed media: uses Content-Type from HEAD response", async () => {
-        globalThis.fetch = mockFetch("image/jpeg") as unknown as typeof fetch;
+        fetchSpy.mockRestore();
+        fetchSpy = spyFetch(makeHeadResponse("image/jpeg"));
 
         const result = await buildLangchainMessage({
             ...BASE_PARAMS,
@@ -150,7 +145,8 @@ describe("buildLangchainMessage", () => {
     });
 
     test("embed media: strips Content-Type parameters", async () => {
-        globalThis.fetch = mockFetch("image/png; charset=utf-8") as unknown as typeof fetch;
+        fetchSpy.mockRestore();
+        fetchSpy = spyFetch(makeHeadResponse("image/png; charset=utf-8"));
 
         const result = await buildLangchainMessage({
             ...BASE_PARAMS,
@@ -168,9 +164,10 @@ describe("buildLangchainMessage", () => {
     test("embed media: skips block and warns when HEAD request throws", async () => {
         const warnSpy = mock();
         const logger = { ...testLogger, warn: warnSpy };
-        globalThis.fetch = mock(async () => {
+        fetchSpy.mockRestore();
+        fetchSpy = spyFetchWith(() => {
             throw new Error("network error");
-        }) as unknown as typeof fetch;
+        });
 
         const result = await buildLangchainMessage({
             ...BASE_PARAMS,
@@ -191,7 +188,8 @@ describe("buildLangchainMessage", () => {
     test("embed media: skips block and warns when HEAD response has no Content-Type", async () => {
         const warnSpy = mock();
         const logger = { ...testLogger, warn: warnSpy };
-        globalThis.fetch = mockFetch(null) as unknown as typeof fetch;
+        fetchSpy.mockRestore();
+        fetchSpy = spyFetch(makeHeadResponse(null));
 
         const result = await buildLangchainMessage({
             ...BASE_PARAMS,
@@ -210,7 +208,8 @@ describe("buildLangchainMessage", () => {
 
     test("embed media: skips block silently when Content-Type does not match key category", async () => {
         // image key but server returns video/mp4 — mismatch, block should be dropped without logging
-        globalThis.fetch = mockFetch("video/mp4") as unknown as typeof fetch;
+        fetchSpy.mockRestore();
+        fetchSpy = spyFetch(makeHeadResponse("video/mp4"));
 
         const result = await buildLangchainMessage({
             ...BASE_PARAMS,
@@ -226,8 +225,8 @@ describe("buildLangchainMessage", () => {
     });
 
     test("embed media: HEAD is called with the raw CDN URL, not the token URL", async () => {
-        const fetchMock = mockFetch("image/gif");
-        globalThis.fetch = fetchMock as unknown as typeof fetch;
+        fetchSpy.mockRestore();
+        fetchSpy = spyFetch(makeHeadResponse("image/gif"));
         const cdnUrl = "https://example.com/anim.gif";
 
         await buildLangchainMessage({
@@ -238,6 +237,6 @@ describe("buildLangchainMessage", () => {
             embeds: [makeEmbed(cdnUrl)],
         });
 
-        expect(fetchMock).toHaveBeenCalledWith(cdnUrl, { method: "HEAD", signal: expect.any(AbortSignal) });
+        expect(fetchSpy).toHaveBeenCalledWith(cdnUrl, { method: "HEAD", signal: expect.any(AbortSignal) });
     });
 });
