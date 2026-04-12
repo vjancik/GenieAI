@@ -29,5 +29,13 @@ export interface IDiskAttachmentDownloader {
      * @throws {@link AppError} with code `UNEXPECTED_CONTENT_TYPE` if the response MIME type
      *   does not match `acceptTypes`
      */
+    /**
+     * @param attachment - Discord attachment metadata including CDN URLs
+     * @param destPath - Absolute path to write the downloaded file
+     * @param acceptTypes - Optional `Accept` header value (e.g. `"image/*"`, `"video/mp4"`).
+     *   When provided, sent with the request and validated against the response Content-Type —
+     *   triggers fallback to `proxyURL` if the primary URL returns a mismatched type.
+     *   Should be supplied whenever the expected MIME type is known (e.g. from a token block).
+     */
     downloadToFile(attachment: IChatClientMessageAttachment, destPath: string, acceptTypes?: string): Promise<string>;
 }

@@ -35,15 +35,14 @@ export interface IStreamingAttachmentDownloader {
      * Initiates a fetch for the attachment, awaits the response headers, and returns
      * the response body as a live `ReadableStream` without buffering.
      *
-     * Falls back to `proxyURL` if the primary `url` fails.
+     * Falls back to `proxyURL` if the primary `url` fails or returns a mismatched MIME type.
      *
      * @param attachment - Discord attachment metadata including CDN URLs
-     * @param acceptTypes - Optional `Accept` header value (e.g. `"image/*"`, `"video/*"`).
-     *   When provided, the header is sent with the request and the response Content-Type
-     *   is validated against it — throws `UNEXPECTED_CONTENT_TYPE` if it does not match.
+     * @param acceptTypes - Optional `Accept` header value (e.g. `"image/*"`, `"video/mp4"`).
+     *   When provided, sent with the request and validated against the response Content-Type —
+     *   triggers fallback to `proxyURL` if the primary URL returns a mismatched type.
+     *   Should be supplied whenever the expected MIME type is known (e.g. from a token block).
      * @throws {@link AppError} with code `ATTACHMENT_DOWNLOAD_FAILED` if both URLs fail
-     * @throws {@link AppError} with code `UNEXPECTED_CONTENT_TYPE` if the response MIME type
-     *   does not match `acceptTypes`
      */
     downloadStream(attachment: IChatClientMessageAttachment, acceptTypes?: string): Promise<StreamingAttachment>;
 }

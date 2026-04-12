@@ -98,11 +98,15 @@ export class DiscordMediaService implements IDiscordMediaService {
                 embedMediaKey.slice(1)) as Capitalize<EmbedMediaKey>;
             const name = `Embed-${embedIndex + 1}-${capitalizedKey}`;
 
+            // Prefer proxyURL as the primary fetch target — for link-preview embeds the original
+            // URL is often a webpage, while Discord's CDN proxy reliably serves the actual media bytes.
+            // Falls back to the original URL if proxyURL is unavailable.
+            const proxyURL = media.proxyURL ?? media.url;
             return {
-                // Use the URL as a stable pseudo-ID — embed media items have no Discord snowflake
+                // Use the original URL as a stable pseudo-ID — embed media items have no Discord snowflake
                 id: media.url,
-                url: media.url,
-                proxyURL: media.proxyURL ?? media.url,
+                url: proxyURL,
+                proxyURL: media.url,
                 name,
                 // Embed media items do not carry a file size; use 0 as a sentinel
                 size: 0,

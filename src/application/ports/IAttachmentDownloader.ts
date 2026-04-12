@@ -23,9 +23,10 @@ export interface DownloadedAttachment {
 export interface IAttachmentDownloader {
     /**
      * @param attachment - Discord attachment metadata including CDN URLs
-     * @param acceptTypes - Optional `Accept` header value (e.g. `"image/*"`, `"video/*"`).
-     *   When provided, the header is sent with the request and the response Content-Type
-     *   is validated against it — throws `UNEXPECTED_CONTENT_TYPE` if it does not match.
+     * @param acceptTypes - Optional `Accept` header value (e.g. `"image/*"`, `"video/mp4"`).
+     *   When provided, sent with the request and validated against the response Content-Type —
+     *   triggers fallback to `proxyURL` if the primary URL returns a mismatched type.
+     *   Should be supplied whenever the expected MIME type is known (e.g. from a token block).
      */
     download(attachment: IChatClientMessageAttachment, acceptTypes?: string): Promise<DownloadedAttachment>;
 }

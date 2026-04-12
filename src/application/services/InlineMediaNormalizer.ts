@@ -138,7 +138,7 @@ export class InlineMediaNormalizer implements IInlineMediaNormalizer {
         }
 
         try {
-            const downloaded = await this.downloader.download(attachment);
+            const downloaded = await this.downloader.download(attachment, block.mimeType);
             return { type: "media", mimeType: downloaded.mimeType, data: downloaded.data };
         } catch (err) {
             this.logger.warn(

@@ -76,7 +76,13 @@ async function buildTokenContentParts(
 
     if (embeds) {
         // Collect all embed media candidates first, then HEAD-fetch all concurrently.
-        const candidates: { embedIndex: number; key: EmbedMediaKey; url: string; tokenUrl: string }[] = [];
+        const candidates: {
+            embedIndex: number;
+            key: EmbedMediaKey;
+            url: string;
+            proxyURL: string | null;
+            tokenUrl: string;
+        }[] = [];
         for (const [embedIndex, embed] of embeds.entries()) {
             for (const key of EMBED_MEDIA_KEYS) {
                 const media = embed[key];
@@ -85,25 +91,35 @@ async function buildTokenContentParts(
                     guildId && channelId && discordMessageId
                         ? buildEmbedTokenUrl(guildId, channelId, discordMessageId, embedIndex, key)
                         : media.url;
-                candidates.push({ embedIndex, key, url: media.url, tokenUrl });
+                candidates.push({ embedIndex, key, url: media.url, proxyURL: media.proxyURL, tokenUrl });
             }
         }
 
         const resolved = await Promise.all(
-            candidates.map(async ({ embedIndex, key, url, tokenUrl }) => {
-                // HEAD-fetch to get the real Content-Type — Discord embed metadata has no MIME type.
-                const mimeType = await fetchEmbedMimeType(url);
-                if (mimeType === null) {
-                    logger.warn(
-                        { url, embedIndex, key },
-                        "Could not resolve MIME type for embed media via HEAD request — skipping block",
-                    );
-                    return null;
+            candidates.map(async ({ embedIndex, key, url, proxyURL, tokenUrl }) => {
+                const expected = EMBED_KEY_ACCEPT[key];
+
+                // HEAD-fetch the original URL to get the real Content-Type — Discord embed
+                // metadata has no MIME type. For embeds like Instagram link-previews, the
+                // original URL is a webpage (text/html), but Discord's proxyURL serves the
+                // actual media with the correct MIME type — fall back to it when the primary
+                // URL fails or returns a mismatched type.
+                let mimeType = await fetchEmbedMimeType(url);
+                if (mimeType === null || !mimeType.startsWith(expected)) {
+                    if (proxyURL) {
+                        mimeType = await fetchEmbedMimeType(proxyURL);
+                    }
+                    if (mimeType === null) {
+                        logger.warn(
+                            { url, proxyURL, embedIndex, key },
+                            "Could not resolve MIME type for embed media via HEAD request — skipping block",
+                        );
+                        return null;
+                    }
                 }
 
                 // Validate the resolved type matches the category implied by the embed key.
                 // A mismatch means the URL is serving unexpected content — skip the block.
-                const expected = EMBED_KEY_ACCEPT[key];
                 if (!mimeType.startsWith(expected)) {
                     return null;
                 }

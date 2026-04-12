@@ -20,8 +20,9 @@ import type { Logger } from "../types/Logger.ts";
 
 /**
  * A content block with a `url` field holding a discord:// token URL.
+ * `mimeType` is always present on media token blocks — verified via HEAD request at build time.
  */
-type TokenBlock = Record<string, unknown> & { type: string; url: string };
+type TokenBlock = Record<string, unknown> & { type: string; url: string; mimeType?: string };
 
 /**
  * A content block with a resolved Gemini `fileUri`.
@@ -131,12 +132,13 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                 // Collect unique token URLs and existing fileUris across all HumanMessages.
                 // Both are keyed by originalGeminiUrl in gemini_files — token URLs for
                 // post-refactor blocks, raw Gemini URLs for pre-refactor legacy blocks.
-                const tokenUrls = new Set<string>();
+                // tokenUrls maps url → mimeType (HEAD-verified at build time, used as acceptTypes on download).
+                const tokenUrls = new Map<string, string>();
                 const fileUris = new Set<string>();
                 for (const msg of messages) {
                     if (!Array.isArray(msg.content)) continue;
                     for (const block of msg.content as unknown[]) {
-                        if (isTokenBlock(block)) tokenUrls.add(block.url);
+                        if (isTokenBlock(block) && block.mimeType) tokenUrls.set(block.url, block.mimeType);
                         else if (isFileUriBlock(block)) fileUris.add(block.fileUri);
                     }
                 }
@@ -146,13 +148,13 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                 // Short-circuit cache hits — populate resolvedUrls directly without a DB query.
                 // Only keys with no cache entry proceed to the DB + upload path.
                 const resolvedUrls = new Map<string, string | null>();
-                const uncachedTokenUrls = new Set<string>();
+                const uncachedTokenUrls = new Map<string, string>();
                 const uncachedFileUris = new Set<string>();
 
-                for (const key of tokenUrls) {
+                for (const [key, mimeType] of tokenUrls) {
                     const cached = this.fileUriCache.get(`${apiKeyId}:${key}`);
                     if (cached !== undefined) resolvedUrls.set(key, cached);
-                    else uncachedTokenUrls.add(key);
+                    else uncachedTokenUrls.set(key, mimeType);
                 }
                 for (const key of fileUris) {
                     const cached = this.fileUriCache.get(`${apiKeyId}:${key}`);
@@ -176,7 +178,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                 const emptyMap = new Map<string, { file: GeminiFile; upload: GeminiFileUpload | null }>();
                 const [byAnchorUrl, byGeminiUrl] = await Promise.all([
                     uncachedTokenUrls.size > 0
-                        ? this.geminiFileRepo.findByOriginalUrl([...uncachedTokenUrls], apiKeyId)
+                        ? this.geminiFileRepo.findByOriginalUrl([...uncachedTokenUrls.keys()], apiKeyId)
                         : emptyMap,
                     uncachedFileUris.size > 0
                         ? this.geminiFileRepo.findByUploadUrl([...uncachedFileUris], apiKeyId)
@@ -189,7 +191,11 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                 // uploadNew/reupload handle all recoverable failures internally and return null;
                 // an unexpected throw is a genuine bug and should propagate.
                 const entries = [
-                    ...[...uncachedTokenUrls].map((tokenUrl) => ({ key: tokenUrl, kind: "token" as const })),
+                    ...[...uncachedTokenUrls.entries()].map(([tokenUrl, mimeType]) => ({
+                        key: tokenUrl,
+                        mimeType,
+                        kind: "token" as const,
+                    })),
                     ...[...uncachedFileUris].map((fileUri) => ({ key: fileUri, kind: "fileUri" as const })),
                 ];
 
@@ -203,20 +209,22 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                 };
 
                 const results = await Promise.all(
-                    entries.map(async ({ key, kind }) => {
+                    entries.map(async (entry) => {
+                        const { key, kind } = entry;
                         const state = kind === "token" ? byAnchorUrl.get(key) : byGeminiUrl.get(key);
 
                         if (kind === "token") {
+                            const { mimeType } = entry;
                             if (!state) {
                                 // No DB anchor yet — new file, upload for the first time
                                 fireStatus();
-                                return { key, fileUri: await this.uploadNew(key, apiKeyId) };
+                                return { key, fileUri: await this.uploadNew(key, mimeType, apiKeyId) };
                             }
                             const { file, upload } = state;
                             if (upload === null) {
                                 // Anchor exists but no upload for this key (new key or trigger-cleaned)
                                 fireStatus();
-                                return { key, fileUri: await this.reupload(key, file, null, apiKeyId) };
+                                return { key, fileUri: await this.reupload(key, mimeType, file, null, apiKeyId) };
                             }
                             if (now - upload.uploadedAt.getTime() >= this.staleThresholdMs) {
                                 this.logger.info(
@@ -224,7 +232,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                                     "Gemini file upload is stale; re-uploading",
                                 );
                                 fireStatus();
-                                return { key, fileUri: await this.reupload(key, file, upload, apiKeyId) };
+                                return { key, fileUri: await this.reupload(key, mimeType, file, upload, apiKeyId) };
                             }
                             // Fresh upload — use existing fileUri, with remaining TTL so the
                             // cache entry expires at the same time the upload would go stale.
@@ -250,7 +258,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                                 );
                             }
                             fireStatus();
-                            return { key, fileUri: await this.reupload(key, file, upload, apiKeyId) };
+                            return { key, fileUri: await this.reupload(key, undefined, file, upload, apiKeyId) };
                         }
                         // Fresh — no substitution needed, but cache with remaining TTL so future
                         // invocations skip the DB lookup entirely.
@@ -292,7 +300,11 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
      *
      * Returns the new Gemini `fileUri`, or `null` if the Discord media is gone.
      */
-    private async uploadNew(tokenUrl: string, apiKeyId: string): Promise<string | null> {
+    private async uploadNew(
+        tokenUrl: string,
+        acceptMimeType: string | undefined,
+        apiKeyId: string,
+    ): Promise<string | null> {
         return Sentry.startSpan({ name: "Upload new Gemini file", op: "gemini.files.upload_new" }, async () => {
             const token = parseDiscordTokenUrl(tokenUrl);
             if (!token) {
@@ -301,7 +313,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
             }
 
             // Fetch fresh CDN URL from Discord
-            const attachment =
+            const fetched =
                 token.kind === "attachment"
                     ? await this.mediaService.fetchAttachment(token.channelId, token.messageId, token.attachmentId)
                     : await this.mediaService.fetchEmbedMedia(
@@ -311,19 +323,22 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                           token.mediaKey,
                       );
 
-            if (!attachment) {
+            if (!fetched) {
                 this.logger.warn({ tokenUrl }, "Discord media not found for new upload — dropping block");
                 return null;
             }
 
-            const { stream, mimeType, byteLength } = await this.streamingDownloader.downloadStream(attachment);
+            const { stream, mimeType, byteLength } = await this.streamingDownloader.downloadStream(
+                fetched,
+                acceptMimeType,
+            );
             const uploader = this.uploaderRegistry.get(apiKeyId);
             const uploaded = await uploader.uploadStream(
                 stream,
                 `files/${randomUUIDv7()}`,
                 mimeType,
-                attachment.name,
-                byteLength ?? attachment.size,
+                fetched.name,
+                byteLength ?? fetched.size,
             );
 
             // Build the anchor record from the parsed token
@@ -332,7 +347,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                     ? {
                           sourceType: GeminiFileSourceType.ATTACHMENT,
                           discordAttachmentId: token.attachmentId,
-                          discordFilename: attachment.name,
+                          discordFilename: fetched.name,
                           embedIndex: null,
                           embedMediaKey: null,
                       }
@@ -388,6 +403,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
      */
     private async reupload(
         tokenUrl: string,
+        acceptMimeType: string | undefined,
         file: GeminiFile,
         existingUpload: GeminiFileUpload | null,
         apiKeyId: string,
@@ -438,7 +454,10 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                     return null;
                 }
 
-                const { stream, mimeType, byteLength } = await this.streamingDownloader.downloadStream(attachment);
+                const { stream, mimeType, byteLength } = await this.streamingDownloader.downloadStream(
+                    attachment,
+                    acceptMimeType,
+                );
                 const uploader = this.uploaderRegistry.get(apiKeyId);
                 const uploaded = await uploader.uploadStream(
                     stream,
