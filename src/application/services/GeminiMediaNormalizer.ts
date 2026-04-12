@@ -22,22 +22,23 @@ import type { Logger } from "../types/Logger.ts";
  * A content block with a `url` field holding a discord:// token URL.
  * `mimeType` is always present on media token blocks — verified via HEAD request at build time.
  */
-type TokenBlock = Record<string, unknown> & { type: string; url: string; mimeType?: string };
+type TokenBlock = Record<string, unknown> & { type: string; url: string; mimeType: string };
 
 /**
  * A content block with a resolved Gemini `fileUri`.
  */
 type FileUriBlock = Record<string, unknown> & { type: string; mimeType: string; fileUri: string };
 
-/** Returns true if a block is an unresolved discord:// token URL block. */
+/** Returns true if a block is an unresolved discord:// token URL block. Throws if mimeType is missing. */
 function isTokenBlock(block: unknown): block is TokenBlock {
-    return (
-        typeof block === "object" &&
-        block !== null &&
-        "url" in block &&
-        typeof (block as Record<string, unknown>).url === "string" &&
-        ((block as Record<string, unknown>).url as string).startsWith("discord://")
-    );
+    const b = block as Record<string, unknown>;
+    if (typeof block !== "object" || block === null || typeof b.url !== "string" || !b.url.startsWith("discord://")) {
+        return false;
+    }
+    if (typeof b.mimeType !== "string") {
+        throw new Error(`Programmatic Error - Discord token block is missing mimeType: ${b.url}`);
+    }
+    return true;
 }
 
 /** Returns true if a block is an already-resolved Gemini fileUri block. */
@@ -138,7 +139,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                 for (const msg of messages) {
                     if (!Array.isArray(msg.content)) continue;
                     for (const block of msg.content as unknown[]) {
-                        if (isTokenBlock(block) && block.mimeType) tokenUrls.set(block.url, block.mimeType);
+                        if (isTokenBlock(block)) tokenUrls.set(block.url, block.mimeType);
                         else if (isFileUriBlock(block)) fileUris.add(block.fileUri);
                     }
                 }
