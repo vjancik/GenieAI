@@ -18,7 +18,7 @@
         "lru-cache": "^11.2.7",
         "marked": "^17.0.5",
         "marked-highlight": "^2.2.4",
-        "marked-katex-extension": "^5.1.7",
+        "marked-katex-extension": "^5.1.8",
         "pino": "^10.3.1",
         "playwright": "^1.59.1",
         "turndown": "^7.2.4",
@@ -458,7 +458,7 @@
 
     "marked-highlight": ["marked-highlight@2.2.4", "", { "peerDependencies": { "marked": ">=4 <19" } }, "sha512-PZxisNMJDduSjc0q6uvjsnqqHCXc9s0eyzxDO9sB1eNGJnd/H1/Fu+z6g/liC1dfJdFW4SftMwMlLvsBhUPrqQ=="],
 
-    "marked-katex-extension": ["marked-katex-extension@5.1.7", "", { "peerDependencies": { "katex": ">=0.16 <0.17", "marked": ">=4 <18" } }, "sha512-CVFzrqwpXGVaHByqcVvO/JfzW/OMWrAF3pEfNYNIruzBzM64moANSHapCg1qbzEN+NGf5unHwkMfwJIXHzyDAw=="],
+    "marked-katex-extension": ["marked-katex-extension@5.1.8", "", { "peerDependencies": { "katex": ">=0.16 <0.17", "marked": ">=4 <19" } }, "sha512-TsV9OCHHDjVBf4IH0RSjLs4Eqsjj8HGfmVCKlimrS391EtBBxzXj2gBYdF9tY7f7oXu9tb1kHV86ExJsG3iMhw=="],
 
     "mimic-function": ["mimic-function@5.0.1", "", {}, "sha512-VP79XUPxV2CigYP3jWwAUFSku2aKqBH7uTAapFWCBqutsbmDo96KY5o8uh6U+/YSIn5OxJnXp73beVkpqMIGhA=="],
 
