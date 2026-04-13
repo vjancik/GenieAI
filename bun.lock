@@ -17,7 +17,7 @@
         "katex": "^0.16.44",
         "lru-cache": "^11.2.7",
         "marked": "^17.0.5",
-        "marked-highlight": "^2.2.3",
+        "marked-highlight": "^2.2.4",
         "marked-katex-extension": "^5.1.7",
         "pino": "^10.3.1",
         "playwright": "^1.59.1",
@@ -458,7 +458,7 @@
 
     "marked": ["marked@17.0.5", "", { "bin": { "marked": "bin/marked.js" } }, "sha512-6hLvc0/JEbRjRgzI6wnT2P1XuM1/RrrDEX0kPt0N7jGm1133g6X7DlxFasUIx+72aKAr904GTxhSLDrd5DIlZg=="],
 
-    "marked-highlight": ["marked-highlight@2.2.3", "", { "peerDependencies": { "marked": ">=4 <18" } }, "sha512-FCfZRxW/msZAiasCML4isYpxyQWKEEx44vOgdn5Kloae+Qc3q4XR7WjpKKf8oMLk7JP9ZCRd2vhtclJFdwxlWQ=="],
+    "marked-highlight": ["marked-highlight@2.2.4", "", { "peerDependencies": { "marked": ">=4 <19" } }, "sha512-PZxisNMJDduSjc0q6uvjsnqqHCXc9s0eyzxDO9sB1eNGJnd/H1/Fu+z6g/liC1dfJdFW4SftMwMlLvsBhUPrqQ=="],
 
     "marked-katex-extension": ["marked-katex-extension@5.1.7", "", { "peerDependencies": { "katex": ">=0.16 <0.17", "marked": ">=4 <18" } }, "sha512-CVFzrqwpXGVaHByqcVvO/JfzW/OMWrAF3pEfNYNIruzBzM64moANSHapCg1qbzEN+NGf5unHwkMfwJIXHzyDAw=="],
 
