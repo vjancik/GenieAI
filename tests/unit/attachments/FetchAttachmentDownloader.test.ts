@@ -180,46 +180,64 @@ describe("FetchAttachmentDownloader", () => {
         globalFetch.mockRestore();
     });
 
-    test("throws AppError when response MIME type does not match acceptTypes wildcard", async () => {
+    test("throws AppError when response MIME type does not match acceptTypes wildcard (embed, no contentType)", async () => {
         const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(
             makeResponse(new Uint8Array([1]), "video/mp4"),
         );
 
-        await expect(downloader.download(testAttachment, "image/*")).rejects.toThrow(AppError);
+        // acceptTypes is only enforced against the CDN header when attachment.contentType is null (embeds)
+        await expect(downloader.download({ ...testAttachment, contentType: null }, "image/*")).rejects.toThrow(
+            AppError,
+        );
 
         globalFetch.mockRestore();
     });
 
-    test("does not throw when response MIME type matches acceptTypes wildcard", async () => {
+    test("does not throw when response MIME type matches acceptTypes wildcard (embed, no contentType)", async () => {
         const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(
             makeResponse(new Uint8Array([1]), "image/webp"),
         );
 
-        // acceptTypes validation uses the HTTP header; returned mimeType uses Discord metadata
-        const result = await downloader.download(testAttachment, "image/*");
+        // acceptTypes enforced against CDN header; returned mimeType falls back to CDN header (no Discord metadata)
+        const result = await downloader.download({ ...testAttachment, contentType: null }, "image/*");
+        expect(result.mimeType).toBe("image/webp");
+
+        globalFetch.mockRestore();
+    });
+
+    test("does not throw when response MIME type matches acceptTypes exactly (embed, no contentType)", async () => {
+        const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(
+            makeResponse(new Uint8Array([1]), "image/jpeg"),
+        );
+
+        // acceptTypes enforced against CDN header; returned mimeType falls back to CDN header (no Discord metadata)
+        const result = await downloader.download({ ...testAttachment, contentType: null }, "image/jpeg");
         expect(result.mimeType).toBe("image/jpeg");
 
         globalFetch.mockRestore();
     });
 
-    test("does not throw when response MIME type matches acceptTypes exactly", async () => {
+    test("throws AppError when response MIME type does not match exact acceptType (embed, no contentType)", async () => {
         const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(
             makeResponse(new Uint8Array([1]), "image/jpeg"),
         );
 
-        // acceptTypes validation uses the HTTP header; returned mimeType uses Discord metadata
-        const result = await downloader.download(testAttachment, "image/jpeg");
-        expect(result.mimeType).toBe("image/jpeg");
+        // acceptTypes is only enforced against the CDN header when attachment.contentType is null (embeds)
+        await expect(downloader.download({ ...testAttachment, contentType: null }, "image/png")).rejects.toThrow(
+            AppError,
+        );
 
         globalFetch.mockRestore();
     });
 
-    test("throws AppError when response MIME type does not match exact acceptType", async () => {
+    test("does not enforce acceptTypes against CDN header when Discord contentType is set (attachment)", async () => {
         const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(
-            makeResponse(new Uint8Array([1]), "image/jpeg"),
+            // CDN returns wrong content-type — should be ignored in favour of attachment.contentType
+            makeResponse(new Uint8Array([1]), "image/png"),
         );
 
-        await expect(downloader.download(testAttachment, "image/png")).rejects.toThrow(AppError);
+        const result = await downloader.download(testAttachment, "image/webp");
+        expect(result.mimeType).toBe("image/jpeg");
 
         globalFetch.mockRestore();
     });

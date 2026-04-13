@@ -40,6 +40,7 @@ config.local.yaml
 # PostgreSQL data volumes (docker compose)
 /db/
 /db_test/
+backups
 
 # Claude local settings
 .claude

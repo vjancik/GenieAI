@@ -46,7 +46,13 @@ export class FetchStreamingAttachmentDownloader implements IStreamingAttachmentD
                 },
             },
             async (span) => {
-                const result = await this.fetchWithFallback(attachment, acceptTypes);
+                // Discord's CDN Content-Type header is unreliable for attachments (e.g. serves image/webp for a png).
+                // attachment.contentType from the Discord API is authoritative when present (always set for attachments,
+                // null for embeds). For embeds, fall back to the CDN header and enforce acceptTypes against it.
+                const result = await this.fetchWithFallback(
+                    attachment,
+                    attachment.contentType === null ? acceptTypes : undefined,
+                );
                 const mimeType = parseMimeType(attachment.contentType) ?? result.mimeType ?? "application/octet-stream";
 
                 span.setAttributes({

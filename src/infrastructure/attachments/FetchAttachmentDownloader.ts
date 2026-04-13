@@ -48,7 +48,13 @@ export class FetchAttachmentDownloader implements IAttachmentDownloader {
                         `Attachment "${attachment.name}" is ${attachment.size} bytes, exceeding the ${this.maxSizeBytes / 1024 / 1024} MB inline limit`,
                     );
                 }
-                const buffer = await this.fetchWithFallback(attachment, acceptTypes);
+                // Discord's CDN Content-Type header is unreliable for attachments (e.g. serves image/png for a webp).
+                // attachment.contentType from the Discord API is authoritative when present (always set for attachments,
+                // null for embeds). For embeds, fall back to the CDN header and enforce acceptTypes against it.
+                const buffer = await this.fetchWithFallback(
+                    attachment,
+                    attachment.contentType === null ? acceptTypes : undefined,
+                );
                 const mimeType = parseMimeType(attachment.contentType) ?? buffer.mimeType ?? "application/octet-stream";
 
                 span.setAttribute("attachment.mime_type", mimeType);
