@@ -57,7 +57,7 @@
         "@langchain/google": "^0.1.10",
         "@langchain/langgraph": "^1.2.8",
         "@langchain/tavily": "^1.2.0",
-        "@sentry/bun": "^10.48.0",
+        "@sentry/bun": "^10.49.0",
         "discord.js": "^14.26.2",
         "drizzle-orm": "^0.45.2",
         "highlight.js": "^11.11.1",
