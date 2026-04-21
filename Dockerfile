@@ -1,4 +1,4 @@
-FROM oven/bun:1.3.12-slim AS base
+FROM oven/bun:1.3.13-slim AS base
 WORKDIR /usr/src/app
 
 FROM base AS base_with_playwright
