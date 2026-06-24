@@ -6,8 +6,8 @@ import { tool } from "@langchain/core/tools";
  * See: https://github.com/langchain-ai/langchainjs/issues/10432
  */
 export const neverTool = tool(() => "", {
-    name: "never_call_tools",
-    description: "If you see this tool description, YOU MUST NOT CALL ANY TOOLS.",
+    name: "never_call_tools_or_functions",
+    description: "If you read this tool / function description, YOU MUST NOT CALL ANY TOOLS OR FUNCTIONS.",
 });
 
 /**
