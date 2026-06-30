@@ -32,7 +32,7 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -48,9 +48,13 @@ jobs:
         run: bun run test --coverage --coverage-reporter=lcov
         env:
           DATABASE_TEST_URL: postgresql://genie_test:genie_test@localhost:5433/genie_test
+          # Disable LangSmith tracing: its client lazily probes `/info` via the
+          # global `fetch` during `tool.invoke()`, racing tests' mocked fetch.
+          LANGSMITH_TRACING: "false"
+          LANGCHAIN_TRACING_V2: "false"
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: ./coverage/lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -67,7 +71,7 @@ jobs:
       id-token: write
     steps:
       -
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       -
         name: Docker extract build metadata
         id: meta
@@ -91,14 +95,14 @@ jobs:
         id: setup-buildx
       -
         name: Cache bun store (amd64)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: bun-cache-amd64
           key: bun-amd64-${{ hashFiles('bun.lock') }}
           restore-keys: bun-amd64-
       -
         name: Cache bun store (arm64)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: bun-cache-arm64
           key: bun-arm64-${{ hashFiles('bun.lock') }}

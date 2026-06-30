@@ -1,4 +1,4 @@
-FROM oven/bun:1.3.12-slim AS base
+FROM oven/bun:1.3.14-slim AS base
 WORKDIR /usr/src/app
 
 FROM base AS base_with_playwright
@@ -64,8 +64,10 @@ COPY . .
 
 # copy production dependencies and source code into final image
 FROM base_with_playwright AS release
-COPY --from=download_dependencies /usr/src/app/bin/yt-dlp /usr/local/bin/yt-dlp
-COPY --from=download_dependencies /usr/src/app/bin/deno /usr/local/bin/deno
+RUN mkdir -p /home/bun/.local/bin
+COPY --from=download_dependencies /usr/src/app/bin/yt-dlp /home/bun/.local/bin/yt-dlp
+COPY --from=download_dependencies /usr/src/app/bin/deno /home/bun/.local/bin/deno
+RUN chown -R bun:bun /home/bun/.local
 COPY --from=install /temp/prod/node_modules node_modules
 COPY --from=prerelease /usr/src/app/src ./src
 COPY --from=prerelease /usr/src/app/package.json .
@@ -73,6 +75,7 @@ COPY --from=prerelease /usr/src/app/tsconfig.json .
 COPY --from=prerelease /usr/src/app/config.default.yaml .
 
 ENV NODE_ENV=production
+ENV PATH="/home/bun/.local/bin:${PATH}"
 
 # run the app
 USER bun
