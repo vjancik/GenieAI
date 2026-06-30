@@ -48,6 +48,10 @@ jobs:
         run: bun run test --coverage --coverage-reporter=lcov
         env:
           DATABASE_TEST_URL: postgresql://genie_test:genie_test@localhost:5433/genie_test
+          # Disable LangSmith tracing: its client lazily probes `/info` via the
+          # global `fetch` during `tool.invoke()`, racing tests' mocked fetch.
+          LANGSMITH_TRACING: "false"
+          LANGCHAIN_TRACING_V2: "false"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v6
