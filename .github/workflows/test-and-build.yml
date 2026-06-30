@@ -91,14 +91,14 @@ jobs:
         id: setup-buildx
       -
         name: Cache bun store (amd64)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: bun-cache-amd64
           key: bun-amd64-${{ hashFiles('bun.lock') }}
           restore-keys: bun-amd64-
       -
         name: Cache bun store (arm64)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: bun-cache-arm64
           key: bun-arm64-${{ hashFiles('bun.lock') }}
