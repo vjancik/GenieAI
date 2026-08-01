@@ -1,78 +1,49 @@
-import type { Browser, Page } from "patchright";
-import { chromium } from "patchright";
+import type { BrowserContext, Page } from "patchright";
 import type { IImageRenderer } from "../../application/ports/IImageRenderer.ts";
+import type { ChromiumProvider } from "../browser/ChromiumProvider.ts";
 
 /**
- * Chromium launch arguments.
+ * Renders HTML strings to PNG images on the shared Chromium instance.
  *
- * Limited to what a container actually requires. Resource-trimming flags
- * (extension/default-app suppression, a 256MB JS heap cap) were removed because
- * this browser is shared with general-purpose web page loading, where they
- * throttle or break script-heavy sites.
+ * Holds one long-lived context and page, reused across calls to avoid per-render
+ * setup cost. Requests are serialized via a queue so concurrent callers don't
+ * corrupt each other's page state.
  *
- * `--disable-background-networking` is deliberately kept: it does not affect
- * page resource loading, but it stops Chromium's own telemetry and component
- * updates from being routed through (and billed against) a configured proxy.
- */
-const CHROMIUM_ARGS = [
-    "--disable-gpu",
-    "--disable-dev-shm-usage",
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--disable-background-networking",
-];
-
-/**
- * Renders HTML strings to PNG images using a singleton headless Chromium instance.
- *
- * A single browser and page are reused across calls to avoid the overhead of
- * launching a new browser per render. Requests are serialized via a queue so
- * concurrent callers don't corrupt each other's page state.
- *
- * Uses Patchright rather than Playwright so the whole application shares one
- * browser build, avoiding a second Chromium in the image for web page fetching.
+ * The browser itself is owned by {@link ChromiumProvider} and shared with web
+ * page fetching, so the image carries a single Chromium build.
  */
 export class HtmlToImageRenderer implements IImageRenderer {
-    private static browser: Browser | null = null;
-    private static page: Page | null = null;
+    private context: BrowserContext | null = null;
+    private page: Page | null = null;
     /** Serializes render calls — each request waits for the previous to finish. */
-    private static queue: Promise<unknown> = Promise.resolve();
+    private queue: Promise<unknown> = Promise.resolve();
 
-    private static async getBrowser(): Promise<Browser> {
-        if (!HtmlToImageRenderer.browser) {
-            HtmlToImageRenderer.browser = await chromium.launch({
-                headless: true,
-                // Selects the full Chromium build. Without it, headless mode resolves
-                // to `chromium-headless-shell`, which the image no longer installs
-                // (and which bot protections detect when fetching web pages).
-                channel: "chromium",
-                args: CHROMIUM_ARGS,
-            });
-        }
-        return HtmlToImageRenderer.browser;
-    }
+    constructor(private readonly provider: ChromiumProvider) {}
 
-    private static async getPage(): Promise<Page> {
-        if (!HtmlToImageRenderer.page) {
-            const browser = await HtmlToImageRenderer.getBrowser();
-            HtmlToImageRenderer.page = await browser.newPage();
-            await HtmlToImageRenderer.page.setViewportSize({ width: 1000, height: 1000 });
-        }
-        return HtmlToImageRenderer.page;
+    /**
+     * Returns the reusable render page, recreating it if the browser was
+     * restarted underneath us (crash, OOM) and the handle went stale.
+     */
+    private async getPage(): Promise<Page> {
+        if (this.page !== null && !this.page.isClosed()) return this.page;
+
+        this.context = await this.provider.acquireLongLivedContext({ viewport: { width: 1000, height: 1000 } });
+        this.page = await this.context.newPage();
+        return this.page;
     }
 
     /**
      * Renders an HTML string to a PNG image buffer.
      *
-     * Requests are queued and executed one at a time on the singleton page.
+     * Requests are queued and executed one at a time on the reused page.
      *
      * @param html - A complete HTML document string.
      * @returns A Buffer containing the PNG image data, suitable for use as a Discord attachment.
      */
     async render(html: string): Promise<Buffer> {
         // Chain onto the queue so concurrent calls are serialized
-        const result = HtmlToImageRenderer.queue.then(async () => {
-            const page = await HtmlToImageRenderer.getPage();
+        const result = this.queue.then(async () => {
+            const page = await this.getPage();
             await page.setContent(html, { waitUntil: "networkidle" });
             // String form avoids TS dom-lib requirement — executes inside the browser where document exists
             await page.evaluateHandle("document.fonts.ready");
@@ -80,20 +51,20 @@ export class HtmlToImageRenderer implements IImageRenderer {
         });
 
         // Swallow errors from the queue perspective (caller gets the rejection directly)
-        HtmlToImageRenderer.queue = result.catch(() => {});
+        this.queue = result.catch(() => {});
 
         return result;
     }
 
     /**
-     * Shuts down the singleton browser instance and clears all static state.
-     * Call this on application shutdown to release resources.
+     * Releases this renderer's context and page.
+     *
+     * Does not close the shared browser — that belongs to {@link ChromiumProvider}.
      */
-    static async shutdown(): Promise<void> {
-        if (HtmlToImageRenderer.browser) {
-            await HtmlToImageRenderer.browser.close();
-            HtmlToImageRenderer.browser = null;
-            HtmlToImageRenderer.page = null;
-        }
+    async shutdown(): Promise<void> {
+        const context = this.context;
+        this.context = null;
+        this.page = null;
+        await context?.close().catch(() => {});
     }
 }

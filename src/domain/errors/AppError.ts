@@ -57,6 +57,36 @@ export class ToolError extends AppError {
     }
 }
 
+/**
+ * Why a web page could not be retrieved. Distinguishes causes the model should
+ * relay differently — a paywall is not a transient failure, and a bot block is
+ * not a bad URL.
+ */
+export type WebFetchFailure =
+    | "http-error"
+    | "timeout"
+    | "unreachable"
+    | "unsupported-content"
+    | "blocked"
+    | "paywalled"
+    | "client-rendered"
+    | "no-article"
+    | "empty";
+
+/**
+ * Thrown when a web page fetch fails, carrying a machine-readable reason so the
+ * tool can explain *why* rather than reporting a generic failure.
+ */
+export class WebFetchError extends ToolError {
+    constructor(
+        public readonly reason: WebFetchFailure,
+        message: string,
+        cause?: unknown,
+    ) {
+        super(message, cause);
+    }
+}
+
 /** Thrown when a Discord event cannot be processed. */
 export class DiscordError extends AppError {
     constructor(message: string, cause?: unknown) {

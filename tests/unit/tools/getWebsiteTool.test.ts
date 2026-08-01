@@ -218,6 +218,204 @@ describe("consent interstitials", () => {
     });
 });
 
+describe("fingerprint fallback", () => {
+    /** The Rust-level error impit surfaces when the TLS handshake is rejected. */
+    const TLS_ERROR = `Failed to connect to the server.
+Reason: hyper_util::client::legacy::Error(
+    Connect,
+    Custom { kind: Other, error: Custom { kind: InvalidData,
+        error: PeerMisbehaved(SelectedUnusableCipherSuiteForVersion) } },
+)`;
+
+    test("retries with the other fingerprint when the connection fails", async () => {
+        // Some servers negotiate TLS successfully with one profile but not the other
+        let attempt = 0;
+        respond = () => {
+            attempt++;
+            if (attempt === 1) throw new Error(TLS_ERROR);
+            return { body: "<html><body><p>Content served on the second profile</p></body></html>" };
+        };
+
+        const result = await invokeTool(["https://archive.example.com/page"]);
+
+        expect(constructorOptions?.browser).toBe("chrome");
+        expect(contentsOf(result[0])).toContain("Content served on the second profile");
+    });
+
+    test("does NOT retry an HTTP error status", async () => {
+        // The server answered — a different fingerprint would get the same status
+        respond = () => ({ ok: false, status: 404 });
+
+        await invokeTool(["https://missing.example.com"]);
+
+        expect(calls).toHaveLength(1);
+    });
+
+    test("does NOT retry an unsupported content type", async () => {
+        respond = () => ({ contentType: "image/png" });
+
+        await invokeTool(["https://example.com/image.png"]);
+
+        expect(calls).toHaveLength(1);
+    });
+
+    test("summarizes a TLS failure instead of dumping the Rust trace", async () => {
+        respond = () => {
+            throw new Error(TLS_ERROR);
+        };
+
+        const result = await invokeTool(["https://archive.example.com/page"]);
+        const { error, reason } = result[0] as { error: string; reason: string };
+
+        expect(calls).toHaveLength(2);
+        expect(reason).toBe("unreachable");
+        expect(error).toContain("TLS configuration");
+        expect(error).not.toContain("hyper_util");
+        expect(error).not.toContain("PeerMisbehaved");
+    });
+
+    test("names a DNS failure specifically", async () => {
+        respond = () => {
+            throw new Error("dns error: failed to lookup address information");
+        };
+
+        const result = await invokeTool(["https://nonexistent.example.com"]);
+
+        expect((result[0] as { error: string }).error).toContain("host name could not be resolved");
+    });
+});
+
+describe("browser escalation", () => {
+    /** Prose long enough to clear the content threshold. */
+    const ARTICLE = `<html><body><article><h1>Real headline</h1>${"<p>The measured behaviour of the system under load differs from the model, which suggests the queueing assumptions need revisiting.</p>".repeat(8)}</article></body></html>`;
+    /** An SPA shell: ships its app inline, renders nothing server-side. */
+    const SHELL = `<html><body><div id="root"></div><script>${"const x=1;".repeat(500)}</script></body></html>`;
+    const CHALLENGE = "<html><body><p>Please enable JS and disable any ad blocker</p></body></html>";
+
+    /** Minimal BrowserPageFetcher stand-in. */
+    function fakeFetcher(html: string | (() => never)) {
+        const calls: string[] = [];
+        return {
+            calls,
+            fetcher: {
+                fetchRenderedHtml: async (url: string) => {
+                    calls.push(url);
+                    if (typeof html === "function") return html();
+                    return html;
+                },
+            },
+        };
+    }
+
+    async function invokeWithFetcher(urls: string[], fetcher: { fetchRenderedHtml: (u: string) => Promise<string> }) {
+        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+        // TYPE COERCION: test double implements the only method the tool calls
+        return createGetWebsiteTool(testLogger, fetcher as never).invoke({ urls });
+    }
+
+    test("renders a client-rendered shell with the browser", async () => {
+        respond = () => ({ body: SHELL });
+        const { calls: rendered, fetcher } = fakeFetcher(ARTICLE);
+
+        const result = await invokeWithFetcher(["https://spa.example.com"], fetcher);
+
+        expect(rendered).toEqual(["https://spa.example.com"]);
+        expect(contentsOf(result[0])).toContain("Real headline");
+    });
+
+    test("renders a bot-challenge page with the browser", async () => {
+        respond = () => ({ body: CHALLENGE });
+        const { calls: rendered, fetcher } = fakeFetcher(ARTICLE);
+
+        const result = await invokeWithFetcher(["https://blocked.example.com"], fetcher);
+
+        expect(rendered).toHaveLength(1);
+        expect(contentsOf(result[0])).toContain("Real headline");
+    });
+
+    test("does NOT escalate a page that already has content", async () => {
+        respond = () => ({ body: ARTICLE });
+        const { calls: rendered, fetcher } = fakeFetcher(ARTICLE);
+
+        await invokeWithFetcher(["https://good.example.com"], fetcher);
+
+        expect(rendered).toHaveLength(0);
+    });
+
+    test("does NOT escalate a short but complete page, and returns its content", async () => {
+        respond = () => ({ body: "<html><body><h1>Status</h1><p>All systems operational.</p></body></html>" });
+        const { calls: rendered, fetcher } = fakeFetcher(ARTICLE);
+
+        const result = await invokeWithFetcher(["https://status.example.com"], fetcher);
+
+        expect(rendered).toHaveLength(0);
+        expect(contentsOf(result[0])).toContain("All systems operational");
+    });
+
+    test("reports the reason when the browser render also fails", async () => {
+        respond = () => ({ body: CHALLENGE });
+        const { fetcher } = fakeFetcher(CHALLENGE);
+
+        const result = await invokeWithFetcher(["https://blocked.example.com"], fetcher);
+
+        expect(result[0]).toMatchObject({ reason: "blocked" });
+        expect((result[0] as { error: string }).error).toContain("bot protection");
+    });
+
+    test("reports the original problem when rendering itself throws", async () => {
+        respond = () => ({ body: SHELL });
+        const { fetcher } = fakeFetcher(() => {
+            throw new Error("net::ERR_ABORTED");
+        });
+
+        const result = await invokeWithFetcher(["https://spa.example.com"], fetcher);
+
+        expect(result[0]).toMatchObject({ reason: "client-rendered" });
+    });
+
+    test("reports client-rendered pages as failures when no browser is configured", async () => {
+        respond = () => ({ body: SHELL });
+
+        const result = await invokeTool(["https://spa.example.com"]);
+
+        expect(result[0]).toMatchObject({ reason: "client-rendered" });
+        expect((result[0] as { error: string }).error).toContain("JavaScript");
+    });
+});
+
+describe("failure reporting", () => {
+    test("distinguishes HTTP status failures", async () => {
+        respond = () => ({ ok: false, status: 404 });
+
+        const result = await invokeTool(["https://missing.example.com"]);
+
+        expect(result[0]).toMatchObject({ reason: "http-error" });
+        expect((result[0] as { error: string }).error).toContain("404");
+    });
+
+    test("distinguishes unsupported content types", async () => {
+        respond = () => ({ contentType: "image/png" });
+
+        const result = await invokeTool(["https://example.com/image.png"]);
+
+        expect(result[0]).toMatchObject({ reason: "unsupported-content" });
+    });
+
+    test("reports a paywall as its own reason", async () => {
+        respond = () => ({
+            body:
+                "<html><body><article><h1>Headline</h1><p>Opening paragraph.</p>" +
+                "<p>Subscribe to continue reading this article.</p></article>" +
+                `<nav>${"<a href='/x'>Section link text</a>".repeat(120)}</nav></body></html>`,
+        });
+
+        const result = await invokeTool(["https://paywalled.example.com"]);
+
+        expect(result[0]).toMatchObject({ reason: "paywalled" });
+        expect((result[0] as { error: string }).error).toContain("paywall");
+    });
+});
+
 describe("bodyToContent", () => {
     const html = (body: string) => `<html><body>${body}</body></html>`;
 
@@ -277,6 +475,22 @@ describe("bodyToContent", () => {
         // Without table support these cells collapse into an undelimited run of text
         expect(md).toContain("| Substance | Count |");
         expect(md).toContain("| tobacco | 52 million |");
+    });
+
+    test("does not emit raw HTML for layout tables", async () => {
+        const { bodyToContent } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+
+        // Tables without a heading row are used for page layout on older sites. The
+        // GFM plugin keeps those as raw HTML unless overridden.
+        const md = bodyToContent(
+            html("<table><tr><td><b>Site name</b></td><td>Some body copy in a layout cell.</td></tr></table>"),
+            "text/html",
+        );
+
+        expect(md).not.toContain("<table");
+        expect(md).not.toContain("<td");
+        expect(md).toContain("Site name");
+        expect(md).toContain("Some body copy in a layout cell.");
     });
 
     test("returns non-HTML textual bodies unchanged", async () => {

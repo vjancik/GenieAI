@@ -28,6 +28,8 @@ import { HandleSummarizeUseCase } from "./application/use-cases/HandleMessageSum
 import { FetchAttachmentDownloader } from "./infrastructure/attachments/FetchAttachmentDownloader.ts";
 import { FetchStreamingAttachmentDownloader } from "./infrastructure/attachments/FetchStreamingAttachmentDownloader.ts";
 import { GenaiFileUploaderRegistry } from "./infrastructure/attachments/GenaiFileUploaderRegistry.ts";
+import { BrowserPageFetcher } from "./infrastructure/browser/BrowserPageFetcher.ts";
+import { ChromiumProvider } from "./infrastructure/browser/ChromiumProvider.ts";
 import { createDb } from "./infrastructure/db/connection.ts";
 import { PgGetNextPageQuery } from "./infrastructure/db/queries/PgGetNextPageQuery.ts";
 import { PgGeminiApiKeyRepository } from "./infrastructure/db/repositories/PgGeminiApiKeyRepository.ts";
@@ -97,8 +99,14 @@ const uploaderRegistry = new GenaiFileUploaderRegistry(
     config.file,
 );
 
+// Shared Chromium — one browser for both image rendering and browser-backed web fetches
+const chromiumProvider = new ChromiumProvider(logger.child({ module: "browser" }));
+
 // LLM tools
-const getWebsiteTool = createGetWebsiteTool(logger.child({ module: "tool:website" }));
+const getWebsiteTool = createGetWebsiteTool(
+    logger.child({ module: "tool:website" }),
+    new BrowserPageFetcher(chromiumProvider, logger.child({ module: "browser:fetch" })),
+);
 const getVideoCaptionsTool = await createGetVideoCaptionsTool(
     logger.child({ module: "tool:video" }),
     config.file.ytDlp?.httpProxy,
@@ -214,7 +222,7 @@ const getNextPageQuery = new PgGetNextPageQuery(db);
 
 // Exporters — singletons shared across all export command invocations
 const markdownToHtml = new MarkdownToHtmlRenderer();
-const htmlToImage = new HtmlToImageRenderer();
+const htmlToImage = new HtmlToImageRenderer(chromiumProvider);
 
 // Discord gateway
 const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
@@ -295,6 +303,9 @@ async function shutdown() {
     logger.info("Shutting down...");
     await discordGateway.gracefulShutdown();
     discordClient.stop();
+    // Release the render context before closing the browser that owns it
+    await htmlToImage.shutdown();
+    await chromiumProvider.shutdown();
     await Sentry.flush(2000);
     process.exit(0);
 }
