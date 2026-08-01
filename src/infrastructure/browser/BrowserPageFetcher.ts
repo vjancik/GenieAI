@@ -9,10 +9,39 @@ const CONSENT_ACCEPT_SELECTORS = [
     'button[id*="accept" i]',
 ];
 
-const NAVIGATION_TIMEOUT_MS = 30_000;
+const NAVIGATION_TIMEOUT_MS = 25_000;
 /** Settle time after DOM ready for client-side rendering and JS challenges. */
 const SETTLE_MS = 4_000;
+/**
+ * How long to wait for a consent click to navigate.
+ *
+ * Deliberately much shorter than {@link NAVIGATION_TIMEOUT_MS}: many consent
+ * widgets dismiss themselves without navigating at all, so this timeout is
+ * expected to expire on a page that is working correctly.
+ */
+const CONSENT_NAVIGATION_TIMEOUT_MS = 8_000;
+const CONSENT_CLICK_TIMEOUT_MS = 5_000;
 const CONSENT_SETTLE_MS = 2_500;
+/**
+ * Hard ceiling on one page fetch, covering navigation, settling and consent.
+ *
+ * A context is one of a small number of concurrent slots, so a page that stalls
+ * must not be able to hold one indefinitely and starve other fetches.
+ */
+const TOTAL_BUDGET_MS = 45_000;
+
+/** Rejects if `operation` outruns its budget, so a stalled page cannot hold a context. */
+async function withBudget<T>(operation: Promise<T>, budgetMs: number, url: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const budget = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out after ${budgetMs}ms loading ${url}`)), budgetMs);
+    });
+    try {
+        return await Promise.race([operation, budget]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
 
 /**
  * Fetches web pages with a real browser, for sites whose content only exists
@@ -46,12 +75,19 @@ export class BrowserPageFetcher {
         const userAgent = await this.getUserAgent();
 
         return this.provider.withContext(
-            async (page) => {
-                await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS });
-                await page.waitForTimeout(SETTLE_MS);
-                await this.acceptConsentIfPresent(url, page);
-                return page.content();
-            },
+            async (page) =>
+                withBudget(
+                    (async () => {
+                        // `domcontentloaded` rather than `load`/`networkidle`: ad and tracker
+                        // requests frequently never settle, and the DOM is all we need.
+                        await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS });
+                        await page.waitForTimeout(SETTLE_MS);
+                        await this.acceptConsentIfPresent(url, page);
+                        return page.content();
+                    })(),
+                    TOTAL_BUDGET_MS,
+                    url,
+                ),
             {
                 userAgent,
                 locale: "en-US",
@@ -72,11 +108,14 @@ export class BrowserPageFetcher {
             if ((await button.count()) === 0) continue;
 
             this.logger.debug({ url, selector }, "Accepting consent interstitial");
+            // The navigation wait is armed before the click so a fast redirect is not
+            // missed, but capped short — widgets that dismiss in place never navigate,
+            // and waiting the full navigation timeout for them stalls the whole fetch.
             await Promise.all([
                 page
-                    .waitForNavigation({ waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS })
+                    .waitForNavigation({ waitUntil: "domcontentloaded", timeout: CONSENT_NAVIGATION_TIMEOUT_MS })
                     .catch(() => {}),
-                button.click({ timeout: 5_000 }).catch(() => {}),
+                button.click({ timeout: CONSENT_CLICK_TIMEOUT_MS }).catch(() => {}),
             ]);
             await page.waitForTimeout(CONSENT_SETTLE_MS);
             return;
