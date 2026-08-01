@@ -1,18 +1,20 @@
 FROM oven/bun:1.3.14-slim AS base
 WORKDIR /usr/src/app
 
-FROM base AS base_with_playwright
+FROM base AS base_with_chromium
 ARG TARGETARCH
 # install dependencies into temp directory
 # this will cache them and speed up future builds
 RUN --mount=type=cache,id=apt-cache-$TARGETARCH,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib-$TARGETARCH,target=/var/lib/apt,sharing=locked \
     --mount=type=cache,id=bun-$TARGETARCH,target=/root/.bun/install/cache \
-    DEBIAN_FRONTEND=noninteractive bunx playwright@1.59.1 install-deps chromium-headless-shell
+    DEBIAN_FRONTEND=noninteractive bunx patchright@1.61.1 install-deps chromium
 # Install to a fixed path accessible by all users (including the 'bun' user at runtime)
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+# Full Chromium, not the headless shell: the shell is detected by bot protections
+# when fetching web pages, and one build serves both rendering and fetching.
 RUN --mount=type=cache,id=bun-$TARGETARCH,target=/root/.bun/install/cache \
-    bunx playwright@1.59.1 install --only-shell chromium-headless-shell
+    bunx patchright@1.61.1 install --no-shell chromium
 # Load custom fonts into the system font cache
 COPY src/infrastructure/exporters/fonts /usr/local/share/fonts/genie
 RUN fc-cache -f -v
@@ -63,7 +65,7 @@ FROM base AS prerelease
 COPY . .
 
 # copy production dependencies and source code into final image
-FROM base_with_playwright AS release
+FROM base_with_chromium AS release
 RUN mkdir -p /home/bun/.local/bin
 COPY --from=download_dependencies /usr/src/app/bin/yt-dlp /home/bun/.local/bin/yt-dlp
 COPY --from=download_dependencies /usr/src/app/bin/deno /home/bun/.local/bin/deno

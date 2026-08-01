@@ -1,6 +1,26 @@
-import type { Browser, Page } from "playwright";
-import { chromium } from "playwright";
+import type { Browser, Page } from "patchright";
+import { chromium } from "patchright";
 import type { IImageRenderer } from "../../application/ports/IImageRenderer.ts";
+
+/**
+ * Chromium launch arguments.
+ *
+ * Limited to what a container actually requires. Resource-trimming flags
+ * (extension/default-app suppression, a 256MB JS heap cap) were removed because
+ * this browser is shared with general-purpose web page loading, where they
+ * throttle or break script-heavy sites.
+ *
+ * `--disable-background-networking` is deliberately kept: it does not affect
+ * page resource loading, but it stops Chromium's own telemetry and component
+ * updates from being routed through (and billed against) a configured proxy.
+ */
+const CHROMIUM_ARGS = [
+    "--disable-gpu",
+    "--disable-dev-shm-usage",
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-background-networking",
+];
 
 /**
  * Renders HTML strings to PNG images using a singleton headless Chromium instance.
@@ -8,6 +28,9 @@ import type { IImageRenderer } from "../../application/ports/IImageRenderer.ts";
  * A single browser and page are reused across calls to avoid the overhead of
  * launching a new browser per render. Requests are serialized via a queue so
  * concurrent callers don't corrupt each other's page state.
+ *
+ * Uses Patchright rather than Playwright so the whole application shares one
+ * browser build, avoiding a second Chromium in the image for web page fetching.
  */
 export class HtmlToImageRenderer implements IImageRenderer {
     private static browser: Browser | null = null;
@@ -19,16 +42,11 @@ export class HtmlToImageRenderer implements IImageRenderer {
         if (!HtmlToImageRenderer.browser) {
             HtmlToImageRenderer.browser = await chromium.launch({
                 headless: true,
-                args: [
-                    "--disable-gpu",
-                    "--disable-dev-shm-usage",
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-extensions",
-                    "--disable-background-networking",
-                    "--disable-default-apps",
-                    "--js-flags=--max-old-space-size=256",
-                ],
+                // Selects the full Chromium build. Without it, headless mode resolves
+                // to `chromium-headless-shell`, which the image no longer installs
+                // (and which bot protections detect when fetching web pages).
+                channel: "chromium",
+                args: CHROMIUM_ARGS,
             });
         }
         return HtmlToImageRenderer.browser;
