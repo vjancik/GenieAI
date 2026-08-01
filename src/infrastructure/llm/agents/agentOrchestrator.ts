@@ -19,7 +19,7 @@ import { buildComputationSystemPrompt } from "../models/computationModel.ts";
 import { buildGeneralSystemPrompt } from "../models/generalModel.ts";
 import { buildSearchSystemPrompt } from "../models/searchModel.ts";
 import { buildTriageSystemPrompt } from "../models/triageModel.ts";
-import { safeParseTavilyResponse } from "../tools/tavilySearchTool.ts";
+import { safeParseTavilyResponse, tavilyResultsToGroundingChunks } from "../tools/tavilySearchTool.ts";
 
 /**
  * Scans the message history for ToolMessages from content-fetching tools and
@@ -792,13 +792,12 @@ export class AgentOrchestrator implements IAgentOrchestrator {
 
                 // Grounding chunks in the Google Search shape, to be merged onto the final AIMessage
                 // so resolveGroundingSources can extract Tavily sources transparently.
-                // Only populated on successful schema parse; title is the hostname of the result URL.
+                // Only populated on successful schema parse; results whose URL is not an absolute
+                // http(s) URL are dropped by the mapper — see tavilyResultsToGroundingChunks.
                 const tavilyGroundingKwargs = parsed.success
                     ? {
                           groundingMetadata: {
-                              groundingChunks: parsed.data.results.map((r) => ({
-                                  web: { uri: r.url, title: new URL(r.url).hostname.replace(/^www\./, "") },
-                              })),
+                              groundingChunks: tavilyResultsToGroundingChunks(parsed.data.results, this.logger),
                           },
                       }
                     : {};

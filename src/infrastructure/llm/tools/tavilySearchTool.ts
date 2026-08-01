@@ -1,6 +1,7 @@
 import { tool } from "@langchain/core/tools";
 import { TavilySearch } from "@langchain/tavily";
 import { z } from "zod";
+import type { Logger } from "../../../application/types/Logger.ts";
 
 const TavilySearchResultSchema = z.object({
     url: z.string(),
@@ -41,6 +42,67 @@ const TavilySearchResponseResultsSchema = z.object({
 export function safeParseTavilyResponse(raw: unknown) {
     const objResponse = typeof raw === "string" ? JSON.parse(raw) : raw;
     return { objResponse, parsed: TavilySearchResponseResultsSchema.safeParse(objResponse) };
+}
+
+type TavilySearchResult = z.infer<typeof TavilySearchResultSchema>;
+
+/** A grounding chunk in the Google Search shape, so source formatting stays provider-agnostic. */
+type WebGroundingChunk = { web: { uri: string; title: string } };
+
+/**
+ * Extracts the bare hostname (minus a leading `www.`) from an absolute http(s) URL.
+ *
+ * Returns `null` for anything that cannot be used as a citation link: relative
+ * references (which have no origin to resolve against), malformed values, and
+ * non-http(s) schemes such as `javascript:` — the latter parse successfully but
+ * must never be rendered into a Discord markdown link.
+ */
+function citationHostname(url: string): string | null {
+    let parsed: URL;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return null;
+    }
+
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    if (parsed.hostname === "") return null;
+
+    return parsed.hostname.replace(/^www\./, "");
+}
+
+/**
+ * Converts Tavily search results into Google-Search-shaped grounding chunks,
+ * using each result's hostname as the display title.
+ *
+ * Tavily sometimes returns a `url` that is not an absolute URL — most commonly a
+ * relative redirect path such as `/goto?url=<opaque-token>` leaked from a proxied
+ * result page. There is no origin to resolve such a path against and the token is
+ * an opaque server-side blob, so the destination is unrecoverable; those results
+ * are skipped rather than rendered as a broken source link. This only affects the
+ * citation list — the result content is still forwarded to the model separately.
+ *
+ * @param results - Successfully parsed Tavily search results
+ * @param logger - Logger used to report skipped results
+ */
+export function tavilyResultsToGroundingChunks(results: TavilySearchResult[], logger: Logger): WebGroundingChunk[] {
+    const chunks: WebGroundingChunk[] = [];
+    const skippedUrls: string[] = [];
+
+    for (const result of results) {
+        const hostname = citationHostname(result.url);
+        if (hostname === null) {
+            skippedUrls.push(result.url);
+            continue;
+        }
+        chunks.push({ web: { uri: result.url, title: hostname } });
+    }
+
+    if (skippedUrls.length > 0) {
+        logger.warn({ skippedUrls }, "Tavily returned unusable result URLs — omitting them from the grounding sources");
+    }
+
+    return chunks;
 }
 
 const TAVILY_SEARCH_NAME = "web_search";
