@@ -45,18 +45,40 @@ const BARE_URL_RE = /(?<!<)(https?:\/\/[^\s>]+)/g;
 const HORIZONTAL_RULE_RE = /^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$/gm;
 
 /**
+ * Regex that matches a Markdown ATX heading deeper than h3 (`####`, `#####`,
+ * `######`) at the start of a line.
+ *
+ * Discord only renders h1–h3, so deeper headings would otherwise show up as
+ * literal `#` characters.  The pattern requires:
+ * - Start of line, capturing any leading horizontal whitespace
+ * - Four to six `#`, not followed by another `#` (so `#######` — not a valid
+ *   ATX heading anyway — is left alone)
+ * - A following space/tab, since ATX headings require one (`####Text` is not a heading)
+ *
+ * The `m` flag makes `^` match per line.
+ */
+const DEEP_HEADING_RE = /^([ \t]*)#{4,6}(?!#)(?=[ \t])/gm;
+
+/**
  * Prepares LLM-generated text for display in Discord by removing formatting
  * constructs that Discord does not render or that produce excessive whitespace.
  *
  * Transformations applied (in order):
- * 1. Strip Markdown horizontal rules (`---`, `***`, `___` on their own line)
- * 2. Collapse multiple consecutive blank lines into a single newline
- * 3. Trim leading and trailing whitespace
+ * 1. Demote h4–h6 headings to h3 (Discord renders no deeper than `###`)
+ * 2. Strip Markdown horizontal rules (`---`, `***`, `___` on their own line)
+ * 3. Collapse multiple consecutive blank lines into a single newline
+ * 4. Wrap bare URLs in `<…>` to suppress link embeds
+ * 5. Trim leading and trailing whitespace
  *
  * @param text - Raw LLM response text
  */
 export function llmTextToDiscordText(text: string): string {
-    return text.replace(HORIZONTAL_RULE_RE, "").replace(MULTI_BLANK_LINE_RE, "\n").replace(BARE_URL_RE, "<$1>").trim();
+    return text
+        .replace(DEEP_HEADING_RE, "$1###")
+        .replace(HORIZONTAL_RULE_RE, "")
+        .replace(MULTI_BLANK_LINE_RE, "\n")
+        .replace(BARE_URL_RE, "<$1>")
+        .trim();
 }
 
 /** Formats a Date verbosely in UTC, e.g. "Monday, March 17, 2024 at 02:35:00 PM UTC". */

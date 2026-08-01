@@ -321,6 +321,50 @@ describe("discordMessageToLlmText", () => {
 });
 
 describe("llmTextToDiscordText", () => {
+    describe("deep heading demotion", () => {
+        it("demotes #### to ###", () => {
+            expect(llmTextToDiscordText("#### Heading")).toBe("### Heading");
+        });
+
+        it("demotes ##### to ###", () => {
+            expect(llmTextToDiscordText("##### Heading")).toBe("### Heading");
+        });
+
+        it("demotes ###### to ###", () => {
+            expect(llmTextToDiscordText("###### Heading")).toBe("### Heading");
+        });
+
+        it("leaves h1-h3 headings untouched", () => {
+            expect(llmTextToDiscordText("# One\n## Two\n### Three")).toBe("# One\n## Two\n### Three");
+        });
+
+        it("demotes headings on any line, not just the first", () => {
+            expect(llmTextToDiscordText("Intro\n#### Section\nBody\n##### Sub")).toBe(
+                "Intro\n### Section\nBody\n### Sub",
+            );
+        });
+
+        it("preserves leading indentation", () => {
+            expect(llmTextToDiscordText("Intro\n  #### Indented")).toBe("Intro\n  ### Indented");
+        });
+
+        it("preserves the heading text including inline hashes", () => {
+            expect(llmTextToDiscordText("#### Issue #42 details")).toBe("### Issue #42 details");
+        });
+
+        it("does not touch hashes that are not at the start of a line", () => {
+            expect(llmTextToDiscordText("see #### here")).toBe("see #### here");
+        });
+
+        it("does not touch a run of 7 or more hashes", () => {
+            expect(llmTextToDiscordText("####### Not a heading")).toBe("####### Not a heading");
+        });
+
+        it("does not touch hashes with no following space", () => {
+            expect(llmTextToDiscordText("####Heading")).toBe("####Heading");
+        });
+    });
+
     describe("horizontal rule removal", () => {
         it("removes --- rule", () => {
             expect(llmTextToDiscordText("Before\n---\nAfter")).toBe("Before\nAfter");
