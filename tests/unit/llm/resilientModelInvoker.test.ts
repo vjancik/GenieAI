@@ -7,6 +7,7 @@ import type { IInvokableModel } from "../../../src/application/ports/IResilientM
 import type { IRoundRobinKeyProvider } from "../../../src/application/ports/IRoundRobinKeyProvider.ts";
 import type { GeminiApiKey } from "../../../src/domain/entities/GeminiApiKey.ts";
 import { AllFreeKeysExhaustedError, PaidKeyExhaustedError } from "../../../src/domain/errors/AppError.ts";
+import { FinishReason } from "../../../src/domain/value-objects/FinishReason.ts";
 import { ResilientModelInvoker } from "../../../src/infrastructure/llm/ResilientModelInvoker.ts";
 
 const logger = pino({ level: "silent" });
@@ -196,5 +197,75 @@ describe("ResilientModelInvoker.invokeWithFreeKeys — fallback model", () => {
         await expect(invoker.invokeWithFreeKeys(() => model, undefined, [])).rejects.toBeInstanceOf(
             AllFreeKeysExhaustedError,
         );
+    });
+});
+
+// ---------------------------------------------------------------------------
+// finishReason reporting — distinguishes a clean stop, a model-reported abnormal
+// stop (e.g. SAFETY), and a stream that ended with no reason at all
+// ---------------------------------------------------------------------------
+
+/** Chunk carrying a finishReason in response_metadata, as Gemini reports it. */
+function makeChunkWithFinishReason(finishReason: string): AIMessageChunk {
+    return new AIMessageChunk({ content: "partial answer", response_metadata: { finishReason } });
+}
+
+describe("ResilientModelInvoker — finishReason", () => {
+    test("reports STOP and no interruption on a clean finish", async () => {
+        const invoker = makeInvoker();
+        const model = makeSuccessModel(makeChunkWithFinishReason("STOP"));
+
+        const result = await invoker.invokeWithPaidKey(() => model, undefined, []);
+
+        expect(result.finishReason).toBe(FinishReason.STOP);
+        expect(result.wasInterrupted).toBe(false);
+    });
+
+    test("surfaces an abnormal reason without flagging an interruption", async () => {
+        const invoker = makeInvoker();
+        const model = makeSuccessModel(makeChunkWithFinishReason("SAFETY"));
+
+        const result = await invoker.invokeWithPaidKey(() => model, undefined, []);
+
+        expect(result.finishReason).toBe(FinishReason.SAFETY);
+        // The two signals are mutually exclusive: an interruption is the absence of a reason
+        expect(result.wasInterrupted).toBe(false);
+    });
+
+    test("reads the reason from additional_kwargs when response_metadata has none", async () => {
+        const invoker = makeInvoker();
+        const model = makeSuccessModel(
+            new AIMessageChunk({ content: "partial", additional_kwargs: { finishReason: "RECITATION" } }),
+        );
+
+        const result = await invoker.invokeWithPaidKey(() => model, undefined, []);
+
+        expect(result.finishReason).toBe(FinishReason.RECITATION);
+    });
+
+    test("flags an interruption and reports no reason when none was sent", async () => {
+        const invoker = makeInvoker();
+        const model = makeSuccessModel(new AIMessageChunk("truncated answer"));
+
+        const result = await invoker.invokeWithPaidKey(() => model, undefined, []);
+
+        expect(result.finishReason).toBeNull();
+        expect(result.wasInterrupted).toBe(true);
+    });
+
+    test("reports the fallback model's reason when the primary 503s", async () => {
+        const primaryModel = makeErrorModel(make503Error());
+        const fallbackModel = makeSuccessModel(makeChunkWithFinishReason("MAX_TOKENS"));
+        const invoker = makeInvoker();
+
+        const result = await invoker.invokeWithPaidKey(
+            () => primaryModel,
+            () => fallbackModel,
+            [],
+        );
+
+        expect(result.usedFallback).toBe(true);
+        expect(result.finishReason).toBe(FinishReason.MAX_TOKENS);
+        expect(result.wasInterrupted).toBe(false);
     });
 });

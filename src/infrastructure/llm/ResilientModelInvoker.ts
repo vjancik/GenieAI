@@ -17,6 +17,7 @@ import type { AgentStatusType, OnStatusUpdate } from "../../application/types/Ag
 import type { Logger } from "../../application/types/Logger.ts";
 import type { GeminiApiKey } from "../../domain/entities/GeminiApiKey.ts";
 import { AllFreeKeysExhaustedError, PaidKeyExhaustedError } from "../../domain/errors/AppError.ts";
+import { type FinishReason, parseFinishReason } from "../../domain/value-objects/FinishReason.ts";
 import { is429Error } from "./errors/is429Error.ts";
 import { isModelFallbackError } from "./errors/isModelFallbackError.ts";
 import { filterHistoryForInlineSize } from "./utils/inlineAttachmentFilter.ts";
@@ -30,13 +31,15 @@ import { concatMessageChunks, normalizeContent } from "./utils/langchainUtils.ts
  *   chunk arrives within that window the stream is cancelled and a TimeoutError is thrown.
  * - `wasInterrupted` is true when the final message carries no `finishReason` in either
  *   `response_metadata` or `additional_kwargs`, indicating a premature upstream termination.
+ * - `finishReason` is the reported reason when there is one. Anything other than `STOP`
+ *   means generation ended abnormally (e.g. `SAFETY`), leaving a visibly truncated response.
  */
 async function streamingInvoke(
     model: IInvokableModel,
     messages: BaseMessage[],
     invokeOptions?: unknown,
     extraOptions?: { firstChunkTimeoutMs?: number; span?: Span },
-): Promise<{ message: AIMessage; wasInterrupted: boolean }> {
+): Promise<{ message: AIMessage; wasInterrupted: boolean; finishReason: FinishReason | null }> {
     const iterable = await model.stream(messages, invokeOptions);
     const iterator = iterable[Symbol.asyncIterator]();
 
@@ -86,10 +89,12 @@ async function streamingInvoke(
 
     const message = new AIMessage(collected.lc_kwargs);
 
-    const finishReason = message.response_metadata?.finishReason ?? message.additional_kwargs?.finishReason;
-    const wasInterrupted = !finishReason;
+    const finishReason = parseFinishReason(
+        message.response_metadata?.finishReason ?? message.additional_kwargs?.finishReason,
+    );
+    const wasInterrupted = finishReason === null;
 
-    return { message, wasInterrupted };
+    return { message, wasInterrupted, finishReason };
 }
 
 /**
@@ -234,17 +239,20 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
                             onStatusUpdate?.({ type: beforeInvokeStatus });
                         }
 
-                        const { message: result, wasInterrupted } = await streamingInvoke(
-                            getModel(key),
-                            filtered,
-                            undefined,
-                            { firstChunkTimeoutMs: timeoutMs ?? this.globalTimeoutMs, span },
-                        );
+                        const {
+                            message: result,
+                            wasInterrupted,
+                            finishReason,
+                        } = await streamingInvoke(getModel(key), filtered, undefined, {
+                            firstChunkTimeoutMs: timeoutMs ?? this.globalTimeoutMs,
+                            span,
+                        });
                         span.setAttributes({
                             "llm.attempt_count": attempt + 1,
                             "llm.api_key_id": key.id,
+                            ...(finishReason && { "llm.finish_reason": finishReason }),
                         });
-                        return { result, usedFallback: false, wasInterrupted };
+                        return { result, usedFallback: false, wasInterrupted, finishReason };
                     } catch (err) {
                         if (is429Error(err)) {
                             this.logger.warn(
@@ -275,20 +283,25 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
                             );
                             try {
                                 // Reuse filtered — same key, same messages, no re-refresh needed
-                                const { message: fallbackResult, wasInterrupted: fallbackInterrupted } =
-                                    await streamingInvoke(fallbackModel, filtered, undefined, {
-                                        firstChunkTimeoutMs: timeoutMs ?? this.globalTimeoutMs,
-                                        span,
-                                    });
+                                const {
+                                    message: fallbackResult,
+                                    wasInterrupted: fallbackInterrupted,
+                                    finishReason: fallbackFinishReason,
+                                } = await streamingInvoke(fallbackModel, filtered, undefined, {
+                                    firstChunkTimeoutMs: timeoutMs ?? this.globalTimeoutMs,
+                                    span,
+                                });
                                 span.setAttributes({
                                     "llm.attempt_count": attempt + 1,
                                     "llm.api_key_id": key.id,
                                     "llm.used_fallback": true,
+                                    ...(fallbackFinishReason && { "llm.finish_reason": fallbackFinishReason }),
                                 });
                                 return {
                                     result: fallbackResult,
                                     usedFallback: true,
                                     wasInterrupted: fallbackInterrupted,
+                                    finishReason: fallbackFinishReason,
                                 };
                             } catch (fallbackErr) {
                                 if (is429Error(fallbackErr)) {

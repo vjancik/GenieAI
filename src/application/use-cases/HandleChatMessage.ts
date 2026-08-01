@@ -4,10 +4,12 @@ import type { MessageInteractionType, PersistedChatMessage } from "../../domain/
 import { extractDisplayMessage } from "../../domain/errors/AppError.ts";
 import type { IMessagePageRepository } from "../../domain/ports/IMessagePageRepository.ts";
 import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
+import type { FinishReason } from "../../domain/value-objects/FinishReason.ts";
 import { MessageIntent } from "../../domain/value-objects/MessageIntent.ts";
 import { agentStatusLabel } from "../formatters/agentStatus.ts";
 import { extractWebGroundingChunks } from "../formatters/groundingSources.ts";
 import { splitMarkdown } from "../formatters/markdownSplitter.ts";
+import { FALLBACK_FOOTER, finishReasonFooter, INTERRUPTED_FOOTER } from "../formatters/responseFooters.ts";
 import { discordMessageToLlmText, llmTextToDiscordText } from "../formatters/textTransformers.ts";
 import { buildLangchainMessage } from "../helpers/buildLangchainMessage.ts";
 import { parseMessageIntent, removeMentionsAndCommandPrefix } from "../helpers/chatMessageTransformers.ts";
@@ -53,6 +55,7 @@ type AgentResult = {
     isRetryable?: boolean;
     usedFallback?: boolean;
     wasInterrupted?: boolean;
+    finishReason?: FinishReason | null;
     thinkingMessagePromise: Promise<IChatClientMessage>;
 };
 
@@ -255,7 +258,7 @@ export class HandleChatMessageUseCase {
                 });
             };
 
-            const { response, newMessages, isFailure, isRetryable, usedFallback, wasInterrupted } =
+            const { response, newMessages, isFailure, isRetryable, usedFallback, wasInterrupted, finishReason } =
                 await this.processMessage({
                     discordMessageId: message.id,
                     referencedMessageId: message.referencedMessageId,
@@ -280,6 +283,7 @@ export class HandleChatMessageUseCase {
                 isRetryable,
                 usedFallback,
                 wasInterrupted,
+                finishReason,
                 // TYPE COERCION: thinkingMessagePromise is always assigned before any await
                 // that could skip the assignment — the undefined case is structurally impossible.
                 thinkingMessagePromise,
@@ -400,6 +404,7 @@ export class HandleChatMessageUseCase {
         isRetryable?: boolean;
         usedFallback?: boolean;
         wasInterrupted?: boolean;
+        finishReason?: FinishReason | null;
     }> {
         try {
             return await Sentry.startSpan(
@@ -565,7 +570,7 @@ export class HandleChatMessageUseCase {
                         "Processing message with history",
                     );
 
-                    const { content, newMessages, isRetryable, usedFallback, wasInterrupted } =
+                    const { content, newMessages, isRetryable, usedFallback, wasInterrupted, finishReason } =
                         await this.orchestrator.process(llmHistory, params.intent, params.onStatusUpdate);
 
                     if (!content && !this.hasInlineData(newMessages)) {
@@ -587,6 +592,7 @@ export class HandleChatMessageUseCase {
                         isRetryable: isRetryable || undefined,
                         usedFallback: usedFallback || undefined,
                         wasInterrupted: wasInterrupted || undefined,
+                        finishReason,
                     };
                 },
             );
@@ -616,6 +622,7 @@ export class HandleChatMessageUseCase {
         isRetryable?: boolean;
         usedFallback?: boolean;
         wasInterrupted?: boolean;
+        finishReason?: FinishReason | null;
         retriesLeft?: number | null;
         thinkingMessagePromise: Promise<IChatClientMessage>;
         span: Sentry.Span;
@@ -632,6 +639,7 @@ export class HandleChatMessageUseCase {
             isRetryable,
             usedFallback,
             wasInterrupted,
+            finishReason,
             retriesLeft,
             thinkingMessagePromise,
             span,
@@ -659,17 +667,20 @@ export class HandleChatMessageUseCase {
         // Kept separate from discordResponse so pagination offsets stored in the DB always
         // refer to positions within discordResponse — subsequent pages are served from that
         // string and must not be offset by the footer length.
-        const fallbackFooter = usedFallback
-            ? "\n*This response was generated using a fallback model. If it's unsatisfactory you can Retry later to see if the primary model is available again.*"
-            : "";
+        const fallbackFooter = usedFallback ? FALLBACK_FOOTER : "";
 
-        // Informational footer appended when the stream terminated prematurely (no finishReason).
-        const interruptedFooter = wasInterrupted
-            ? "\n*This response may be incomplete. If it's unsatisfactory you can Retry.*"
-            : "";
+        // Informational footer describing how generation ended badly. A reported non-STOP
+        // finish reason (e.g. SAFETY) explains the truncation specifically, so it wins over
+        // the generic interruption notice, which covers the opposite case of a stream that
+        // ended with no reason at all. The two are mutually exclusive per model invocation,
+        // but each is sticky across graph nodes, so the precedence is enforced rather than
+        // assumed and the user never sees both.
+        const reasonFooter = finishReasonFooter(finishReason ?? null);
+        const truncationFooter = reasonFooter === "" && wasInterrupted ? INTERRUPTED_FOOTER : reasonFooter;
 
-        // Combined footer — both may be present simultaneously (e.g. fallback model that also got cut off).
-        const combinedFooter = fallbackFooter + interruptedFooter;
+        // Combined footer — the fallback notice is orthogonal (which model answered, not how
+        // generation ended) so it may accompany either truncation footer.
+        const combinedFooter = fallbackFooter + truncationFooter;
 
         // Determine whether the response has grounding sources so the Sources button can be appended.
         // Skipped on failure responses — the error message has no meaningful sources to cite,

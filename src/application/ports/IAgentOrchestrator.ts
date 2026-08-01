@@ -1,5 +1,6 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import type { PersistedChatMessage } from "../../domain/entities/Message.ts";
+import type { FinishReason } from "../../domain/value-objects/FinishReason.ts";
 import type { MessageIntent } from "../../domain/value-objects/MessageIntent.ts";
 import type { OnStatusUpdate } from "../types/AgentStatus.ts";
 
@@ -38,5 +39,10 @@ export interface IAgentOrchestrator {
         isRetryable: boolean;
         usedFallback: boolean;
         wasInterrupted: boolean;
+        /**
+         * A non-STOP reason the model gave for ending generation (e.g. SAFETY), or null when
+         * generation ended cleanly or no reason was reported at all (see `wasInterrupted`).
+         */
+        finishReason: FinishReason | null;
     }>;
 }

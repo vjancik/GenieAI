@@ -1,5 +1,6 @@
 import type { AIMessage, AIMessageChunk, BaseMessage } from "@langchain/core/messages";
 import type { GeminiApiKey } from "../../domain/entities/GeminiApiKey.ts";
+import type { FinishReason } from "../../domain/value-objects/FinishReason.ts";
 import type { ApiKeyType } from "../config/AppConfig.ts";
 import type { AgentStatusType, OnStatusUpdate } from "../types/AgentStatus.ts";
 
@@ -18,8 +19,17 @@ export interface ModelInvocationResult {
      * True when the model stream terminated without a `finishReason` in the final message,
      * indicating a premature upstream termination (e.g. Google dropped the connection or
      * returned a malformed SSE frame). The response content may be incomplete.
+     *
+     * Mutually exclusive with a non-null {@link finishReason}: an interruption is precisely
+     * the absence of a reported reason.
      */
     wasInterrupted: boolean;
+    /**
+     * The reason the model reported for ending generation, or null when none was reported
+     * (see {@link wasInterrupted}). Anything other than `STOP` means the response is degraded,
+     * e.g. `SAFETY` for a visibly truncated answer stopped by a content filter.
+     */
+    finishReason: FinishReason | null;
 }
 
 /**

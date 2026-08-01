@@ -7,6 +7,7 @@ import type { AgentStatusUpdate } from "../../../src/application/types/AgentStat
 import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
 import type { PersistedChatMessage } from "../../../src/domain/entities/Message.ts";
 import { AllFreeKeysExhaustedError, AppError } from "../../../src/domain/errors/AppError.ts";
+import { FinishReason } from "../../../src/domain/value-objects/FinishReason.ts";
 import { MessageIntent } from "../../../src/domain/value-objects/MessageIntent.ts";
 import { AgentOrchestrator } from "../../../src/infrastructure/llm/agents/agentOrchestrator.ts";
 import { ResilientModelInvoker } from "../../../src/infrastructure/llm/ResilientModelInvoker.ts";
@@ -738,6 +739,80 @@ describe("Orchestrator.process", () => {
 
         // Two-arg call must still work; no callback provided
         expect(orchestrator.process([new HumanMessage("Hello")], MessageIntent.UNKNOWN)).resolves.toBeDefined();
+    });
+});
+
+describe("Orchestrator.process — finishReason", () => {
+    /** Mock model whose streamed message reports the given finishReason, as Gemini does. */
+    function makeModelWithFinishReason(response: string, finishReason: string) {
+        const msg = new AIMessage({ content: response, response_metadata: { finishReason } });
+        return {
+            invoke: mock(async (_messages: BaseMessage[]) => msg),
+            stream: mock(async (_messages: BaseMessage[]) => makeStreamIterable(msg)),
+        };
+    }
+
+    function makeOrchestratorWith(triageModel: unknown, generalModel: unknown) {
+        return new AgentOrchestrator(
+            asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(makeModel("search")) as never,
+            makeInvoker(),
+            makeTool("content") as never,
+            makeTool("transcript") as never,
+            testLogger,
+            testConfig,
+        );
+    }
+
+    test("surfaces a degraded reason from the answering node and marks it retryable", async () => {
+        const orchestrator = makeOrchestratorWith(
+            makeTriageWithToolCall("route_to_general"),
+            makeModelWithFinishReason("partial answer", "SAFETY"),
+        );
+
+        const result = await orchestrator.process([new HumanMessage("Hello")], MessageIntent.UNKNOWN);
+
+        expect(result.finishReason).toBe(FinishReason.SAFETY);
+        expect(result.isRetryable).toBe(true);
+        // An abnormal stop is not an interruption — the model did report a reason
+        expect(result.wasInterrupted).toBe(false);
+    });
+
+    test("leaves the reason null on a clean stop so success is never reported as degraded", async () => {
+        const orchestrator = makeOrchestratorWith(
+            makeTriageWithToolCall("route_to_general"),
+            makeModelWithFinishReason("complete answer", "STOP"),
+        );
+
+        const result = await orchestrator.process([new HumanMessage("Hello")], MessageIntent.UNKNOWN);
+
+        expect(result.finishReason).toBeNull();
+        expect(result.isRetryable).toBe(false);
+        expect(result.wasInterrupted).toBe(false);
+    });
+
+    test("ignores a degraded triage reason when the answering node finishes cleanly", async () => {
+        // A blocked triage call still routes to a node that produces a real answer,
+        // so surfacing triage's reason to the user would be a false alarm.
+        const triageModel = new AIMessage({
+            content: "",
+            tool_calls: [{ name: "route_to_general", args: {}, id: "call_1", type: "tool_call" as const }],
+            response_metadata: { finishReason: "SAFETY" },
+        });
+        const orchestrator = makeOrchestratorWith(
+            {
+                invoke: mock(async (_messages: BaseMessage[]) => triageModel),
+                stream: mock(async (_messages: BaseMessage[]) => makeStreamIterable(triageModel)),
+            },
+            makeModelWithFinishReason("complete answer", "STOP"),
+        );
+
+        const result = await orchestrator.process([new HumanMessage("Hello")], MessageIntent.UNKNOWN);
+
+        expect(result.finishReason).toBeNull();
+        expect(result.isRetryable).toBe(false);
     });
 });
 

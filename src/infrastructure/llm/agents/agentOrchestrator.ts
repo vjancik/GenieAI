@@ -8,12 +8,16 @@ import { dbMessagesToLangchain, extractContent } from "../../../application/help
 import type { IAgentOrchestrator } from "../../../application/ports/IAgentOrchestrator.ts";
 import type { IModelProvider } from "../../../application/ports/IModelProvider.ts";
 import type { IModelTool } from "../../../application/ports/IModelTool.ts";
-import type { IResilientModelInvoker } from "../../../application/ports/IResilientModelInvoker.ts";
+import type {
+    IResilientModelInvoker,
+    ModelInvocationResult,
+} from "../../../application/ports/IResilientModelInvoker.ts";
 import type { OnStatusUpdate } from "../../../application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../../application/types/AgentStatus.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
 import type { PersistedChatMessage } from "../../../domain/entities/Message.ts";
 import { AppError, LlmError } from "../../../domain/errors/AppError.ts";
+import { type FinishReason, isDegradedFinishReason } from "../../../domain/value-objects/FinishReason.ts";
 import { MessageIntent } from "../../../domain/value-objects/MessageIntent.ts";
 import { buildComputationSystemPrompt } from "../models/computationModel.ts";
 import { buildGeneralSystemPrompt } from "../models/generalModel.ts";
@@ -100,6 +104,16 @@ const booleanOrReducer = {
     reducer: (current: boolean, next: boolean) => current || next,
 };
 
+/**
+ * Sticky-first reducer for the finish reason: keeps the first degraded reason recorded.
+ * Nodes only emit a value when generation ended abnormally, so a later successful node
+ * (which emits null) can never clear an earlier failure.
+ */
+const firstDegradedReasonReducer = {
+    inputSchema: z.custom<FinishReason | null>(),
+    reducer: (current: FinishReason | null, next: FinishReason | null) => current ?? next,
+};
+
 const OrchestratorStateSchema = new StateSchema({
     messages: MessagesValue,
     intent: z.custom<MessageIntent>(),
@@ -128,6 +142,19 @@ const OrchestratorStateSchema = new StateSchema({
      * The response content may be incomplete. Implies isRetryable.
      */
     wasInterrupted: new ReducedValue(z.boolean().default(false), booleanOrReducer),
+    /**
+     * Set by generalNode, searchNode, or computationNode when the model reported a finish
+     * reason other than STOP (e.g. SAFETY), meaning generation ended abnormally and the
+     * response is visibly truncated. Implies isRetryable.
+     *
+     * Stays null on a clean stop, so the value is only ever a degraded reason. Distinct from
+     * wasInterrupted: that flag covers the absence of any reported reason, this one carries
+     * the reason the model gave. The two are mutually exclusive per invocation.
+     *
+     * Triage deliberately does not report here: a blocked triage call still routes to a node
+     * that produces a real answer, so surfacing it to the user would be a false alarm.
+     */
+    finishReason: new ReducedValue(z.custom<FinishReason | null>().default(null), firstDegradedReasonReducer),
 });
 
 /**
@@ -148,6 +175,34 @@ type OrchestratorContext = z.infer<typeof OrchestratorContextSchema>;
  * node functions always receive a config object, so `config` itself is non-optional.
  */
 type NodeConfig = { context?: OrchestratorContext };
+
+/** State update returned by the user-facing agent nodes (general, computation, search). */
+type NodeResult = {
+    messages: BaseMessage[];
+    isRetryable: boolean;
+    usedFallback: boolean;
+    wasInterrupted: boolean;
+    finishReason: FinishReason | null;
+};
+
+/**
+ * Derives the response-degradation fields of a node's state update from an invocation result.
+ *
+ * Only a degraded finish reason is written to state, so a clean STOP leaves the channel null
+ * and the sticky reducer never treats a success as a failure. Every degradation makes the
+ * response retryable: a fresh generation often clears a transient safety block or glitch.
+ */
+function degradationUpdate(
+    invocation: Pick<ModelInvocationResult, "usedFallback" | "wasInterrupted" | "finishReason">,
+): Omit<NodeResult, "messages"> {
+    const degradedReason = isDegradedFinishReason(invocation.finishReason) ? invocation.finishReason : null;
+    return {
+        isRetryable: invocation.usedFallback || invocation.wasInterrupted || degradedReason !== null,
+        usedFallback: invocation.usedFallback,
+        wasInterrupted: invocation.wasInterrupted,
+        finishReason: degradedReason,
+    };
+}
 
 /** Graph state type — messages + intent seeded at invocation. */
 type GraphState = typeof OrchestratorStateSchema.State;
@@ -282,6 +337,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         isRetryable: boolean;
         usedFallback: boolean;
         wasInterrupted: boolean;
+        finishReason: FinishReason | null;
     }> {
         const lastMessage = messages.at(-1);
         if (!(lastMessage instanceof HumanMessage)) {
@@ -317,6 +373,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     isRetryable: result.isRetryable,
                     usedFallback: result.usedFallback,
                     wasInterrupted: result.wasInterrupted,
+                    finishReason: result.finishReason,
                 };
             },
         );
@@ -647,10 +704,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * instruction prompt to focus the model on the retrieved content. This extra
      * HumanMessage is passed transiently to the model and is NOT stored in state.
      */
-    private async generalNode(
-        state: GraphState,
-        config: NodeConfig,
-    ): Promise<{ messages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean; wasInterrupted: boolean }> {
+    private async generalNode(state: GraphState, config: NodeConfig): Promise<NodeResult> {
         return Sentry.startSpan({ name: "General agent node", op: "agent.node.general" }, async (span) => {
             const lastMsg = state.messages.at(-1);
             const hasToolResult = lastMsg instanceof ToolMessage;
@@ -670,11 +724,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 ...state.messages,
             ];
 
-            const {
-                result: response,
-                usedFallback,
-                wasInterrupted,
-            } = await this.invoker.invoke(
+            const invocation = await this.invoker.invoke(
                 this.nodeApiKeyTypes.general,
                 this.generalProvider.get.bind(this.generalProvider),
                 this.generalProvider.getFallback.bind(this.generalProvider),
@@ -683,6 +733,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 config.context?.onStatusUpdate,
                 AgentStatusType.GENERATING,
             );
+            const response = invocation.result;
 
             if (response.tool_calls && response.tool_calls.length > 0) {
                 this.logger.error(
@@ -692,7 +743,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 throw new LlmError("User-facing general model produced an illegal tool call");
             }
 
-            return { messages: [response], isRetryable: usedFallback || wasInterrupted, usedFallback, wasInterrupted };
+            return { messages: [response], ...degradationUpdate(invocation) };
         });
     }
 
@@ -703,21 +754,14 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * The model has the native `codeExecution` tool bound, allowing it to run Python
      * to produce accurate numerical or data-processing results.
      */
-    private async computationNode(
-        state: GraphState,
-        config: NodeConfig,
-    ): Promise<{ messages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean; wasInterrupted: boolean }> {
+    private async computationNode(state: GraphState, config: NodeConfig): Promise<NodeResult> {
         return Sentry.startSpan({ name: "Computation agent node", op: "agent.node.computation" }, async () => {
             const invokeMessages: BaseMessage[] = [
                 new SystemMessage(buildComputationSystemPrompt(this.basePrompt)),
                 ...state.messages,
             ];
 
-            const {
-                result: response,
-                usedFallback,
-                wasInterrupted,
-            } = await this.invoker.invoke(
+            const invocation = await this.invoker.invoke(
                 this.nodeApiKeyTypes.computation,
                 this.computationProvider.get.bind(this.computationProvider),
                 this.computationProvider.getFallback.bind(this.computationProvider),
@@ -727,7 +771,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 AgentStatusType.COMPUTING,
             );
 
-            return { messages: [response], isRetryable: usedFallback || wasInterrupted, usedFallback, wasInterrupted };
+            return { messages: [invocation.result], ...degradationUpdate(invocation) };
         });
     }
 
@@ -742,10 +786,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * the history before invoking the LLM. Both the ToolMessage and the final AIMessage are
      * included in the state update so they are persisted for future turns.
      */
-    private async searchNode(
-        state: GraphState,
-        config: NodeConfig,
-    ): Promise<{ messages: BaseMessage[]; isRetryable: boolean; usedFallback: boolean; wasInterrupted: boolean }> {
+    private async searchNode(state: GraphState, config: NodeConfig): Promise<NodeResult> {
         return Sentry.startSpan({ name: "Search agent node", op: "agent.node.search" }, async () => {
             if (this.searchMode === SearchMode.tavily) {
                 if (!this.tavilyTool) {
@@ -808,7 +849,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     tavilyResultMessage,
                 ];
 
-                const { result, usedFallback, wasInterrupted } = await this.invoker.invoke(
+                const invocation = await this.invoker.invoke(
                     this.nodeApiKeyTypes.search,
                     this.searchProvider.get.bind(this.searchProvider),
                     this.searchProvider.getFallback.bind(this.searchProvider),
@@ -817,6 +858,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     config.context?.onStatusUpdate,
                     AgentStatusType.SEARCHING,
                 );
+                const result = invocation.result;
 
                 Object.assign(result.additional_kwargs, tavilyGroundingKwargs);
 
@@ -828,23 +870,14 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     throw new LlmError("User-facing search model produced an illegal tool call");
                 }
 
-                return {
-                    messages: [tavilyResultMessage, result],
-                    isRetryable: usedFallback || wasInterrupted,
-                    usedFallback,
-                    wasInterrupted: wasInterrupted,
-                };
+                return { messages: [tavilyResultMessage, result], ...degradationUpdate(invocation) };
             }
 
             const messages: BaseMessage[] = [
                 new SystemMessage(buildSearchSystemPrompt(this.basePrompt, this.searchMode)),
                 ...state.messages,
             ];
-            const {
-                result: response,
-                usedFallback,
-                wasInterrupted,
-            } = await this.invoker.invoke(
+            const invocation = await this.invoker.invoke(
                 this.nodeApiKeyTypes.search,
                 this.searchProvider.get.bind(this.searchProvider),
                 this.searchProvider.getFallback.bind(this.searchProvider),
@@ -853,6 +886,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 config.context?.onStatusUpdate,
                 AgentStatusType.SEARCHING,
             );
+            const response = invocation.result;
 
             if (response.tool_calls && response.tool_calls.length > 0) {
                 this.logger.error(
@@ -862,7 +896,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 throw new LlmError("User-facing search model produced an illegal tool call");
             }
 
-            return { messages: [response], isRetryable: usedFallback || wasInterrupted, usedFallback, wasInterrupted };
+            return { messages: [response], ...degradationUpdate(invocation) };
         });
     }
 }

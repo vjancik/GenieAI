@@ -1,6 +1,11 @@
 import { describe, expect, it, mock } from "bun:test";
 import type { BaseMessage } from "@langchain/core/messages";
 import pino from "pino";
+import {
+    FALLBACK_FOOTER,
+    finishReasonFooter,
+    INTERRUPTED_FOOTER,
+} from "../../../src/application/formatters/responseFooters.ts";
 import type {
     IChatClientBot,
     IChatClientMessage,
@@ -12,6 +17,7 @@ import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
 import { HandleChatMessageUseCase } from "../../../src/application/use-cases/HandleChatMessage.ts";
 import type { IMessagePageRepository } from "../../../src/domain/ports/IMessagePageRepository.ts";
 import type { IMessageRepository } from "../../../src/domain/ports/IMessageRepository.ts";
+import { FinishReason } from "../../../src/domain/value-objects/FinishReason.ts";
 import { MessageIntent } from "../../../src/domain/value-objects/MessageIntent.ts";
 
 // ---------------------------------------------------------------------------
@@ -80,6 +86,8 @@ function makeOrchestrator(
         response: string;
         isRetryable: boolean;
         usedFallback: boolean;
+        wasInterrupted: boolean;
+        finishReason: FinishReason | null;
         throws: boolean;
     }> = {},
 ): IAgentOrchestrator {
@@ -93,6 +101,8 @@ function makeOrchestrator(
                 newMessages: [] as BaseMessage[],
                 isRetryable: overrides.isRetryable ?? false,
                 usedFallback: overrides.usedFallback ?? false,
+                wasInterrupted: overrides.wasInterrupted ?? false,
+                finishReason: overrides.finishReason ?? null,
             };
         }),
     } as unknown as IAgentOrchestrator;
@@ -319,5 +329,93 @@ describe("HandleChatMessageUseCase.invokeAgent", () => {
         // isRetryable is true when processMessage catches an error (allows retry button)
         expect(result.isRetryable).toBe(true);
         expect(result.thinkingMessagePromise).toBeDefined();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Response footers — fallback, interruption, and finish reason precedence
+// ---------------------------------------------------------------------------
+
+describe("HandleChatMessageUseCase — response footers", () => {
+    /**
+     * Runs execute() and returns the content of the final bot reply. `msg.reply` serves
+     * both the thinking placeholder and the answer, so the answer is the last call.
+     */
+    async function sendAndGetReplyContent(orchestrator: IAgentOrchestrator): Promise<string> {
+        const useCase = makeUseCase({ orchestrator });
+        const thinkingMsg = makeMessage({ id: "thinking", authorId: BOT_USER_ID, isAuthorBot: true });
+        const msg = makeMessage({
+            id: "user-msg",
+            content: "!ai hello",
+            reply: mock(async () => thinkingMsg),
+        });
+
+        await useCase.execute({ message: msg, shutdownPending: false, isRateLimited: false });
+
+        const calls = (msg.reply as ReturnType<typeof mock>).mock.calls;
+        const lastCall = calls.at(-1)?.[0] as { content: string } | undefined;
+        return lastCall?.content ?? "";
+    }
+
+    it("appends no footer on a clean response", async () => {
+        const content = await sendAndGetReplyContent(makeOrchestrator({ response: "clean answer" }));
+
+        expect(content).toBe("clean answer");
+    });
+
+    it("explains a degraded finish reason", async () => {
+        const content = await sendAndGetReplyContent(
+            makeOrchestrator({ response: "partial answer", finishReason: FinishReason.SAFETY }),
+        );
+
+        expect(content).toContain("partial answer");
+        expect(content).toContain(finishReasonFooter(FinishReason.SAFETY));
+    });
+
+    it("falls back to the generic notice when the stream ended with no reason", async () => {
+        const content = await sendAndGetReplyContent(
+            makeOrchestrator({ response: "partial answer", wasInterrupted: true }),
+        );
+
+        expect(content).toContain(INTERRUPTED_FOOTER);
+    });
+
+    // The two signals are mutually exclusive per invocation, but each is sticky across
+    // graph nodes, so both can arrive together. The specific reason must win outright.
+    it("shows only the finish reason footer when interruption is also flagged", async () => {
+        const content = await sendAndGetReplyContent(
+            makeOrchestrator({
+                response: "partial answer",
+                wasInterrupted: true,
+                finishReason: FinishReason.SAFETY,
+            }),
+        );
+
+        expect(content).toContain(finishReasonFooter(FinishReason.SAFETY));
+        expect(content).not.toContain(INTERRUPTED_FOOTER);
+    });
+
+    // The fallback notice describes which model answered, not how generation ended,
+    // so it is orthogonal and may accompany a truncation footer.
+    it("shows the fallback notice alongside a finish reason footer", async () => {
+        const content = await sendAndGetReplyContent(
+            makeOrchestrator({
+                response: "partial answer",
+                usedFallback: true,
+                finishReason: FinishReason.MAX_TOKENS,
+            }),
+        );
+
+        expect(content).toContain(FALLBACK_FOOTER);
+        expect(content).toContain(finishReasonFooter(FinishReason.MAX_TOKENS));
+        expect(content).not.toContain(INTERRUPTED_FOOTER);
+    });
+
+    it("appends no footer for a reported clean stop", async () => {
+        const content = await sendAndGetReplyContent(
+            makeOrchestrator({ response: "clean answer", finishReason: FinishReason.STOP }),
+        );
+
+        expect(content).toBe("clean answer");
     });
 });
