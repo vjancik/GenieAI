@@ -1,91 +1,99 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import pino from "pino";
-import { makeMockResponse, spyFetchTooling } from "../../helpers/fetchHelpers.ts";
 
 const testLogger = pino({ level: "silent" });
 
+type ImpitCall = { url: string; method: string; body?: string };
+type ImpitReply = { ok?: boolean; status?: number; contentType?: string; body?: string; url?: string };
+
+/** Records every request the tool makes through Impit, across all tests. */
+let calls: ImpitCall[] = [];
+/** Constructor options the tool passed to Impit — asserted for the browser preset. */
+let constructorOptions: Record<string, unknown> | undefined;
+/** Per-test responder; receives each request in order. */
+let respond: (call: ImpitCall) => ImpitReply = () => ({});
+
+function toResponse(reply: ImpitReply, requestUrl: string) {
+    const body = reply.body ?? "<html><body><h1>Hello</h1><p>World</p></body></html>";
+    return {
+        ok: reply.ok ?? true,
+        status: reply.status ?? 200,
+        url: reply.url ?? requestUrl,
+        headers: new Headers({ "content-type": reply.contentType ?? "text/html" }),
+        text: async () => body,
+    };
+}
+
+// The tool constructs Impit directly, so the module is replaced wholesale.
+mock.module("impit", () => ({
+    Impit: class MockImpit {
+        constructor(options: Record<string, unknown>) {
+            constructorOptions = options;
+        }
+        fetch(url: string, init?: { method?: string; body?: string }) {
+            const call: ImpitCall = { url, method: init?.method ?? "GET", body: init?.body };
+            calls.push(call);
+            return Promise.resolve(toResponse(respond(call), url));
+        }
+    },
+}));
+
+/** Imports the tool fresh and invokes it against the given URLs. */
+async function invokeTool(urls: string[]) {
+    const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+    return createGetWebsiteTool(testLogger).invoke({ urls });
+}
+
+const contentsOf = (entry: unknown) => (entry as { pageContents: string }).pageContents;
+
+beforeEach(() => {
+    calls = [];
+    constructorOptions = undefined;
+    respond = () => ({});
+});
+
 describe("createGetWebsiteTool", () => {
-    // `spyFetchTooling` reports only the fetches the tool itself makes, excluding
-    // any LangSmith tracing `/info` probe that LangChain may fire through the
-    // global fetch — keeping call-count assertions stable regardless of whether
-    // tracing is enabled in the environment.
-    let fetchMock: ReturnType<typeof spyFetchTooling>;
-
-    beforeEach(() => {
-        fetchMock = spyFetchTooling(() => makeMockResponse());
-    });
-
-    afterEach(() => {
-        fetchMock.restore();
-    });
-
     test("fetches a URL and converts HTML to markdown", async () => {
-        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
-        const tool = createGetWebsiteTool(testLogger);
+        const result = await invokeTool(["https://example.com"]);
 
-        const result = await tool.invoke({ urls: ["https://example.com"] });
-
-        expect(fetchMock.toolCalls()).toBe(1);
+        expect(calls).toHaveLength(1);
         expect(result).toHaveLength(1);
         expect(result[0]).toMatchObject({ url: "https://example.com" });
-        expect((result[0] as { pageContents: string }).pageContents).toContain("Hello");
-        expect((result[0] as { pageContents: string }).pageContents).toContain("World");
+        expect(contentsOf(result[0])).toContain("Hello");
+        expect(contentsOf(result[0])).toContain("World");
     });
 
-    test("sends browser-like headers", async () => {
-        let capturedInit: RequestInit | undefined;
-        fetchMock.restore();
-        fetchMock = spyFetchTooling((_url, init) => {
-            capturedInit = init;
-            return makeMockResponse();
-        });
+    test("requests through Impit's Firefox preset, following redirects", async () => {
+        await invokeTool(["https://example.com"]);
 
-        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
-        const tool = createGetWebsiteTool(testLogger);
-
-        await tool.invoke({ urls: ["https://example.com"] });
-
-        const callHeaders = capturedInit?.headers as Record<string, string> | undefined;
-        expect(callHeaders?.["user-agent"]).toContain("Chrome");
+        expect(constructorOptions).toMatchObject({ browser: "firefox", followRedirects: true });
+        // Impit's preset supplies the fingerprint headers; only content negotiation is overridden
+        expect(constructorOptions?.headers).toEqual({ "accept-language": "en-US,en;q=0.9" });
     });
 
     test("deduplicates URLs before fetching", async () => {
-        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
-        const tool = createGetWebsiteTool(testLogger);
+        const result = await invokeTool(["https://example.com", "https://example.com"]);
 
-        const result = await tool.invoke({ urls: ["https://example.com", "https://example.com"] });
-
-        expect(fetchMock.toolCalls()).toBe(1);
+        expect(calls).toHaveLength(1);
         expect(result).toHaveLength(1);
     });
 
     test("handles multiple distinct URLs", async () => {
-        fetchMock.restore();
-        fetchMock = spyFetchTooling((url) =>
-            makeMockResponse({ body: `<html><body><p>Content from ${url}</p></body></html>` }),
-        );
+        respond = (call) => ({ body: `<html><body><p>Content from ${call.url}</p></body></html>` });
 
-        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
-        const tool = createGetWebsiteTool(testLogger);
+        const result = await invokeTool(["https://example.com", "https://other.com"]);
 
-        const result = await tool.invoke({ urls: ["https://example.com", "https://other.com"] });
-
-        expect(fetchMock.toolCalls()).toBe(2);
+        expect(calls).toHaveLength(2);
         expect(result).toHaveLength(2);
-        expect(result[0]).toMatchObject({ url: "https://example.com" });
-        expect(result[1]).toMatchObject({ url: "https://other.com" });
+        expect(contentsOf(result[0])).toContain("https://example.com");
+        expect(contentsOf(result[1])).toContain("https://other.com");
     });
 
     test("returns error entry when a URL returns HTTP error", async () => {
-        fetchMock.restore();
-        fetchMock = spyFetchTooling(() => makeMockResponse({ ok: false, status: 404, body: "Not Found" }));
+        respond = () => ({ ok: false, status: 404, body: "Not Found" });
 
-        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
-        const tool = createGetWebsiteTool(testLogger);
+        const result = await invokeTool(["https://bad.example.com"]);
 
-        const result = await tool.invoke({ urls: ["https://bad.example.com"] });
-
-        expect(result).toHaveLength(1);
         expect(result[0]).toMatchObject({
             url: "https://bad.example.com",
             error: expect.stringContaining("https://bad.example.com"),
@@ -93,15 +101,10 @@ describe("createGetWebsiteTool", () => {
     });
 
     test("rejects non-text content types with an error entry", async () => {
-        fetchMock.restore();
-        fetchMock = spyFetchTooling(() => makeMockResponse({ contentType: "image/png" }));
+        respond = () => ({ contentType: "image/png" });
 
-        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
-        const tool = createGetWebsiteTool(testLogger);
+        const result = await invokeTool(["https://example.com/image.png"]);
 
-        const result = await tool.invoke({ urls: ["https://example.com/image.png"] });
-
-        expect(result).toHaveLength(1);
         expect(result[0]).toMatchObject({
             url: "https://example.com/image.png",
             error: expect.stringContaining("https://example.com/image.png"),
@@ -110,64 +113,108 @@ describe("createGetWebsiteTool", () => {
 
     test("returns plain text as-is for non-HTML text content types", async () => {
         const plainText = "line one\nline two\nline three";
-        fetchMock.restore();
-        fetchMock = spyFetchTooling(() => makeMockResponse({ contentType: "text/plain", body: plainText }));
+        respond = () => ({ contentType: "text/plain", body: plainText });
 
-        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
-        const tool = createGetWebsiteTool(testLogger);
+        const result = await invokeTool(["https://example.com/data.txt"]);
 
-        const result = await tool.invoke({ urls: ["https://example.com/data.txt"] });
-
-        expect((result[0] as { pageContents: string }).pageContents).toContain(plainText);
+        expect(contentsOf(result[0])).toContain(plainText);
     });
 
     test("accepts XHTML and converts it to markdown", async () => {
-        fetchMock.restore();
-        fetchMock = spyFetchTooling(() =>
-            makeMockResponse({
-                contentType: "application/xhtml+xml",
-                body: "<html><body><h1>Title</h1><p>Paragraph</p></body></html>",
-            }),
-        );
+        respond = () => ({
+            contentType: "application/xhtml+xml",
+            body: "<html><body><h1>Title</h1><p>Paragraph</p></body></html>",
+        });
 
-        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
-        const result = await createGetWebsiteTool(testLogger).invoke({ urls: ["https://example.com/doc.xhtml"] });
+        const result = await invokeTool(["https://example.com/doc.xhtml"]);
 
-        const contents = (result[0] as { pageContents: string }).pageContents;
-        expect(contents).toContain("# Title");
-        expect(contents).toContain("Paragraph");
+        expect(contentsOf(result[0])).toContain("# Title");
+        expect(contentsOf(result[0])).toContain("Paragraph");
     });
 
     test("accepts textual application/* types and returns them verbatim", async () => {
         const payload = '{"key":"value"}';
         for (const contentType of ["application/json", "application/ld+json", "application/rss+xml"]) {
-            fetchMock.restore();
-            fetchMock = spyFetchTooling(() => makeMockResponse({ contentType, body: payload }));
+            respond = () => ({ contentType, body: payload });
 
-            const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
-            const result = await createGetWebsiteTool(testLogger).invoke({ urls: ["https://example.com/api"] });
+            const result = await invokeTool(["https://example.com/api"]);
 
-            expect((result[0] as { pageContents: string }).pageContents).toBe(payload);
+            expect(contentsOf(result[0])).toBe(payload);
         }
     });
 
     test("co-locates error and success entries when one URL fails", async () => {
-        fetchMock.restore();
-        let callCount = 0;
-        fetchMock = spyFetchTooling(() => {
-            callCount++;
-            if (callCount === 1) return makeMockResponse({ ok: false, status: 500, body: "Error" });
-            return makeMockResponse({ body: "<html><body><p>Good content</p></body></html>" });
-        });
+        respond = (call) =>
+            call.url === "https://bad.com"
+                ? { ok: false, status: 500, body: "Error" }
+                : { body: "<html><body><p>Good content</p></body></html>" };
 
-        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
-        const tool = createGetWebsiteTool(testLogger);
-
-        const result = await tool.invoke({ urls: ["https://bad.com", "https://good.com"] });
+        const result = await invokeTool(["https://bad.com", "https://good.com"]);
 
         expect(result).toHaveLength(2);
         expect(result[0]).toMatchObject({ url: "https://bad.com", error: expect.any(String) });
-        expect((result[1] as { pageContents: string }).pageContents).toContain("Good content");
+        expect(contentsOf(result[1])).toContain("Good content");
+    });
+});
+
+describe("consent interstitials", () => {
+    const CONSENT_PAGE =
+        "<html><body><h1>Your privacy choices</h1>" +
+        '<form class="consent-form" method="post">' +
+        '<input type="hidden" name="csrfToken" value="tok123">' +
+        '<input type="hidden" name="sessionId" value="sess456">' +
+        '<input type="hidden" name="originalDoneUrl" value="https://news.example.com/story?a&#x3D;1">' +
+        '<button type="submit" name="agree">Accept all</button>' +
+        "</form></body></html>";
+
+    test("accepts the consent form and returns the real article", async () => {
+        // Consent gates answer 200 with the wall, so only the body distinguishes them
+        respond = (call) =>
+            call.method === "POST"
+                ? { body: "<html><body><p>The actual article body</p></body></html>" }
+                : { body: CONSENT_PAGE, url: "https://consent.example.com/collectConsent" };
+
+        const result = await invokeTool(["https://news.example.com/story"]);
+
+        expect(calls).toHaveLength(2);
+        expect(contentsOf(result[0])).toContain("The actual article body");
+        expect(contentsOf(result[0])).not.toContain("consent");
+    });
+
+    test("replays the form's hidden fields with an agree value", async () => {
+        respond = (call) =>
+            call.method === "POST"
+                ? { body: "<html><body><p>Article</p></body></html>" }
+                : { body: CONSENT_PAGE, url: "https://consent.example.com/collectConsent" };
+
+        await invokeTool(["https://news.example.com/story"]);
+
+        const post = calls.find((c) => c.method === "POST");
+        expect(post?.url).toBe("https://consent.example.com/collectConsent");
+        const fields = new URLSearchParams(post?.body ?? "");
+        expect(fields.get("csrfToken")).toBe("tok123");
+        expect(fields.get("sessionId")).toBe("sess456");
+        // Entity-encoded field values must be decoded before being replayed
+        expect(fields.get("originalDoneUrl")).toBe("https://news.example.com/story?a=1");
+        expect(fields.get("agree")).toBe("agree");
+    });
+
+    test("falls back to the original body when consent submission stays gated", async () => {
+        respond = () => ({ body: CONSENT_PAGE, url: "https://consent.example.com/collectConsent" });
+
+        const result = await invokeTool(["https://news.example.com/story"]);
+
+        // Better to hand back the wall than to fail outright — the LLM can report it
+        expect(contentsOf(result[0])).toContain("Your privacy choices");
+    });
+
+    test("leaves ordinary pages untouched", async () => {
+        respond = () => ({ body: "<html><body><p>No consent gate here</p></body></html>" });
+
+        const result = await invokeTool(["https://example.com"]);
+
+        expect(calls).toHaveLength(1);
+        expect(contentsOf(result[0])).toContain("No consent gate here");
     });
 });
 

@@ -1,4 +1,5 @@
 import { tool } from "@langchain/core/tools";
+import { Impit } from "impit";
 import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
 import { z } from "zod";
@@ -7,25 +8,20 @@ import type { Logger } from "../../../application/types/Logger.ts";
 import { ToolError } from "../../../domain/errors/AppError.ts";
 
 /**
- * Browser-like request headers to improve compatibility with sites that
- * block bots or return degraded responses to unrecognized user agents.
+ * Content-negotiation headers.
+ *
+ * Impit's browser preset already supplies a complete, self-consistent request
+ * signature (TLS/JA3 handshake, HTTP/2 settings, and the matching `user-agent`,
+ * `accept` and `sec-*` headers). Overriding those made no measurable difference
+ * to whether a site served content, so only headers that change *what* the
+ * server returns are set here.
  */
-const BROWSER_HEADERS: Record<string, string> = {
-    accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-    "accept-encoding": "gzip, deflate",
-    dnt: "1",
-    priority: "u=0, i",
-    "sec-ch-ua": '"Chromium";v="134", "Not:A-Brand";v="24", "Google Chrome";v="134"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Windows"',
-    "sec-fetch-dest": "document",
-    "sec-fetch-mode": "navigate",
-    "sec-fetch-site": "none",
-    "sec-fetch-user": "?1",
-    "upgrade-insecure-requests": "1",
-    "user-agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+const CONTENT_HEADERS: Record<string, string> = {
+    "accept-language": "en-US,en;q=0.9",
 };
+
+const REQUEST_TIMEOUT_MS = 10_000;
+const MAX_REDIRECTS = 20;
 
 /**
  * Elements that never carry article body text: scripts and styles, embedded
@@ -105,15 +101,114 @@ function isTextualMimeType(mimeType: string): boolean {
 }
 
 /**
+ * Minimal in-memory cookie jar matching Impit's `cookieJar` contract.
+ *
+ * Cookies are grouped by registrable domain (approximated as the last two
+ * labels of the host) so a redirect chain that hops between subdomains — as
+ * consent interstitials do, e.g. `www.yahoo.com` → `guce.yahoo.com` →
+ * `consent.yahoo.com` — carries its session forward.
+ *
+ * A jar is created per fetch, so cookies never leak between unrelated requests.
+ */
+function createCookieJar() {
+    const byDomain = new Map<string, Map<string, string>>();
+    const registrableDomain = (url: string) => new URL(url).hostname.split(".").slice(-2).join(".");
+
+    return {
+        setCookie(cookie: string, url: string): void {
+            // Only the leading `name=value` pair matters; attributes are ignored
+            const pair = cookie.split(";")[0];
+            const separator = pair?.indexOf("=") ?? -1;
+            if (!pair || separator < 1) return;
+            const domain = registrableDomain(url);
+            const cookies = byDomain.get(domain) ?? new Map<string, string>();
+            cookies.set(pair.slice(0, separator).trim(), pair.slice(separator + 1).trim());
+            byDomain.set(domain, cookies);
+        },
+        getCookieString(url: string): string {
+            const cookies = byDomain.get(registrableDomain(url));
+            if (!cookies) return "";
+            return [...cookies].map(([name, value]) => `${name}=${value}`).join("; ");
+        },
+    };
+}
+
+/** Marks a response as a GDPR consent interstitial rather than the requested page. */
+const CONSENT_FORM_PATTERN = /consent-form|collectConsent/i;
+
+/** Decodes the HTML entities that appear in serialized form field values. */
+function decodeHtmlEntities(value: string): string {
+    return (
+        value
+            .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+            .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(Number(dec)))
+            .replace(/&quot;/g, '"')
+            .replace(/&apos;/g, "'")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            // Must run last, so an encoded `&amp;lt;` does not become `<`
+            .replace(/&amp;/g, "&")
+    );
+}
+
+/**
+ * Accepts a GDPR consent interstitial by replaying its form.
+ *
+ * Consent gates answer with HTTP 200 and a cookie-policy page in place of the
+ * article, so they cannot be detected from the status code. Submitting the
+ * form's hidden fields (CSRF token, session id, original destination) together
+ * with an `agree` value sets the consent cookies and redirects to the real page.
+ *
+ * @returns The consented page's HTML, or `null` if the form could not be replayed.
+ */
+async function acceptConsentForm(impit: Impit, url: string, html: string): Promise<string | null> {
+    const form = new URLSearchParams();
+    for (const input of html.match(/<input[^>]*>/gi) ?? []) {
+        const name = input.match(/name=["']([^"']+)["']/i)?.[1];
+        const type = input.match(/type=["']([^"']+)["']/i)?.[1]?.toLowerCase();
+        const value = input.match(/value=["']([^"']*)["']/i)?.[1] ?? "";
+        if (name && type === "hidden") form.append(name, decodeHtmlEntities(value));
+    }
+
+    // No hidden fields means this is not a consent form we know how to replay
+    if ([...form].length === 0) return null;
+    form.append("agree", "agree");
+
+    const res = await impit.fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", referer: url },
+        body: form.toString(),
+    });
+    if (!res.ok) return null;
+
+    const consented = await res.text();
+    // Still gated — treat the attempt as failed rather than returning the wall
+    return CONSENT_FORM_PATTERN.test(consented) ? null : consented;
+}
+
+/**
  * Fetches a URL and returns its body as text, enforcing that the Content-Type
  * is textual (see {@link isTextualMimeType}). Binary responses (images,
  * archives, etc.) are rejected with a ToolError.
+ *
+ * Requests go through Impit's Firefox preset rather than the platform `fetch`.
+ * Many publishers reject requests by TLS/HTTP2 fingerprint regardless of how
+ * browser-like the headers are, which `fetch` cannot work around.
+ *
+ * GDPR consent interstitials encountered along the way are accepted
+ * automatically (see {@link acceptConsentForm}).
  */
 export async function fetchTextBody(url: string): Promise<{ body: string; contentType: string }> {
-    const res = await fetch(url, {
-        headers: BROWSER_HEADERS,
-        signal: AbortSignal.timeout(10_000),
+    const impit = new Impit({
+        browser: "firefox",
+        followRedirects: true,
+        maxRedirects: MAX_REDIRECTS,
+        timeout: REQUEST_TIMEOUT_MS,
+        cookieJar: createCookieJar(),
+        headers: CONTENT_HEADERS,
     });
+
+    const res = await impit.fetch(url);
 
     if (!res.ok) {
         throw new ToolError(`HTTP ${res.status}`);
@@ -126,6 +221,12 @@ export async function fetchTextBody(url: string): Promise<{ body: string; conten
     }
 
     const body = await res.text();
+
+    if (HTML_MIME_TYPES.has(mimeType) && CONSENT_FORM_PATTERN.test(body)) {
+        const consented = await acceptConsentForm(impit, res.url, body);
+        if (consented !== null) return { body: consented, contentType: mimeType };
+    }
+
     return { body, contentType: mimeType };
 }
 
