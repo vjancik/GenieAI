@@ -1,5 +1,6 @@
 import { tool } from "@langchain/core/tools";
 import TurndownService from "turndown";
+import { gfm } from "turndown-plugin-gfm";
 import { z } from "zod";
 import { parseMimeType } from "../../../application/helpers/parseMimeType.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
@@ -26,22 +27,87 @@ const BROWSER_HEADERS: Record<string, string> = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
 };
 
-const turndown = new TurndownService();
-turndown.remove("script");
-turndown.remove("style");
+/**
+ * Elements that never carry article body text: scripts and styles, embedded
+ * media containers, interactive controls, and site-level navigation.
+ *
+ * `header` and `aside` are deliberately NOT listed. Some publishers place the
+ * article standfirst and image captions inside `<header>`, so removing it
+ * silently drops body content.
+ */
+const NON_CONTENT_ELEMENTS: TurndownService.TagName[] = [
+    "script",
+    "style",
+    "noscript",
+    "iframe",
+    "form",
+    "template",
+    "canvas",
+    "object",
+    "embed",
+    "select",
+    "button",
+    "nav",
+    "footer",
+];
+
+const turndown = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced" });
+turndown.remove(NON_CONTENT_ELEMENTS);
+// `svg` lives in the SVG tag map rather than the HTML one Turndown's types accept,
+// so it is matched by node name instead of being listed above.
+turndown.remove((node) => node.nodeName.toLowerCase() === "svg");
+// Adds table support — without it, table cells collapse into an undelimited run
+// of text ("tobacco 52 million alcohol 17 million ...") that loses row/column structure.
+turndown.use(gfm);
 // Strip href/src from links and media to keep output concise — only preserve visible text
 turndown.addRule("linksWithoutHrefs", {
     filter: ["a", "img", "video", "audio"],
-    replacement: (_content, node) => {
-        const text = node.textContent?.trim();
+    // Uses Turndown's already-processed `content` rather than `node.textContent`:
+    // textContent reads raw descendant text, bypassing the removals above, which
+    // leaked inline SVG stylesheets (".cls-1{fill:none;}...") into link text.
+    replacement: (content) => {
+        const text = content.trim();
         return text ? `[${text}]()` : "";
     },
 });
 
+/** Media types converted to Markdown rather than returned verbatim. */
+const HTML_MIME_TYPES = new Set(["text/html", "application/xhtml+xml"]);
+
 /**
- * Fetches a URL and returns its body as text, enforcing that the
- * Content-Type is a text/* MIME type. Non-text responses (images,
- * binaries, etc.) are rejected with a ToolError.
+ * Textual media types outside the `text/*` tree. Structured-syntax suffixes
+ * (`+json`, `+xml`) are handled separately by {@link isTextualMimeType}, so
+ * only the bare types need listing here.
+ */
+const TEXTUAL_APPLICATION_MIME_TYPES = new Set([
+    "application/json",
+    "application/xml",
+    "application/javascript",
+    "application/ecmascript",
+    "application/yaml",
+    "application/x-yaml",
+    "application/csv",
+]);
+
+/**
+ * Whether a media type carries human-readable text.
+ *
+ * Covers the whole `text/*` tree plus the textual `application/*` types that
+ * real pages and APIs serve — `application/xhtml+xml` for XHTML documents,
+ * and structured-suffix types such as `application/ld+json` or
+ * `application/rss+xml` (RFC 6839), which are textual by definition.
+ */
+function isTextualMimeType(mimeType: string): boolean {
+    if (mimeType.startsWith("text/")) return true;
+    if (TEXTUAL_APPLICATION_MIME_TYPES.has(mimeType)) return true;
+    if (HTML_MIME_TYPES.has(mimeType)) return true;
+    return /^application\/[\w.-]+\+(?:json|xml)$/.test(mimeType);
+}
+
+/**
+ * Fetches a URL and returns its body as text, enforcing that the Content-Type
+ * is textual (see {@link isTextualMimeType}). Binary responses (images,
+ * archives, etc.) are rejected with a ToolError.
  */
 export async function fetchTextBody(url: string): Promise<{ body: string; contentType: string }> {
     const res = await fetch(url, {
@@ -55,8 +121,8 @@ export async function fetchTextBody(url: string): Promise<{ body: string; conten
 
     const mimeType = parseMimeType(res.headers.get("content-type")) ?? "";
 
-    if (!mimeType.startsWith("text/")) {
-        throw new ToolError(`Unsupported content type "${mimeType}" — only text/* responses are supported`);
+    if (!isTextualMimeType(mimeType)) {
+        throw new ToolError(`Unsupported content type "${mimeType}" — only textual responses are supported`);
     }
 
     const body = await res.text();
@@ -65,11 +131,11 @@ export async function fetchTextBody(url: string): Promise<{ body: string; conten
 
 /**
  * Converts a fetched page body to a readable string for the LLM:
- * - text/html → converted to Markdown via Turndown
- * - other text/* → returned as-is (plain text, JSON, CSV, etc.)
+ * - HTML/XHTML → converted to Markdown via Turndown
+ * - other textual types → returned as-is (plain text, JSON, XML, CSV, etc.)
  */
 export function bodyToContent(body: string, contentType: string): string {
-    if (contentType === "text/html") {
+    if (HTML_MIME_TYPES.has(contentType)) {
         return turndown.turndown(body);
     }
     return body;

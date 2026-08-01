@@ -121,6 +121,36 @@ describe("createGetWebsiteTool", () => {
         expect((result[0] as { pageContents: string }).pageContents).toContain(plainText);
     });
 
+    test("accepts XHTML and converts it to markdown", async () => {
+        fetchMock.restore();
+        fetchMock = spyFetchTooling(() =>
+            makeMockResponse({
+                contentType: "application/xhtml+xml",
+                body: "<html><body><h1>Title</h1><p>Paragraph</p></body></html>",
+            }),
+        );
+
+        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+        const result = await createGetWebsiteTool(testLogger).invoke({ urls: ["https://example.com/doc.xhtml"] });
+
+        const contents = (result[0] as { pageContents: string }).pageContents;
+        expect(contents).toContain("# Title");
+        expect(contents).toContain("Paragraph");
+    });
+
+    test("accepts textual application/* types and returns them verbatim", async () => {
+        const payload = '{"key":"value"}';
+        for (const contentType of ["application/json", "application/ld+json", "application/rss+xml"]) {
+            fetchMock.restore();
+            fetchMock = spyFetchTooling(() => makeMockResponse({ contentType, body: payload }));
+
+            const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+            const result = await createGetWebsiteTool(testLogger).invoke({ urls: ["https://example.com/api"] });
+
+            expect((result[0] as { pageContents: string }).pageContents).toBe(payload);
+        }
+    });
+
     test("co-locates error and success entries when one URL fails", async () => {
         fetchMock.restore();
         let callCount = 0;
@@ -138,5 +168,75 @@ describe("createGetWebsiteTool", () => {
         expect(result).toHaveLength(2);
         expect(result[0]).toMatchObject({ url: "https://bad.com", error: expect.any(String) });
         expect((result[1] as { pageContents: string }).pageContents).toContain("Good content");
+    });
+});
+
+describe("bodyToContent", () => {
+    const html = (body: string) => `<html><body>${body}</body></html>`;
+
+    test("does not leak inline SVG stylesheets into link text", async () => {
+        const { bodyToContent } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+
+        // A logo link wrapping an inline SVG — `node.textContent` would splice the
+        // stylesheet into the link label, bypassing element removal.
+        const md = bodyToContent(
+            html('<a href="/"><svg><style>.cls-1{fill:none;}</style><path d="M0 0"/></svg>Acme</a>'),
+            "text/html",
+        );
+
+        expect(md).not.toContain("cls-1");
+        expect(md).not.toContain("fill:none");
+        expect(md).toContain("Acme");
+    });
+
+    test("strips navigation and footer chrome", async () => {
+        const { bodyToContent } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+
+        const md = bodyToContent(
+            html('<nav><a href="/">Nav link</a></nav><p>Real body</p><footer>Footer chrome</footer>'),
+            "text/html",
+        );
+
+        expect(md).toContain("Real body");
+        expect(md).not.toContain("Nav link");
+        expect(md).not.toContain("Footer chrome");
+    });
+
+    test("preserves body content inside <header>", async () => {
+        const { bodyToContent } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+
+        // Regression guard: publishers place article standfirsts and captions in
+        // <header>, so it must not be stripped alongside nav/footer.
+        const md = bodyToContent(
+            html("<article><header><p>Standfirst carrying real body text</p></header><p>Body</p></article>"),
+            "text/html",
+        );
+
+        expect(md).toContain("Standfirst carrying real body text");
+        expect(md).toContain("Body");
+    });
+
+    test("converts tables to markdown pipe tables", async () => {
+        const { bodyToContent } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+
+        const md = bodyToContent(
+            html(
+                "<table><thead><tr><th>Substance</th><th>Count</th></tr></thead>" +
+                    "<tbody><tr><td>tobacco</td><td>52 million</td></tr></tbody></table>",
+            ),
+            "text/html",
+        );
+
+        // Without table support these cells collapse into an undelimited run of text
+        expect(md).toContain("| Substance | Count |");
+        expect(md).toContain("| tobacco | 52 million |");
+    });
+
+    test("returns non-HTML textual bodies unchanged", async () => {
+        const { bodyToContent } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+
+        const payload = '{"a":1}';
+        expect(bodyToContent(payload, "application/json")).toBe(payload);
+        expect(bodyToContent("a,b\n1,2", "text/csv")).toBe("a,b\n1,2");
     });
 });
