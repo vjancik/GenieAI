@@ -60,35 +60,35 @@ agent:
 
   nodes:
     triage:
-      model: "gemini-3.1-flash-lite-preview"  # <required>
+      model: "gemini-3.5-flash-lite"          # <required>
       apiKeyType: "free"                      # <required>
-      fallbackModel: "gemini-2.5-flash"       # <optional>
-      # Maximum milliseconds to wait for a triage model first chunk before aborting.
-      timeoutMs: 60000                        # <required>
-      thinkingLevel: "LOW"                    # <optional>
+      fallbackModel: "gemini-3.1-flash-lite"  # <optional>
+      # Maximum milliseconds to wait for a triage model response before aborting.
+      timeoutMs: 30000                        # <required>
+      thinkingLevel: "high"                   # <optional>
 
     general:
-      model: "gemini-3-flash-preview"   # <required>
+      model: "gemini-3.6-flash"         # <required>
       apiKeyType: "free"                # <required>
-      fallbackModel: "gemini-2.5-flash" # <optional>
-      # Maximum milliseconds to wait for a general model first chunk before aborting.
+      fallbackModel: "gemini-3.5-flash" # <optional>
+      # Maximum milliseconds to wait for a general model response before aborting.
       timeoutMs: 120000                 # <required>
 
     computation:
-      model: "gemini-3-flash-preview"   # <required>
+      model: "gemini-3.6-flash"         # <required>
       apiKeyType: "free"                # <required>
-      fallbackModel: "gemini-2.5-flash" # <optional>
-      # Maximum milliseconds to wait for a computation model first chunk before aborting.
-      timeoutMs: 120000                 # <required>
+      fallbackModel: "gemini-3.5-flash" # <optional>
+      # Maximum milliseconds to wait for a general model response before aborting.
+      timeoutMs: 120000      
 
     search:
-      model: "gemini-3-flash-preview"   # <required>
-      apiKeyType: "paid"                # <required>
-      fallbackModel: "gemini-2.5-flash" # <optional>
-      # Maximum milliseconds to wait for a search model first chunk before aborting.
+      model: "gemini-3.6-flash"         # <required>
+      apiKeyType: "free"                # <required>
+      fallbackModel: "gemini-3.5-flash" # <optional>
+      # Maximum milliseconds to wait for a search model response before aborting.
       timeoutMs: 120000                 # <required>
       # Search backend to use. Options: "google" | "tavily"   <optional, default: "google">
       #   google: Google Search grounding via Gemini API. Requires GOOGLE_PAID_API_KEY.
       #           Free only for gemini-2.5 models — gemini-3+ requires a paid plan.
       #   tavily: Tavily Search API. Requires TAVILY_API_KEY env var.
-      mode: "google"
+      mode: "tavily"
