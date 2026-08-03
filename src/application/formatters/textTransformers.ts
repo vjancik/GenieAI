@@ -25,9 +25,62 @@ const MULTI_BLANK_LINE_RE = /(\r?\n)([ \t]*\r?\n)+/g;
  * Regex that matches bare http/https URLs not already wrapped in `<…>`.
  *
  * Negative look-behind `(?<!<)` ensures we don't double-wrap URLs that are
- * already suppressed.  The URL body stops at the first whitespace or `>`.
+ * already suppressed.  The URL body stops at the first whitespace or angle
+ * bracket; any trailing punctuation it over-captures is given back by
+ * {@link trimTrailingPunctuation}.
  */
-const BARE_URL_RE = /(?<!<)(https?:\/\/[^\s>]+)/g;
+const BARE_URL_RE = /(?<!<)https?:\/\/[^\s<>]+/g;
+
+/**
+ * Characters that are technically legal in a URL but, at the very end of one,
+ * are overwhelmingly sentence punctuation or Markdown syntax — e.g. the `)**`
+ * closing a bold masked link, or the `.` ending a sentence.
+ */
+const TRAILING_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", "'", '"', "`", "*", "_", "~", ")", "]", "}"]);
+
+/**
+ * Strips trailing punctuation that belongs to the surrounding prose or Markdown
+ * rather than to the URL itself.
+ *
+ * Closing parens are a special case: one is kept when it pairs with an opening
+ * paren inside the URL (e.g. Wikipedia's `/wiki/Nginx_(web_server)`), and only
+ * unbalanced ones — such as the `)` closing a `[label](url)` link — are dropped.
+ *
+ * @param url - Raw URL match, possibly with punctuation glued to its end
+ * @returns The URL with the trailing punctuation run removed
+ */
+function trimTrailingPunctuation(url: string): string {
+    let openParens = 0;
+    let closeParens = 0;
+    for (const char of url) {
+        if (char === "(") openParens++;
+        else if (char === ")") closeParens++;
+    }
+
+    let end = url.length;
+    while (end > 0) {
+        const char = url[end - 1];
+        if (char === undefined || !TRAILING_PUNCTUATION.has(char)) break;
+        if (char === ")") {
+            // A balanced closing paren is part of the URL — stop here.
+            if (closeParens <= openParens) break;
+            closeParens--;
+        }
+        end--;
+    }
+
+    return url.slice(0, end);
+}
+
+/**
+ * Replacer for {@link BARE_URL_RE} that wraps the URL in `<…>` to suppress
+ * Discord's link embed, re-emitting any over-captured trailing punctuation
+ * outside the closing bracket.
+ */
+function suppressUrlEmbed(match: string): string {
+    const url = trimTrailingPunctuation(match);
+    return `<${url}>${match.slice(url.length)}`;
+}
 
 /**
  * Regex that matches a Markdown horizontal rule on its own line.
@@ -77,7 +130,7 @@ export function llmTextToDiscordText(text: string): string {
         .replace(DEEP_HEADING_RE, "$1###")
         .replace(HORIZONTAL_RULE_RE, "")
         .replace(MULTI_BLANK_LINE_RE, "\n")
-        .replace(BARE_URL_RE, "<$1>")
+        .replace(BARE_URL_RE, suppressUrlEmbed)
         .trim();
 }
 

@@ -459,6 +459,82 @@ describe("llmTextToDiscordText", () => {
         });
     });
 
+    describe("URL suppression around punctuation", () => {
+        it("keeps the closing bracket inside a masked link", () => {
+            expect(llmTextToDiscordText("[Widget Docs](https://widgetdocs.example)")).toBe(
+                "[Widget Docs](<https://widgetdocs.example>)",
+            );
+        });
+
+        it("keeps the closing bracket inside a bold masked link", () => {
+            expect(llmTextToDiscordText("**[Widget Docs](https://widgetdocs.example)**")).toBe(
+                "**[Widget Docs](<https://widgetdocs.example>)**",
+            );
+        });
+
+        it("handles a numbered list of bold masked links", () => {
+            const input = [
+                "1. **[Pixel Painter](https://pixelpainter.example)** (0:12)",
+                "2. **[Query Quest](https://queryquest.example/play)** (1:30)",
+            ].join("\n");
+            const expected = [
+                "1. **[Pixel Painter](<https://pixelpainter.example>)** (0:12)",
+                "2. **[Query Quest](<https://queryquest.example/play>)** (1:30)",
+            ].join("\n");
+            expect(llmTextToDiscordText(input)).toBe(expected);
+        });
+
+        it("keeps a trailing sentence period outside the brackets", () => {
+            expect(llmTextToDiscordText("Read more at https://widgetdocs.example.")).toBe(
+                "Read more at <https://widgetdocs.example>.",
+            );
+        });
+
+        it("keeps trailing commas and other sentence punctuation outside the brackets", () => {
+            expect(llmTextToDiscordText("Try https://widgetdocs.example, then https://queryquest.example!")).toBe(
+                "Try <https://widgetdocs.example>, then <https://queryquest.example>!",
+            );
+        });
+
+        it("keeps bold markers around a bare URL outside the brackets", () => {
+            expect(llmTextToDiscordText("**https://widgetdocs.example**")).toBe("**<https://widgetdocs.example>**");
+        });
+
+        it("keeps a URL in parentheses intact", () => {
+            expect(llmTextToDiscordText("(see https://widgetdocs.example)")).toBe("(see <https://widgetdocs.example>)");
+        });
+
+        it("preserves a balanced parenthesized path segment", () => {
+            expect(llmTextToDiscordText("https://widgetdocs.example/wiki/Widget_(tool)")).toBe(
+                "<https://widgetdocs.example/wiki/Widget_(tool)>",
+            );
+        });
+
+        it("preserves a balanced path segment inside a masked link", () => {
+            expect(llmTextToDiscordText("[Widget](https://widgetdocs.example/wiki/Widget_(tool))")).toBe(
+                "[Widget](<https://widgetdocs.example/wiki/Widget_(tool)>)",
+            );
+        });
+
+        it("preserves query strings and fragments", () => {
+            expect(llmTextToDiscordText("[Search](https://widgetdocs.example/s?q=a&p=2#top)")).toBe(
+                "[Search](<https://widgetdocs.example/s?q=a&p=2#top>)",
+            );
+        });
+
+        it("preserves a trailing slash", () => {
+            expect(llmTextToDiscordText("Go to https://widgetdocs.example/docs/")).toBe(
+                "Go to <https://widgetdocs.example/docs/>",
+            );
+        });
+
+        it("does not double-wrap an already-suppressed masked link", () => {
+            expect(llmTextToDiscordText("[Widget Docs](<https://widgetdocs.example>)")).toBe(
+                "[Widget Docs](<https://widgetdocs.example>)",
+            );
+        });
+    });
+
     describe("combined transformations", () => {
         it("removes rule then collapses blank lines left behind", () => {
             // After removing ---, we get "A\n\nB" which then collapses
