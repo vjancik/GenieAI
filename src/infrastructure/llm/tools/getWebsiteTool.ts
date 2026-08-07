@@ -207,11 +207,17 @@ async function acceptConsentForm(impit: Impit, url: string, html: string): Promi
  */
 const IMPIT_PROFILES = ["firefox", "chrome"] as const;
 
+/**
+ * Result of one fetch attempt.
+ *
+ * An error status is reported rather than thrown so the body travels with it —
+ * bot walls answer with a 4xx whose body is a challenge page, which the caller
+ * needs in order to distinguish a block from an ordinary HTTP failure.
+ */
+type FetchOutcome = { body: string; contentType: string; status: number; ok: boolean };
+
 /** Performs one fetch attempt with a specific browser fingerprint. */
-async function fetchWithProfile(
-    url: string,
-    browser: (typeof IMPIT_PROFILES)[number],
-): Promise<{ body: string; contentType: string }> {
+async function fetchWithProfile(url: string, browser: (typeof IMPIT_PROFILES)[number]): Promise<FetchOutcome> {
     const impit = new Impit({
         browser,
         followRedirects: true,
@@ -222,12 +228,15 @@ async function fetchWithProfile(
     });
 
     const res = await impit.fetch(url);
+    const mimeType = parseMimeType(res.headers.get("content-type")) ?? "";
 
     if (!res.ok) {
-        throw new ToolError(`HTTP ${res.status}`);
+        // Bot protections answer with a 4xx *and* a challenge page. Keeping the body
+        // lets the caller recognize a wall rather than reporting a bare status code,
+        // and decide whether a browser render is worth attempting.
+        const body = HTML_MIME_TYPES.has(mimeType) ? await res.text() : "";
+        return { body, contentType: mimeType, status: res.status, ok: false };
     }
-
-    const mimeType = parseMimeType(res.headers.get("content-type")) ?? "";
 
     if (!isTextualMimeType(mimeType)) {
         throw new ToolError(`Unsupported content type "${mimeType}" — only textual responses are supported`);
@@ -237,10 +246,10 @@ async function fetchWithProfile(
 
     if (HTML_MIME_TYPES.has(mimeType) && CONSENT_FORM_PATTERN.test(body)) {
         const consented = await acceptConsentForm(impit, res.url, body);
-        if (consented !== null) return { body: consented, contentType: mimeType };
+        if (consented !== null) return { body: consented, contentType: mimeType, status: res.status, ok: true };
     }
 
-    return { body, contentType: mimeType };
+    return { body, contentType: mimeType, status: res.status, ok: true };
 }
 
 /**
@@ -260,7 +269,7 @@ async function fetchWithProfile(
  * GDPR consent interstitials encountered along the way are accepted
  * automatically (see {@link acceptConsentForm}).
  */
-export async function fetchTextBody(url: string): Promise<{ body: string; contentType: string }> {
+export async function fetchTextBody(url: string): Promise<FetchOutcome> {
     let lastTransportError: unknown;
 
     for (const profile of IMPIT_PROFILES) {
@@ -319,6 +328,41 @@ export type WebsiteError = { url: string; error: string; reason: WebFetchFailure
 export type WebsiteResultEntry = WebsiteResult | WebsiteError;
 
 /**
+ * Handles a response that arrived with an error status.
+ *
+ * Bot protections commonly answer 401/403 with a JavaScript challenge page, so
+ * the body decides what happened rather than the status code alone: a challenge
+ * is worth a browser render and is reported as a block, while an ordinary error
+ * page is reported as the HTTP failure it is.
+ */
+async function handleErrorResponse(
+    url: string,
+    body: string,
+    status: number,
+    logger: Logger,
+    browserFetcher?: BrowserPageFetcher,
+): Promise<string> {
+    const analysis = body.length > 0 ? analyzePage(body) : null;
+
+    if (analysis?.shouldRenderWithBrowser && browserFetcher !== undefined) {
+        logger.debug({ url, status, problem: analysis.problem }, "Escalating error response to browser render");
+        const rendered = await browserFetcher.fetchRenderedHtml(url).catch((err: unknown) => {
+            logger.warn({ url, err }, "Browser render of error response failed");
+            return null;
+        });
+        if (rendered !== null) {
+            const renderedAnalysis = analyzePage(rendered);
+            if (renderedAnalysis.hasContent) return bodyToContent(rendered, "text/html");
+        }
+    }
+
+    if (analysis?.problem === "blocked") {
+        throw new WebFetchError("blocked", `${url}: ${describeProblem("blocked")} — HTTP ${status}`);
+    }
+    throw new WebFetchError("http-error", `${url}: the server responded with HTTP ${status}`);
+}
+
+/**
  * Retrieves a URL, escalating to a real browser when the plain fetch produced a
  * page whose content only exists after JavaScript runs.
  *
@@ -327,7 +371,11 @@ export type WebsiteResultEntry = WebsiteResult | WebsiteError;
  * complete page is indistinguishable from an unrendered shell.
  */
 async function retrievePage(url: string, logger: Logger, browserFetcher?: BrowserPageFetcher): Promise<string> {
-    const { body, contentType } = await fetchTextBody(url);
+    const { body, contentType, status, ok } = await fetchTextBody(url);
+
+    if (!ok) {
+        return handleErrorResponse(url, body, status, logger, browserFetcher);
+    }
 
     // Only HTML is worth analyzing — JSON, CSV and plain text are returned as fetched
     if (!HTML_MIME_TYPES.has(contentType)) {

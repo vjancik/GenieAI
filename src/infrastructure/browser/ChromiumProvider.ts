@@ -13,9 +13,14 @@ import type { Logger } from "../../application/types/Logger.ts";
  * `--disable-background-networking` is kept: it does not affect page resource
  * loading, but it stops Chromium's own telemetry and component updates from
  * being routed through (and billed against) a per-context proxy.
+ *
+ * `--disable-gpu` is deliberately absent. It does not merely fall back to
+ * software rendering — it removes the WebGL context entirely, so
+ * `canvas.getContext("webgl")` returns null, which practically no real browser
+ * does. Without it, Chromium renders through SwiftShader instead. Image
+ * rendering is unaffected either way (byte-identical screenshots, same timing).
  */
 const CHROMIUM_ARGS = [
-    "--disable-gpu",
     "--disable-dev-shm-usage",
     "--no-sandbox",
     "--disable-setuid-sandbox",

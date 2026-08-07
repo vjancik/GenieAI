@@ -170,6 +170,13 @@ export function analyzePage(html: string): PageAnalysis {
         };
     }
 
+    // A response carrying no text at all is never a legitimate short page — it is a
+    // shell awaiting client-side rendering, or a wall whose signature we don't know.
+    // Worth one render attempt regardless of the other signals.
+    if (contentChars === 0) {
+        return { articleText, visibleText, contentChars, hasContent, problem: "empty", shouldRenderWithBrowser: true };
+    }
+
     // Thin, script-light and unremarkable: a genuinely short page. Rendering it
     // would cost seconds and return the same content.
     return { articleText, visibleText, contentChars, hasContent, problem: "empty", shouldRenderWithBrowser: false };
