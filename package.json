@@ -55,7 +55,7 @@
         "@google/genai": "^1.50.1",
         "@langchain/core": "^1.1.39",
         "@langchain/google": "^0.1.10",
-        "@langchain/langgraph": "^1.2.9",
+        "@langchain/langgraph": "^1.4.8",
         "@langchain/tavily": "^1.2.0",
         "@mozilla/readability": "^0.6.0",
         "@sentry/bun": "^10.49.0",
