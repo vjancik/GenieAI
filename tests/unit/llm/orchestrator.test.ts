@@ -3,6 +3,10 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, ChatMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import pino from "pino";
 import { dbMessagesToLangchain } from "../../../src/application/helpers/langchainMessageTransformers.ts";
+import type {
+    IResilientModelInvoker,
+    ModelInvocationResult,
+} from "../../../src/application/ports/IResilientModelInvoker.ts";
 import type { AgentStatusUpdate } from "../../../src/application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
 import type { PersistedChatMessage } from "../../../src/domain/entities/Message.ts";
@@ -41,13 +45,24 @@ const testConfig = {
                     thinkingLevel: "LOW" as const,
                     apiKeyType: "free" as const,
                 },
-                general: { model: "gemini-test", timeoutMs: 120_000, apiKeyType: "free" as const },
-                computation: { model: "gemini-test", timeoutMs: 120_000, apiKeyType: "free" as const },
+                general: {
+                    model: "gemini-test",
+                    timeoutMs: 120_000,
+                    apiKeyType: "free" as const,
+                    isFallbackRetryable: true,
+                },
+                computation: {
+                    model: "gemini-test",
+                    timeoutMs: 120_000,
+                    apiKeyType: "free" as const,
+                    isFallbackRetryable: true,
+                },
                 search: {
                     model: "gemini-test",
                     timeoutMs: 120_000,
                     mode: "google" as const,
                     apiKeyType: "paid" as const,
+                    isFallbackRetryable: true,
                 },
             },
         },
@@ -813,6 +828,132 @@ describe("Orchestrator.process — finishReason", () => {
 
         expect(result.finishReason).toBeNull();
         expect(result.isRetryable).toBe(false);
+    });
+});
+
+describe("Orchestrator.process — fallback retryability", () => {
+    type AnsweringNode = "general" | "computation" | "search";
+
+    /** testConfig with `isFallbackRetryable` set per answering node; unspecified nodes default to true. */
+    function configWithFallbackRetryable(overrides: Partial<Record<AnsweringNode, boolean>>) {
+        const { nodes } = testConfig.file.agent;
+        return {
+            file: {
+                ...testConfig.file,
+                agent: {
+                    ...testConfig.file.agent,
+                    nodes: {
+                        ...nodes,
+                        general: { ...nodes.general, isFallbackRetryable: overrides.general ?? true },
+                        computation: { ...nodes.computation, isFallbackRetryable: overrides.computation ?? true },
+                        search: { ...nodes.search, isFallbackRetryable: overrides.search ?? true },
+                    },
+                },
+            },
+        };
+    }
+
+    /**
+     * Invoker stub that simulates fallback use without a real 503: triage calls get the given
+     * routing sentinel, and every answering node call gets the given degradation flags.
+     */
+    function makeStubInvoker(
+        answer: Pick<ModelInvocationResult, "usedFallback" | "wasInterrupted">,
+        route = "route_to_general",
+    ): IResilientModelInvoker {
+        const invoke = mock(async (...args: Parameters<IResilientModelInvoker["invoke"]>) => {
+            const beforeInvokeStatus = args[6];
+            if (beforeInvokeStatus === AgentStatusType.TRIAGE) {
+                const triageResponse = new AIMessage({
+                    content: "",
+                    tool_calls: [{ name: route, args: {}, id: "call_route", type: "tool_call" as const }],
+                });
+                return { result: triageResponse, usedFallback: false, wasInterrupted: false, finishReason: null };
+            }
+            return {
+                result: new AIMessage("answer"),
+                ...answer,
+                // An interruption is precisely the absence of a reported reason
+                finishReason: answer.wasInterrupted ? null : FinishReason.STOP,
+            };
+        });
+        return { invoke, invokeWithFreeKeys: invoke, invokeWithPaidKey: invoke } as unknown as IResilientModelInvoker;
+    }
+
+    function makeOrchestratorWith(
+        invoker: IResilientModelInvoker,
+        config: ReturnType<typeof configWithFallbackRetryable>,
+    ) {
+        return new AgentOrchestrator(
+            asProvider(makeModel("triage")) as never,
+            asProvider(makeModel("general")) as never,
+            asProvider(makeModel("computation")) as never,
+            asProvider(makeModel("search")) as never,
+            invoker,
+            makeTool("content") as never,
+            makeTool("transcript") as never,
+            testLogger,
+            config,
+        );
+    }
+
+    test("marks a fallback response retryable when the node allows it", async () => {
+        const orchestrator = makeOrchestratorWith(
+            makeStubInvoker({ usedFallback: true, wasInterrupted: false }),
+            configWithFallbackRetryable({ general: true }),
+        );
+
+        const result = await orchestrator.process([new HumanMessage("Hello")], MessageIntent.GENERAL);
+
+        expect(result.isRetryable).toBe(true);
+        expect(result.usedFallback).toBe(true);
+    });
+
+    test("treats a fallback response as final when the node disallows it, but still reports the fallback", async () => {
+        const orchestrator = makeOrchestratorWith(
+            makeStubInvoker({ usedFallback: true, wasInterrupted: false }),
+            configWithFallbackRetryable({ general: false }),
+        );
+
+        const result = await orchestrator.process([new HumanMessage("Hello")], MessageIntent.GENERAL);
+
+        expect(result.isRetryable).toBe(false);
+        expect(result.usedFallback).toBe(true);
+    });
+
+    test("keeps an interrupted fallback response retryable even when the node disallows fallback retries", async () => {
+        const orchestrator = makeOrchestratorWith(
+            makeStubInvoker({ usedFallback: true, wasInterrupted: true }),
+            configWithFallbackRetryable({ general: false }),
+        );
+
+        const result = await orchestrator.process([new HumanMessage("Hello")], MessageIntent.GENERAL);
+
+        expect(result.isRetryable).toBe(true);
+        expect(result.usedFallback).toBe(true);
+        expect(result.wasInterrupted).toBe(true);
+    });
+
+    test.each([
+        { node: "general" as const, intent: MessageIntent.GENERAL, route: "route_to_general" },
+        { node: "computation" as const, intent: MessageIntent.UNKNOWN, route: "route_to_python" },
+        { node: "search" as const, intent: MessageIntent.SEARCH, route: "route_to_search" },
+    ])("the $node node reads only its own setting", async ({ node, intent, route }) => {
+        const invoker = makeStubInvoker({ usedFallback: true, wasInterrupted: false }, route);
+
+        // Disabled on this node only — the other nodes' enabled settings must not leak in
+        const disabledHere = await makeOrchestratorWith(
+            invoker,
+            configWithFallbackRetryable({ [node]: false }),
+        ).process([new HumanMessage("Hello")], intent);
+        expect(disabledHere.isRetryable).toBe(false);
+
+        // Enabled on this node only — the other nodes' disabled settings must not leak in
+        const enabledHereOnly = await makeOrchestratorWith(
+            invoker,
+            configWithFallbackRetryable({ general: false, computation: false, search: false, [node]: true }),
+        ).process([new HumanMessage("Hello")], intent);
+        expect(enabledHereOnly.isRetryable).toBe(true);
     });
 });
 

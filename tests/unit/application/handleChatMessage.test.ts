@@ -401,6 +401,7 @@ describe("HandleChatMessageUseCase — response footers", () => {
         const content = await sendAndGetReplyContent(
             makeOrchestrator({
                 response: "partial answer",
+                isRetryable: true,
                 usedFallback: true,
                 finishReason: FinishReason.MAX_TOKENS,
             }),
@@ -409,6 +410,24 @@ describe("HandleChatMessageUseCase — response footers", () => {
         expect(content).toContain(FALLBACK_FOOTER);
         expect(content).toContain(finishReasonFooter(FinishReason.MAX_TOKENS));
         expect(content).not.toContain(INTERRUPTED_FOOTER);
+    });
+
+    it("shows the fallback notice when the fallback response is retryable", async () => {
+        const content = await sendAndGetReplyContent(
+            makeOrchestrator({ response: "fallback answer", isRetryable: true, usedFallback: true }),
+        );
+
+        expect(content).toBe(`fallback answer${FALLBACK_FOOTER}`);
+    });
+
+    // A non-retryable fallback is configured as an equal alternative, so the notice would
+    // only point the user at a Retry button that is not there.
+    it("omits the fallback notice when the fallback response is not retryable", async () => {
+        const content = await sendAndGetReplyContent(
+            makeOrchestrator({ response: "fallback answer", isRetryable: false, usedFallback: true }),
+        );
+
+        expect(content).toBe("fallback answer");
     });
 
     it("appends no footer for a reported clean stop", async () => {

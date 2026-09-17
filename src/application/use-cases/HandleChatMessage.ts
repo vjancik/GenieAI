@@ -663,11 +663,13 @@ export class HandleChatMessageUseCase {
         // Sanitize LLM output for Discord rendering
         const discordResponse = llmTextToDiscordText(response);
 
-        // Informational footer appended to the first page when a fallback model was used.
+        // Informational footer appended to the first page when a fallback model was used and the
+        // response is retryable. A non-retryable fallback is configured as an equal alternative
+        // rather than a downgrade, so there is nothing to explain and no Retry button to point at.
         // Kept separate from discordResponse so pagination offsets stored in the DB always
         // refer to positions within discordResponse — subsequent pages are served from that
         // string and must not be offset by the footer length.
-        const fallbackFooter = usedFallback ? FALLBACK_FOOTER : "";
+        const fallbackFooter = usedFallback && isRetryable ? FALLBACK_FOOTER : "";
 
         // Informational footer describing how generation ended badly. A reported non-STOP
         // finish reason (e.g. SAFETY) explains the truncation specifically, so it wins over

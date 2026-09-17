@@ -71,6 +71,9 @@ agent:
       model: "gemini-3.6-flash"         # <required>
       apiKeyType: "free"                # <required>
       fallbackModel: "gemini-3.5-flash" # <optional>
+      # Whether fallback model responses get a Retry button. Set to false when the fallback is an
+      # alternative rather than a downgrade. Interrupted responses are always retryable.
+      isFallbackRetryable: true         # <optional>
       # Maximum milliseconds to wait for a general model response before aborting.
       timeoutMs: 120000                 # <required>
 
@@ -78,13 +81,19 @@ agent:
       model: "gemini-3.6-flash"         # <required>
       apiKeyType: "free"                # <required>
       fallbackModel: "gemini-3.5-flash" # <optional>
+      # Whether fallback model responses get a Retry button. Set to false when the fallback is an
+      # alternative rather than a downgrade. Interrupted responses are always retryable.
+      isFallbackRetryable: true         # <optional>
       # Maximum milliseconds to wait for a general model response before aborting.
-      timeoutMs: 120000      
+      timeoutMs: 120000
 
     search:
       model: "gemini-3.6-flash"         # <required>
       apiKeyType: "free"                # <required>
       fallbackModel: "gemini-3.5-flash" # <optional>
+      # Whether fallback model responses get a Retry button. Set to false when the fallback is an
+      # alternative rather than a downgrade. Interrupted responses are always retryable.
+      isFallbackRetryable: true         # <optional>
       # Maximum milliseconds to wait for a search model response before aborting.
       timeoutMs: 120000                 # <required>
       # Search backend to use. Options: "google" | "tavily"   <optional, default: "google">

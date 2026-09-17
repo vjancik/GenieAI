@@ -118,8 +118,9 @@ const OrchestratorStateSchema = new StateSchema({
     messages: MessagesValue,
     intent: z.custom<MessageIntent>(),
     /**
-     * Set to true by generalNode or searchNode when the fallback model was used.
-     * Signals to the caller that the response quality may be degraded and a retry is worthwhile.
+     * Set to true by an answering node (general, computation, search) when the response is
+     * degraded and a retry is worthwhile: the stream was interrupted, generation stopped
+     * abnormally, or a fallback model answered and that node's `isFallbackRetryable` is enabled.
      * Defaults to false; never set to true by triageNode (routing quality is unaffected).
      *
      * Uses a boolean OR reducer so that once any node sets this to true it is never
@@ -127,13 +128,12 @@ const OrchestratorStateSchema = new StateSchema({
      */
     isRetryable: new ReducedValue(z.boolean().default(false), booleanOrReducer),
     /**
-     * Set to true by generalNode or searchNode when a fallback model was used to generate
-     * the response. Distinct from isRetryable: isRetryable covers all degraded-response cases
-     * (e.g. all tools failed), while usedFallback specifically means the primary model was
-     * unavailable and a lower-quality fallback was substituted.
+     * Set to true by an answering node when a fallback model generated the response, i.e. the
+     * primary model was unavailable. Always reported, independent of isRetryable: the fallback
+     * may be configured as an equal alternative, in which case the response is not retryable.
      *
-     * Used to display an informational footer on the bot reply so the user understands
-     * why response quality may be degraded, independent of retry eligibility.
+     * Persisted with the bot reply, and combined with isRetryable by the caller to decide
+     * whether to show the fallback footer.
      */
     usedFallback: new ReducedValue(z.boolean().default(false), booleanOrReducer),
     /**
@@ -189,15 +189,22 @@ type NodeResult = {
  * Derives the response-degradation fields of a node's state update from an invocation result.
  *
  * Only a degraded finish reason is written to state, so a clean STOP leaves the channel null
- * and the sticky reducer never treats a success as a failure. Every degradation makes the
- * response retryable: a fresh generation often clears a transient safety block or glitch.
+ * and the sticky reducer never treats a success as a failure. An interruption or a degraded
+ * finish reason always makes the response retryable: a fresh generation often clears a
+ * transient safety block or glitch. Fallback use only does so when the node opts in, since
+ * a fallback may be an equal alternative rather than a downgrade.
+ *
+ * @param invocation - The resilient invoker's result for the node's model call
+ * @param isFallbackRetryable - The node's configured policy for responses from its fallback model
  */
 function degradationUpdate(
     invocation: Pick<ModelInvocationResult, "usedFallback" | "wasInterrupted" | "finishReason">,
+    isFallbackRetryable: boolean,
 ): Omit<NodeResult, "messages"> {
     const degradedReason = isDegradedFinishReason(invocation.finishReason) ? invocation.finishReason : null;
     return {
-        isRetryable: invocation.usedFallback || invocation.wasInterrupted || degradedReason !== null,
+        isRetryable:
+            (invocation.usedFallback && isFallbackRetryable) || invocation.wasInterrupted || degradedReason !== null,
         usedFallback: invocation.usedFallback,
         wasInterrupted: invocation.wasInterrupted,
         finishReason: degradedReason,
@@ -221,21 +228,29 @@ export const OrchestratorNode = {
 
 export type OrchestratorNode = (typeof OrchestratorNode)[keyof typeof OrchestratorNode];
 
+/** Per-node model settings as parsed from the config file. */
+type NodeConfigs = AppConfig["file"]["agent"]["nodes"];
+
 /**
- * Per-model timeout and fallback provider configuration.
- * Each model type has an independent timeout and can surface a fallback model
- * via its provider's getFallback() method.
+ * Names of the nodes that invoke a model. Derived from the config schema, so the per-node
+ * settings below must cover exactly the configured nodes (no fetchContent, which has no model).
  */
-export interface ModelTimeouts {
-    /** Maximum ms to wait for a triage model response before aborting. */
-    triage: number;
-    /** Maximum ms to wait for a general model response before aborting. */
-    general: number;
-    /** Maximum ms to wait for a computation model response before aborting. */
-    computation: number;
-    /** Maximum ms to wait for a search model response before aborting. */
-    search: number;
-}
+type NodeName = keyof NodeConfigs;
+
+/** Per-node maximum ms to wait for a model response before aborting. */
+interface ModelTimeouts extends Record<NodeName, number> {}
+
+/** Per-node API key type configuration. */
+interface NodeApiKeyTypes extends Record<NodeName, ApiKeyType> {}
+
+/**
+ * Per-node policy for whether a fallback model response is retryable.
+ * Keyed by the nodes whose config defines `isFallbackRetryable`, i.e. the answering nodes —
+ * triage routing is never surfaced as retryable.
+ */
+type NodeFallbackRetryable = {
+    [K in NodeName as NodeConfigs[K] extends { isFallbackRetryable: boolean } ? K : never]: boolean;
+};
 
 /**
  * Orchestrates the multi-agent triage routing pipeline as a LangGraph StateGraph.
@@ -258,18 +273,11 @@ export interface ModelTimeouts {
  * refreshing Gemini file upload state per key before each model invocation. The search
  * node always uses the paid key with no rotation.
  */
-/** Per-node API key type configuration. */
-interface NodeApiKeyTypes {
-    triage: ApiKeyType;
-    general: ApiKeyType;
-    computation: ApiKeyType;
-    search: ApiKeyType;
-}
-
 export class AgentOrchestrator implements IAgentOrchestrator {
     private readonly graph: ReturnType<AgentOrchestrator["buildGraph"]>;
     private readonly nodeTimeoutsMs: ModelTimeouts;
     private readonly nodeApiKeyTypes: NodeApiKeyTypes;
+    private readonly nodeFallbackRetryable: NodeFallbackRetryable;
     private readonly searchMode: SearchMode;
     private readonly basePrompt: string;
 
@@ -300,6 +308,11 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             general: config.file.agent.nodes.general.apiKeyType,
             computation: config.file.agent.nodes.computation.apiKeyType,
             search: config.file.agent.nodes.search.apiKeyType,
+        };
+        this.nodeFallbackRetryable = {
+            general: config.file.agent.nodes.general.isFallbackRetryable,
+            computation: config.file.agent.nodes.computation.isFallbackRetryable,
+            search: config.file.agent.nodes.search.isFallbackRetryable,
         };
         this.graph = this.buildGraph();
     }
@@ -743,7 +756,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 throw new LlmError("User-facing general model produced an illegal tool call");
             }
 
-            return { messages: [response], ...degradationUpdate(invocation) };
+            return {
+                messages: [response],
+                ...degradationUpdate(invocation, this.nodeFallbackRetryable.general),
+            };
         });
     }
 
@@ -771,7 +787,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 AgentStatusType.COMPUTING,
             );
 
-            return { messages: [invocation.result], ...degradationUpdate(invocation) };
+            return {
+                messages: [invocation.result],
+                ...degradationUpdate(invocation, this.nodeFallbackRetryable.computation),
+            };
         });
     }
 
@@ -870,7 +889,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     throw new LlmError("User-facing search model produced an illegal tool call");
                 }
 
-                return { messages: [tavilyResultMessage, result], ...degradationUpdate(invocation) };
+                return {
+                    messages: [tavilyResultMessage, result],
+                    ...degradationUpdate(invocation, this.nodeFallbackRetryable.search),
+                };
             }
 
             const messages: BaseMessage[] = [
@@ -896,7 +918,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 throw new LlmError("User-facing search model produced an illegal tool call");
             }
 
-            return { messages: [response], ...degradationUpdate(invocation) };
+            return {
+                messages: [response],
+                ...degradationUpdate(invocation, this.nodeFallbackRetryable.search),
+            };
         });
     }
 }

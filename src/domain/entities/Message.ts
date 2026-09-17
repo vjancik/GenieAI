@@ -49,7 +49,7 @@ export interface PersistedChatMessage {
     langchainMessages: Record<string, unknown>[];
     /**
      * Remaining retry attempts for this bot response.
-     * Only set on retryable bot responses (fallback model was used).
+     * Only set on retryable bot responses (e.g. interrupted, or answered by a retryable fallback model).
      * NULL on human messages and non-retryable bot responses.
      */
     retriesLeft: number | null;

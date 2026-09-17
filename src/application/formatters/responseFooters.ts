@@ -9,7 +9,10 @@ import { FinishReason } from "../../domain/value-objects/FinishReason.ts";
  * DB always refer to positions within the response itself, never shifted by a footer.
  */
 
-/** Appended when the primary model was unavailable and a fallback model answered instead. */
+/**
+ * Appended when the primary model was unavailable, a fallback model answered instead, and
+ * the response is retryable. Omitted for fallbacks configured as non-retryable alternatives.
+ */
 export const FALLBACK_FOOTER =
     "\n*This response was generated using a fallback model. If it's unsatisfactory you can Retry later to see if the primary model is available again.*";
 

@@ -70,6 +70,74 @@ agent:
         expect(config.agent.nodes.triage.fallbackModel).toBeUndefined();
     });
 
+    it("defaults isFallbackRetryable to true on answering nodes", () => {
+        const config = parseFileConfig(VALID_YAML);
+        expect(config.agent.nodes.general.isFallbackRetryable).toBe(true);
+        expect(config.agent.nodes.computation.isFallbackRetryable).toBe(true);
+        expect(config.agent.nodes.search.isFallbackRetryable).toBe(true);
+    });
+
+    it("reads isFallbackRetryable per answering node", () => {
+        const yaml = `
+agent:
+  nodes:
+    triage:
+      model: "gemini-flash-lite"
+      timeoutMs: 60000
+      apiKeyType: "free"
+    general:
+      model: "gemini-flash"
+      timeoutMs: 120000
+      apiKeyType: "free"
+      isFallbackRetryable: false
+    computation:
+      model: "gemini-flash"
+      timeoutMs: 120000
+      apiKeyType: "free"
+    search:
+      model: "gemini-pro"
+      timeoutMs: 120000
+      apiKeyType: "paid"
+      isFallbackRetryable: false
+`;
+        const config = parseFileConfig(yaml);
+        expect(config.agent.nodes.general.isFallbackRetryable).toBe(false);
+        expect(config.agent.nodes.computation.isFallbackRetryable).toBe(true);
+        expect(config.agent.nodes.search.isFallbackRetryable).toBe(false);
+    });
+
+    // Triage only routes, so the setting would silently do nothing there
+    it("warns when isFallbackRetryable is set on the triage node", () => {
+        const { logger, warnMock } = makeLogger();
+        const yaml = `
+agent:
+  nodes:
+    triage:
+      model: "gemini-flash-lite"
+      timeoutMs: 60000
+      apiKeyType: "free"
+      isFallbackRetryable: false
+    general:
+      model: "gemini-flash"
+      timeoutMs: 120000
+      apiKeyType: "free"
+    computation:
+      model: "gemini-flash"
+      timeoutMs: 120000
+      apiKeyType: "free"
+    search:
+      model: "gemini-pro"
+      timeoutMs: 120000
+      apiKeyType: "paid"
+`;
+        parseFileConfig(yaml, "test.yaml", logger);
+        expect(warnMock).toHaveBeenCalledTimes(1);
+        expect(warnMock).toHaveBeenCalledWith(
+            expect.objectContaining({ key: "agent.nodes.triage.isFallbackRetryable" }),
+            expect.stringContaining("agent.nodes.triage.isFallbackRetryable"),
+        );
+    });
+
     it("throws ConfigError for invalid yaml syntax", () => {
         expect(() => parseFileConfig("{unclosed")).toThrow(ConfigError);
     });
