@@ -1,10 +1,10 @@
-import { ChatGoogle } from "@langchain/google/node";
 import * as Sentry from "@sentry/bun";
 import { SearchMode } from "../../../application/config/AppConfig.ts";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
 import { SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
 import { blockHighSafetySettings, neverTool, noInternalRetries } from "./sharedGeminiSettings.ts";
+import { ValidatedChatGoogle } from "./ValidatedChatGoogle.ts";
 
 /**
  * Builds the system prompt for the search agent.
@@ -64,7 +64,7 @@ function createSearchModel(
     const sentryCallback =
         process.versions.bun && process.env.SENTRY_INITIALIZED ? [Sentry.createLangChainCallbackHandler()] : undefined;
 
-    const llm = new ChatGoogle({
+    const llm = new ValidatedChatGoogle({
         model: modelName,
         apiKey,
         outputVersion: "v0",
@@ -77,15 +77,18 @@ function createSearchModel(
         maxRetries: noInternalRetries,
     });
 
+    // `tool_choice` is omitted in both branches: ValidatedChatGoogle replaces the derived
+    // toolConfig wholesale with VALIDATED mode.
     if (options.searchMode !== SearchMode.google) {
-        // Workaround for https://github.com/langchain-ai/langchainjs/issues/10432 — tool_choice: "none" is ignored on empty arrays
-        return llm.bindTools([neverTool], { tool_choice: "none" });
+        // `neverTool` stays bound so a declared function is always present, and its
+        // description reinforces the system prompt's instruction not to call tools.
+        return llm.bindTools([neverTool]);
     } else {
         // Bind the native Google Search grounding tool — this uses Gemini's built-in
         // search capability rather than a custom web search implementation.
-        // NOTE: tool_choice only affects standard tools, not google-specific provider tools which is invoked
-        // and enriches the response regardless of the setting
-        return llm.bindTools([{ googleSearch: {} }], { tool_choice: "none" });
+        // NOTE: functionCallingConfig only affects standard tools, not google-specific provider
+        // tools, which are invoked and enrich the response regardless of the mode.
+        return llm.bindTools([{ googleSearch: {} }]);
     }
 }
 

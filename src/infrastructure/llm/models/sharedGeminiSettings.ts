@@ -15,9 +15,12 @@ import { tool } from "@langchain/core/tools";
 export const noInternalRetries = 0;
 
 /**
- * A placeholder tool passed to `bindTools` to work around a LangChain bug where
- * `tool_choice: "none"` is ignored when the tools array is empty.
- * See: https://github.com/langchain-ai/langchainjs/issues/10432
+ * A no-op placeholder tool bound to models that must not call tools.
+ *
+ * Gemini's `NONE` function-calling mode does not reliably suppress tool calls, so
+ * `ValidatedChatGoogle` forces `VALIDATED` mode instead. This tool keeps a declared
+ * function present under that mode, and its description reinforces the system
+ * prompt's instruction not to call anything.
  */
 export const neverTool = tool(() => "", {
     name: "never_call_tools_or_functions",

@@ -1,9 +1,9 @@
-import { ChatGoogle } from "@langchain/google/node";
 import * as Sentry from "@sentry/bun";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
 import { SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
 import { blockHighSafetySettings, neverTool, noInternalRetries } from "./sharedGeminiSettings.ts";
+import { ValidatedChatGoogle } from "./ValidatedChatGoogle.ts";
 
 /**
  * Builds the system prompt for the general-purpose agent.
@@ -63,7 +63,7 @@ function createGeneralModel(
     const sentryCallback =
         process.versions.bun && process.env.SENTRY_INITIALIZED ? [Sentry.createLangChainCallbackHandler()] : undefined;
 
-    const llm = new ChatGoogle({
+    const llm = new ValidatedChatGoogle({
         model: modelName,
         apiKey,
         outputVersion: "v0",
@@ -76,8 +76,11 @@ function createGeneralModel(
         maxRetries: noInternalRetries,
     });
 
-    // Workaround for https://github.com/langchain-ai/langchainjs/issues/10432 — tool_choice: "none" is ignored on empty arrays
-    return llm.bindTools([neverTool], { tool_choice: "none" });
+    // `tool_choice` is omitted deliberately: ValidatedChatGoogle replaces the derived
+    // toolConfig wholesale with VALIDATED mode. `neverTool` stays bound so a declared
+    // function is always present, and its description reinforces the system prompt's
+    // instruction not to call tools.
+    return llm.bindTools([neverTool]);
 }
 
 /**
