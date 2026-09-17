@@ -66,6 +66,11 @@ const logger = createLogger(
 
 logger.info("Starting GenieAI bot...");
 
+// Gemini wire tap (disabled): records raw Gemini traffic to logs/geminiWireTap for diagnosing
+// streams that end without a finish reason. To re-enable, import `installGeminiWireTap` from
+// ./infrastructure/llm/debug/GeminiWireTap.ts and `path` from node:path, then call:
+//   installGeminiWireTap(path.resolve(import.meta.dir, "../logs/geminiWireTap"), logger.child({ module: "debug:gemini-wire-tap" }));
+
 const configProvider = new ConfigProvider(logger);
 const config = await configProvider.get();
 
