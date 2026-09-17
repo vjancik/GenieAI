@@ -3,7 +3,7 @@ import * as Sentry from "@sentry/bun";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
 import { SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
-import { blockHighSafetySettings, neverTool } from "./sharedGeminiSettings.ts";
+import { blockHighSafetySettings, neverTool, noInternalRetries } from "./sharedGeminiSettings.ts";
 
 /**
  * Builds the system prompt for the general-purpose agent.
@@ -73,6 +73,7 @@ function createGeneralModel(
         },
         safetySettings: blockHighSafetySettings,
         callbacks: sentryCallback,
+        maxRetries: noInternalRetries,
     });
 
     // Workaround for https://github.com/langchain-ai/langchainjs/issues/10432 — tool_choice: "none" is ignored on empty arrays

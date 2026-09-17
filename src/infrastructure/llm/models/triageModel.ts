@@ -8,7 +8,7 @@ import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts"
 import { ModelProvider } from "../ModelProvider.ts";
 import type { GetVideoCaptionsTool } from "../tools/getVideoCaptionsTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
-import { blockNoneSafetySettings } from "./sharedGeminiSettings.ts";
+import { blockNoneSafetySettings, noInternalRetries } from "./sharedGeminiSettings.ts";
 
 /**
  * Sentinel tool that signals routing to the Google Search agent.
@@ -127,6 +127,7 @@ function createTriageModel(
         },
         safetySettings: blockNoneSafetySettings,
         callbacks: sentryCallback,
+        maxRetries: noInternalRetries,
     });
 
     const searchTool =
@@ -199,6 +200,7 @@ function createTavilyOnlyTriageModel(
         },
         safetySettings: blockNoneSafetySettings,
         callbacks: sentryCallback,
+        maxRetries: noInternalRetries,
     });
 
     return llm.bindTools([options.tavilyTool, routeToGeneralTool], { tool_choice: "any" });

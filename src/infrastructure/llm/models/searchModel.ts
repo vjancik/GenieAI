@@ -4,7 +4,7 @@ import { SearchMode } from "../../../application/config/AppConfig.ts";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
 import { SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
-import { blockHighSafetySettings, neverTool } from "./sharedGeminiSettings.ts";
+import { blockHighSafetySettings, neverTool, noInternalRetries } from "./sharedGeminiSettings.ts";
 
 /**
  * Builds the system prompt for the search agent.
@@ -74,6 +74,7 @@ function createSearchModel(
         },
         safetySettings: blockHighSafetySettings,
         callbacks: sentryCallback,
+        maxRetries: noInternalRetries,
     });
 
     if (options.searchMode !== SearchMode.google) {

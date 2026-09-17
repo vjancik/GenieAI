@@ -3,7 +3,7 @@ import * as Sentry from "@sentry/bun";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
 import { SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
-import { blockHighSafetySettings } from "./sharedGeminiSettings.ts";
+import { blockHighSafetySettings, noInternalRetries } from "./sharedGeminiSettings.ts";
 
 /**
  * Builds the system prompt for the computation agent.
@@ -64,6 +64,7 @@ function createComputationModel(
         },
         safetySettings: blockHighSafetySettings,
         callbacks: sentryCallback,
+        maxRetries: noInternalRetries,
     });
 
     return llm.bindTools([{ codeExecution: {} }]);

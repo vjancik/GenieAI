@@ -84,6 +84,9 @@ describe("@langchain/google — HumanMessage multimodal serialization", () => {
         const model = new ChatGoogle({
             model: "gemini-2.5-flash",
             apiKey: "test-api-key-fake",
+            // The interceptor throws to short-circuit the request; without this the
+            // AsyncCaller would retry that throw six times with exponential backoff.
+            maxRetries: 0,
         });
 
         const messages = [
@@ -183,6 +186,9 @@ describe("@langchain/google — HumanMessage multimodal serialization", () => {
         const model = new ChatGoogle({
             model: "gemini-2.5-flash",
             apiKey: "test-api-key-fake",
+            // The interceptor throws to short-circuit the request; without this the
+            // AsyncCaller would retry that throw six times with exponential backoff.
+            maxRetries: 0,
         });
 
         const messages = [
@@ -266,8 +272,8 @@ describe("@langchain/google — HumanMessage multimodal serialization", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Bug: AIMessage with executableCode/codeExecutionResult blocks serialized with
-// `type` property left in the Gemini API part, causing API rejection.
+// Fixed in @langchain/google@0.2.0: AIMessage executableCode/codeExecutionResult
+// blocks no longer leak the LangChain `type` property into the Gemini API part.
 // ---------------------------------------------------------------------------
 
 describe("@langchain/google — AIMessage code execution block serialization", () => {
@@ -275,17 +281,21 @@ describe("@langchain/google — AIMessage code execution block serialization", (
      * An AIMessage containing executableCode and codeExecutionResult content blocks
      * must serialize to clean Gemini parts with no `type` discriminant field.
      *
-     * BUG (@langchain/google): the content blocks are forwarded with the LangChain
-     * `type` field intact (e.g. `{ type: "executableCode", executableCode: {...} }`),
-     * which the Gemini API rejects. The correct shape is `{ executableCode: {...} }`.
+     * WAS BUGGY (up to @langchain/google@0.1.12): the content blocks were forwarded
+     * with the LangChain `type` field intact (e.g. `{ type: "executableCode",
+     * executableCode: {...} }`), which the Gemini API rejects.
      *
-     * This snapshot test documents the current (buggy) serialization so that any
-     * library upgrade that fixes the issue is surfaced as a snapshot diff.
+     * Fixed in 0.2.0 by langchain-ai/langchainjs#10537 ("strip type field from
+     * executableCode and codeExecutionResult parts"); the snapshot now pins the
+     * correct `{ executableCode: {...} }` shape so a regression is surfaced as a diff.
      */
-    test("AIMessage executableCode and codeExecutionResult blocks are serialized with type field present (snapshot)", async () => {
+    test("AIMessage executableCode and codeExecutionResult blocks are serialized without a type field (snapshot)", async () => {
         const model = new ChatGoogle({
             model: "gemini-2.5-flash",
             apiKey: "test-api-key-fake",
+            // The interceptor throws to short-circuit the request; without this the
+            // AsyncCaller would retry that throw six times with exponential backoff.
+            maxRetries: 0,
         });
 
         const messages = [
@@ -324,8 +334,8 @@ describe("@langchain/google — AIMessage code execution block serialization", (
         // The AIMessage turn is the second content entry (index 1).
         const aiParts = contents[1]?.parts ?? [];
 
-        // BUG: executableCode and codeExecutionResult parts carry a `type` field that
-        // the Gemini API does not accept. A fixed library would omit `type` entirely.
+        // The executableCode and codeExecutionResult parts must carry no `type` field —
+        // the Gemini API does not accept it.
         expect(aiParts).toMatchInlineSnapshot(`
 [
   {
@@ -355,7 +365,6 @@ for score in iq_scores:
 ,
       "language": "PYTHON",
     },
-    "type": "executableCode",
   },
   {
     "codeExecutionResult": {
@@ -369,7 +378,6 @@ IQ 130: 0.003599
 "
 ,
     },
-    "type": "codeExecutionResult",
   },
   {
     "text": "These values show the characteristic bell curve shape.",
@@ -405,6 +413,9 @@ describe("@langchain/google — ToolMessage serialization", () => {
         const model = new ChatGoogle({
             model: "gemini-2.5-flash",
             apiKey: "test-api-key-fake",
+            // The interceptor throws to short-circuit the request; without this the
+            // AsyncCaller would retry that throw six times with exponential backoff.
+            maxRetries: 0,
         });
 
         const messages = [
