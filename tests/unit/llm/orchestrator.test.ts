@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, ChatMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import pino from "pino";
@@ -110,6 +110,18 @@ function makeTriageWithToolCall(toolName: string, toolArgs: Record<string, unkno
     const msg = new AIMessage({
         content: "",
         tool_calls: [{ name: toolName, args: toolArgs, id: "call_test_123", type: "tool_call" }],
+    });
+    return {
+        invoke: mock(async (_messages: BaseMessage[]) => msg),
+        stream: mock(async (_messages: BaseMessage[]) => makeStreamIterable(msg)),
+    };
+}
+
+/** Helper to create a triage model mock that returns several tool calls, with Gemini-style content blocks */
+function makeTriageWithToolCalls(toolCalls: { name: string; args: Record<string, unknown> }[]) {
+    const msg = new AIMessage({
+        content: toolCalls.map(({ name, args }) => ({ type: "functionCall", functionCall: { name, args } })),
+        tool_calls: toolCalls.map((tc, i) => ({ ...tc, id: `call_test_${i}`, type: "tool_call" as const })),
     });
     return {
         invoke: mock(async (_messages: BaseMessage[]) => msg),
@@ -1175,5 +1187,332 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
             thrown = err;
         }
         expect(thrown).toBeInstanceOf(AllFreeKeysExhaustedError);
+    });
+});
+
+describe("Orchestrator.process — tool exchange flattening", () => {
+    const tavilyConfig = {
+        file: {
+            ...testConfig.file,
+            agent: {
+                ...testConfig.file.agent,
+                nodes: {
+                    ...testConfig.file.agent.nodes,
+                    search: { ...testConfig.file.agent.nodes.search, mode: "tavily" as const },
+                },
+            },
+        },
+    };
+
+    /** Returns the message list the given mock model was first invoked with. */
+    function firstInvocationMessages(model: { invoke: ReturnType<typeof mock> }): BaseMessage[] {
+        const messages = model.invoke.mock.calls[0]?.[0] as BaseMessage[] | undefined;
+        expect(messages).toBeDefined();
+        return messages ?? [];
+    }
+
+    /** True when the history still holds a tool call or tool response the model could imitate. */
+    function hasToolExchange(messages: BaseMessage[]): boolean {
+        return messages.some(
+            (m) => m instanceof ToolMessage || (m instanceof AIMessage && (m.tool_calls?.length ?? 0) > 0),
+        );
+    }
+
+    test("general node sees past tool exchanges as plain HumanMessages", async () => {
+        const triageModel = makeTriageWithToolCall("route_to_general");
+        const generalModel = makeModel("follow-up answer");
+
+        const orchestrator = new AgentOrchestrator(
+            asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(makeModel("search response")) as never,
+            makeInvoker(),
+            makeTool("website content") as never,
+            makeTool("video transcript") as never,
+            testLogger,
+            testConfig,
+        );
+
+        const history: BaseMessage[] = [
+            new HumanMessage("Summarize https://example.com"),
+            new AIMessage({
+                content: "",
+                tool_calls: [
+                    { name: "get_website", args: { urls: ["https://example.com"] }, id: "c1", type: "tool_call" },
+                ],
+            }),
+            new ToolMessage({
+                content: JSON.stringify([{ url: "https://example.com", pageContents: "Page" }]),
+                name: "get_website",
+                tool_call_id: "c1",
+            }),
+            new AIMessage("It is a page."),
+        ];
+
+        const result = await orchestrator.process(
+            [...history, new HumanMessage("Tell me more")],
+            MessageIntent.UNKNOWN,
+        );
+
+        const invoked = firstInvocationMessages(generalModel);
+        expect(hasToolExchange(invoked)).toBe(false);
+        expect(invoked.map((m) => m.type)).toEqual(["system", "human", "human", "ai", "human"]);
+        expect(invoked[2]?.content).toBe("Website contents of https://example.com:\nPage");
+        expect(result.newMessages).toHaveLength(1);
+    });
+
+    test("general node flattens the current turn's content fetch but state keeps the original messages", async () => {
+        const triageModel = makeTriageWithToolCall("get_website", { urls: ["https://example.com"] });
+        const generalModel = makeModel("summary of website");
+
+        const orchestrator = new AgentOrchestrator(
+            asProvider(triageModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(generalModel) as never,
+            asProvider(makeModel("search response")) as never,
+            makeInvoker(),
+            makeTool("Page body") as never,
+            makeTool("video transcript") as never,
+            testLogger,
+            testConfig,
+        );
+
+        const result = await orchestrator.process(
+            [new HumanMessage("Summarize https://example.com")],
+            MessageIntent.UNKNOWN,
+        );
+
+        const invoked = firstInvocationMessages(generalModel);
+        expect(hasToolExchange(invoked)).toBe(false);
+        expect(invoked.at(-1)?.content).toBe("Website contents of https://example.com:\nPage body");
+
+        const [triageMessage, toolMessage, answer] = result.newMessages;
+        expect(triageMessage).toBeInstanceOf(AIMessage);
+        expect((triageMessage as AIMessage).tool_calls).toHaveLength(1);
+        expect(toolMessage).toBeInstanceOf(ToolMessage);
+        expect(answer?.content).toBe("summary of website");
+    });
+
+    test("tavily search node flattens the current search result but persists the tool exchange", async () => {
+        const triageModel = makeTriageWithToolCall("web_search", { query: "latest news" });
+        const searchModel = makeModel("search answer");
+        const tavilyTool = {
+            invoke: mock(async (_args: unknown) => ({
+                results: [{ url: "https://a.com", title: "A", content: "news" }],
+            })),
+        };
+
+        const orchestrator = new AgentOrchestrator(
+            asProvider(triageModel) as never,
+            asProvider(makeModel("general response")) as never,
+            asProvider(makeModel("computation response")) as never,
+            asProvider(searchModel) as never,
+            makeInvoker(),
+            makeTool("website content") as never,
+            makeTool("video transcript") as never,
+            testLogger,
+            tavilyConfig,
+            tavilyTool as never,
+        );
+
+        const result = await orchestrator.process([new HumanMessage("What's new?")], MessageIntent.UNKNOWN);
+
+        expect(tavilyTool.invoke).toHaveBeenCalledWith({ query: "latest news" });
+        const invoked = firstInvocationMessages(searchModel);
+        expect(hasToolExchange(invoked)).toBe(false);
+        expect(invoked.map((m) => m.type)).toEqual(["system", "human", "human"]);
+        expect(invoked[2]?.content).toBe("Web search context:\n[1] A (https://a.com)\nnews");
+
+        // triage AIMessage + ToolMessage + final AIMessage are persisted unchanged
+        expect(result.newMessages.map((m) => m.type)).toEqual(["ai", "tool", "ai"]);
+        expect(result.content).toBe("search answer");
+    });
+
+    /** Maps a Tavily query to a result set, and records every query the tool receives. */
+    function makeTavilyTool(resultsByQuery: Record<string, { url: string; title: string; content: string }[]>) {
+        return { invoke: mock(async ({ query }: { query: string }) => ({ results: resultsByQuery[query] ?? [] })) };
+    }
+
+    function makeTavilyOrchestrator(
+        triageModel: ReturnType<typeof makeTriageWithToolCalls>,
+        searchModel: ReturnType<typeof makeModel>,
+        tavilyTool: ReturnType<typeof makeTavilyTool>,
+    ) {
+        return new AgentOrchestrator(
+            asProvider(triageModel) as never,
+            asProvider(makeModel("general response")) as never,
+            asProvider(makeModel("computation response")) as never,
+            asProvider(searchModel) as never,
+            makeInvoker(),
+            makeTool("website content") as never,
+            makeTool("video transcript") as never,
+            testLogger,
+            tavilyConfig,
+            tavilyTool as never,
+        );
+    }
+
+    test("tavily search node runs every web_search call and answers each with a ToolMessage", async () => {
+        const triageModel = makeTriageWithToolCalls([
+            { name: "web_search", args: { query: "first" } },
+            { name: "web_search", args: { query: "second" } },
+        ]);
+        const searchModel = makeModel("search answer");
+        const tavilyTool = makeTavilyTool({
+            first: [{ url: "https://a.com", title: "A", content: "from first" }],
+            second: [{ url: "https://b.com", title: "B", content: "from second" }],
+        });
+
+        const result = await makeTavilyOrchestrator(triageModel, searchModel, tavilyTool).process(
+            [new HumanMessage("Compare these")],
+            MessageIntent.UNKNOWN,
+        );
+
+        expect(tavilyTool.invoke).toHaveBeenCalledTimes(2);
+        expect(tavilyTool.invoke).toHaveBeenCalledWith({ query: "first" });
+        expect(tavilyTool.invoke).toHaveBeenCalledWith({ query: "second" });
+
+        // Both results reach the model, in one flattened message
+        const invoked = firstInvocationMessages(searchModel);
+        expect(hasToolExchange(invoked)).toBe(false);
+        expect(invoked[2]?.content).toContain("from first");
+        expect(invoked[2]?.content).toContain("from second");
+
+        expect(result.newMessages.map((m) => m.type)).toEqual(["ai", "tool", "tool", "ai"]);
+        const [triageMessage, firstTool, secondTool] = result.newMessages;
+        expect((triageMessage as AIMessage).tool_calls).toHaveLength(2);
+        expect((firstTool as ToolMessage).tool_call_id).toBe("call_test_0");
+        expect((firstTool as ToolMessage).content).toContain("from first");
+        expect((secondTool as ToolMessage).tool_call_id).toBe("call_test_1");
+        expect((secondTool as ToolMessage).content).toContain("from second");
+    });
+
+    test("tavily search node lists a source found by several searches once", async () => {
+        const triageModel = makeTriageWithToolCalls([
+            { name: "web_search", args: { query: "first" } },
+            { name: "web_search", args: { query: "second" } },
+        ]);
+        const shared = { url: "https://shared.com", title: "Shared", content: "both" };
+        const tavilyTool = makeTavilyTool({
+            first: [shared],
+            second: [shared, { url: "https://b.com", title: "B", content: "only second" }],
+        });
+
+        const result = await makeTavilyOrchestrator(triageModel, makeModel("search answer"), tavilyTool).process(
+            [new HumanMessage("Compare these")],
+            MessageIntent.UNKNOWN,
+        );
+
+        const answer = result.newMessages.at(-1) as AIMessage;
+        expect(answer.additional_kwargs.groundingMetadata).toEqual({
+            groundingChunks: [
+                { web: { uri: "https://shared.com", title: "shared.com" } },
+                { web: { uri: "https://b.com", title: "b.com" } },
+            ],
+        });
+    });
+
+    test("triage drops a routing sentinel accompanying web_search from both tool_calls and content", async () => {
+        const triageModel = makeTriageWithToolCalls([
+            { name: "web_search", args: { query: "first" } },
+            { name: "route_to_general", args: {} },
+        ]);
+        const tavilyTool = makeTavilyTool({
+            first: [{ url: "https://a.com", title: "A", content: "from first" }],
+        });
+
+        const result = await makeTavilyOrchestrator(triageModel, makeModel("search answer"), tavilyTool).process(
+            [new HumanMessage("What's new?")],
+            MessageIntent.UNKNOWN,
+        );
+
+        expect(result.content).toBe("search answer");
+        expect(result.newMessages.map((m) => m.type)).toEqual(["ai", "tool", "ai"]);
+        const triageMessage = result.newMessages[0] as AIMessage;
+        expect(triageMessage.tool_calls?.map((tc) => tc.name)).toEqual(["web_search"]);
+        expect(triageMessage.content).toEqual([
+            { type: "functionCall", functionCall: { name: "web_search", args: { query: "first" } } },
+        ]);
+    });
+
+    test("triage drops a sentinel accompanying a content tool from both tool_calls and content", async () => {
+        const url = "https://example.com/page";
+        const triageModel = makeTriageWithToolCalls([
+            { name: "route_to_general", args: {} },
+            { name: "get_website", args: { urls: [url] } },
+        ]);
+
+        const orchestrator = new AgentOrchestrator(
+            asProvider(triageModel) as never,
+            asProvider(makeModel("general response")) as never,
+            asProvider(makeModel("computation response")) as never,
+            asProvider(makeModel("search answer")) as never,
+            makeInvoker(),
+            makeTool("website content") as never,
+            makeTool("video transcript") as never,
+            testLogger,
+            testConfig,
+        );
+
+        const result = await orchestrator.process([new HumanMessage("Summarize this")], MessageIntent.UNKNOWN);
+
+        const triageMessage = result.newMessages[0] as AIMessage;
+        expect(triageMessage.tool_calls?.map((tc) => tc.name)).toEqual(["get_website"]);
+        expect(triageMessage.content).toEqual([
+            { type: "functionCall", functionCall: { name: "get_website", args: { urls: [url] } } },
+        ]);
+    });
+
+    describe("dropped web_search warning", () => {
+        const DROPPED_SEARCH_WARNING = "Triage web_search calls dropped in favor of other tool calls";
+
+        /** Runs triage with the given calls and returns the warnings about dropped searches. */
+        async function droppedSearchWarnings(toolCalls: { name: string; args: Record<string, unknown> }[]) {
+            const warn = spyOn(testLogger, "warn");
+            try {
+                const tavilyTool = makeTavilyTool({});
+                await makeTavilyOrchestrator(
+                    makeTriageWithToolCalls(toolCalls),
+                    makeModel("search answer"),
+                    tavilyTool,
+                ).process([new HumanMessage("What's new?")], MessageIntent.UNKNOWN);
+                return warn.mock.calls.filter(([, message]) => message === DROPPED_SEARCH_WARNING);
+            } finally {
+                warn.mockRestore();
+            }
+        }
+
+        test("warns when a content tool takes precedence over web_search", async () => {
+            const warnings = await droppedSearchWarnings([
+                { name: "get_website", args: { urls: ["https://example.com"] } },
+                { name: "web_search", args: { query: "dropped" } },
+            ]);
+
+            expect(warnings).toHaveLength(1);
+            expect(warnings[0]?.[0]).toEqual({
+                toolNames: ["get_website", "web_search"],
+                droppedSearches: [{ query: "dropped" }],
+            });
+        });
+
+        test("warns when an earlier routing call takes precedence over web_search", async () => {
+            const warnings = await droppedSearchWarnings([
+                { name: "route_to_general", args: {} },
+                { name: "web_search", args: { query: "dropped" } },
+            ]);
+
+            expect(warnings).toHaveLength(1);
+        });
+
+        test("does not warn when web_search decides the route", async () => {
+            const warnings = await droppedSearchWarnings([
+                { name: "web_search", args: { query: "first" } },
+                { name: "web_search", args: { query: "second" } },
+                { name: "route_to_general", args: {} },
+            ]);
+
+            expect(warnings).toHaveLength(0);
+        });
     });
 });

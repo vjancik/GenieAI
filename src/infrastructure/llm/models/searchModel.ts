@@ -12,7 +12,7 @@ import { ValidatedChatGoogle } from "./ValidatedChatGoogle.ts";
  *
  * In Google mode, also explicitly instructs the model to use Google Search, because Gemini
  * decides whether to invoke grounding based on prompt content — it cannot be forced programmatically.
- * In Tavily mode, search results are pre-injected as tool messages so no search instruction is needed.
+ * In Tavily mode, search results are pre-injected into the conversation so no search instruction is needed.
  *
  * @param searchMode - Determines whether Google Search instructions are included
  */

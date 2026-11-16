@@ -1,6 +1,7 @@
 import { describe, expect, it, mock } from "bun:test";
 import type { Logger } from "../../../src/application/types/Logger.ts";
 import {
+    dedupeGroundingChunks,
     safeParseTavilyResponse,
     tavilyResultsToGroundingChunks,
 } from "../../../src/infrastructure/llm/tools/tavilySearchTool.ts";
@@ -92,5 +93,19 @@ describe("tavilyResultsToGroundingChunks", () => {
 
     it("returns an empty array for no results", () => {
         expect(tavilyResultsToGroundingChunks([], makeLogger())).toEqual([]);
+    });
+});
+
+describe("dedupeGroundingChunks", () => {
+    const chunk = (uri: string, title = "Title") => ({ web: { uri, title } });
+
+    it("keeps the first occurrence of each URL, in order", () => {
+        const chunks = [chunk("https://a.com", "first"), chunk("https://b.com"), chunk("https://a.com", "second")];
+
+        expect(dedupeGroundingChunks(chunks)).toEqual([chunk("https://a.com", "first"), chunk("https://b.com")]);
+    });
+
+    it("returns an empty array for no chunks", () => {
+        expect(dedupeGroundingChunks([])).toEqual([]);
     });
 });

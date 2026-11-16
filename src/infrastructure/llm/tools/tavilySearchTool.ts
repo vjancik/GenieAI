@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { Logger } from "../../../application/types/Logger.ts";
 import { ToolName } from "../../../application/types/ToolName.ts";
 
-const TavilySearchResultSchema = z.object({
+export const TavilySearchResultSchema = z.object({
     url: z.string(),
     title: z.string(),
     content: z.string(),
@@ -104,6 +104,21 @@ export function tavilyResultsToGroundingChunks(results: TavilySearchResult[], lo
     }
 
     return chunks;
+}
+
+/**
+ * Removes grounding chunks whose URL already appeared, keeping the first occurrence. Needed when
+ * chunks from several searches are combined, as their results can overlap.
+ *
+ * @param chunks - Grounding chunks, in display order
+ */
+export function dedupeGroundingChunks(chunks: WebGroundingChunk[]): WebGroundingChunk[] {
+    const seenUris = new Set<string>();
+    return chunks.filter(({ web: { uri } }) => {
+        if (seenUris.has(uri)) return false;
+        seenUris.add(uri);
+        return true;
+    });
 }
 
 const TAVILY_SEARCH_DESCRIPTION =

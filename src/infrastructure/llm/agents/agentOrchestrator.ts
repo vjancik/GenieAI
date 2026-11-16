@@ -1,5 +1,6 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
+import type { ToolCall } from "@langchain/core/messages/tool";
 import { Command, END, MessagesValue, ReducedValue, START, StateGraph, StateSchema } from "@langchain/langgraph";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod";
@@ -24,7 +25,49 @@ import { buildComputationSystemPrompt } from "../models/computationModel.ts";
 import { buildGeneralSystemPrompt } from "../models/generalModel.ts";
 import { buildSearchSystemPrompt } from "../models/searchModel.ts";
 import { buildTriageSystemPrompt } from "../models/triageModel.ts";
-import { safeParseTavilyResponse, tavilyResultsToGroundingChunks } from "../tools/tavilySearchTool.ts";
+import {
+    dedupeGroundingChunks,
+    safeParseTavilyResponse,
+    tavilyResultsToGroundingChunks,
+} from "../tools/tavilySearchTool.ts";
+import { flattenToolExchanges } from "./flattenToolExchanges.ts";
+import { pruneToolCalls } from "./pruneToolCalls.ts";
+
+/**
+ * Runs one `web_search` tool call and pairs its result with a ToolMessage answering that call.
+ *
+ * @param tavilyTool - The configured Tavily tool
+ * @param toolCall - The triage `web_search` call to run
+ * @param logger - Used to report responses that don't match the expected schema
+ * @returns The ToolMessage, and the result's grounding chunks, or null if the response didn't
+ *   match the expected schema
+ */
+async function runWebSearch(tavilyTool: IModelTool<{ query: string }>, toolCall: ToolCall, logger: Logger) {
+    // TYPE COERCION: tool_call args typed as Record<string, unknown>; schema guarantees query: string
+    const searchQuery = (toolCall.args as { query: string }).query;
+
+    logger.debug({ searchQuery }, "Tavily search node invoking tool");
+
+    const rawResult = await tavilyTool.invoke({ query: searchQuery });
+    const { objResponse, parsed } = safeParseTavilyResponse(rawResult);
+
+    if (!parsed.success) {
+        logger.warn(
+            { error: parsed.error.message },
+            "Tavily response did not match expected schema — grounding sources will be omitted",
+        );
+    }
+
+    return {
+        toolMessage: new ToolMessage({
+            content: JSON.stringify(objResponse.results),
+            name: ToolName.WEB_SEARCH,
+            tool_call_id: toolCall.id ?? "",
+        }),
+        // Results whose URL is not an absolute http(s) URL are dropped by the mapper
+        groundingChunks: parsed.success ? tavilyResultsToGroundingChunks(parsed.data.results, logger) : null,
+    };
+}
 
 /**
  * Scans the message history for ToolMessages from content-fetching tools and
@@ -535,6 +578,22 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             );
             span.setAttribute("agent.triage_route", toolCalls.map((tc) => tc.name).join(","));
 
+            // web_search only runs when it decides the route: content tools take precedence over
+            // all routing calls, and otherwise the first routing call wins.
+            const isSearchRouted = contentCalls.length === 0 && routingCalls[0]?.name === ToolName.WEB_SEARCH;
+            const droppedSearchCalls = isSearchRouted
+                ? []
+                : routingCalls.filter((tc) => tc.name === ToolName.WEB_SEARCH);
+            if (droppedSearchCalls.length > 0) {
+                this.logger.warn(
+                    {
+                        toolNames: toolCalls.map((tc) => tc.name),
+                        droppedSearches: droppedSearchCalls.map((tc) => tc.args),
+                    },
+                    "Triage web_search calls dropped in favor of other tool calls",
+                );
+            }
+
             if (contentCalls.length > 0) {
                 // Filter out URLs already fetched in this history chain to avoid
                 // re-fetching content whose results are already in context.
@@ -558,10 +617,8 @@ export class AgentOrchestrator implements IAgentOrchestrator {
 
                 // Rebuild the triage AIMessage with the pruned tool calls so that
                 // fetchContentNode and the persisted history reflect only the new URLs.
-                const prunedTriageResponse = new AIMessage({
-                    ...triageResponse,
-                    tool_calls: deduplicatedCalls,
-                });
+                // Routing sentinels and web_search calls that accompanied them are dropped too.
+                const prunedTriageResponse = pruneToolCalls(triageResponse, deduplicatedCalls);
 
                 // Real tool calls: add triage AIMessage to state so each ToolMessage
                 // created in fetchContentNode has a valid tool_call_id in history.
@@ -586,11 +643,20 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     return new Command({ goto: OrchestratorNode.SEARCH });
 
                 case ToolName.WEB_SEARCH:
-                    // Real Tavily tool call (Tavily mode): add triage AIMessage to state so the
+                    // Real Tavily tool call (Tavily mode): add triage AIMessage to state so each
                     // ToolMessage created in searchNode has a valid tool_call_id in history.
+                    // Only web_search calls are kept, as an accompanying routing sentinel
+                    // would never receive the response the tool call pairing requires.
                     return new Command({
                         goto: OrchestratorNode.SEARCH,
-                        update: { messages: [triageResponse] },
+                        update: {
+                            messages: [
+                                pruneToolCalls(
+                                    triageResponse,
+                                    routingCalls.filter((tc) => tc.name === ToolName.WEB_SEARCH),
+                                ),
+                            ],
+                        },
                     });
 
                 case "route_to_python":
@@ -712,28 +778,35 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     /**
      * General agent node: generates the final answer using the general-purpose model.
      *
-     * When the last state message is a ToolMessage (content tool path), appends an
-     * instruction prompt to focus the model on the retrieved content. This extra
-     * HumanMessage is passed transiently to the model and is NOT stored in state.
+     * When the last state message is a ToolMessage (content tool path), the system prompt
+     * gains instructions for handling the retrieved content. Tool exchanges are flattened
+     * into plain HumanMessages for the model call only (see {@link flattenToolExchanges});
+     * state keeps the original messages.
      */
     private async generalNode(state: GraphState, config: NodeConfig): Promise<NodeResult> {
         return Sentry.startSpan({ name: "General agent node", op: "agent.node.general" }, async (span) => {
+            // Derived from the raw state: flattening below removes the ToolMessages these inspect
             const lastMsg = state.messages.at(-1);
             const hasToolResult = lastMsg instanceof ToolMessage;
             const hasVideoCaptions = state.messages.some(
                 (msg) => msg instanceof ToolMessage && msg.name === ToolName.GET_VIDEO_CAPTIONS,
             );
+            const history = flattenToolExchanges(state.messages, this.logger);
 
             span.setAttributes({
                 "agent.has_tool_result": hasToolResult,
                 "agent.general_node.has_video_captions": hasVideoCaptions,
+                "agent.flattened_tool_exchanges": history.exchangeCount,
             });
 
-            this.logger.debug({ hasVideoCaptions, hasToolResult }, "General node prompt parameters");
+            this.logger.debug(
+                { hasVideoCaptions, hasToolResult, flattenedToolExchanges: history.exchangeCount },
+                "General node prompt parameters",
+            );
 
             const invokeMessages: BaseMessage[] = [
                 new SystemMessage(buildGeneralSystemPrompt(this.basePrompt, hasVideoCaptions, hasToolResult)),
-                ...state.messages,
+                ...history.messages,
             ];
 
             const invocation = await this.invoker.invoke(
@@ -799,13 +872,16 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * In Google mode: passes the system prompt and state to the Gemini model with
      * native Google Search grounding bound. Always uses the paid API key.
      *
-     * In Tavily mode: reads the `web_search` tool call from the triage AIMessage already in
-     * state, invokes the Tavily tool with that query, then prepends the ToolMessage result to
-     * the history before invoking the LLM. Both the ToolMessage and the final AIMessage are
+     * In Tavily mode: reads the `web_search` tool calls from the triage AIMessage already in
+     * state, invokes the Tavily tool once per call in parallel, then appends one ToolMessage per
+     * call to the history before invoking the LLM. The ToolMessages and the final AIMessage are
      * included in the state update so they are persisted for future turns.
+     *
+     * In both modes, tool exchanges are flattened into plain HumanMessages for the model call
+     * only (see {@link flattenToolExchanges}); state keeps the original messages.
      */
     private async searchNode(state: GraphState, config: NodeConfig): Promise<NodeResult> {
-        return Sentry.startSpan({ name: "Search agent node", op: "agent.node.search" }, async () => {
+        return Sentry.startSpan({ name: "Search agent node", op: "agent.node.search" }, async (span) => {
             if (this.searchMode === SearchMode.tavily) {
                 if (!this.tavilyTool) {
                     throw new AppError(
@@ -814,57 +890,52 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     );
                 }
 
-                // The triage AIMessage (with the web_search tool call) was added to state
-                // by triageNode — read the query from its tool_calls.
+                // The triage AIMessage (with its web_search tool calls) was added to state by
+                // triageNode. It may hold several: despite the single-query tool schema, the model
+                // occasionally splits a search, and every call needs its own ToolMessage.
                 const triageMessage = state.messages.at(-1);
-                const webSearchCall =
+                const webSearchCalls =
                     triageMessage instanceof AIMessage
-                        ? triageMessage.tool_calls?.find((tc) => tc.name === ToolName.WEB_SEARCH)
-                        : undefined;
-                if (!webSearchCall) {
+                        ? (triageMessage.tool_calls ?? []).filter((tc) => tc.name === ToolName.WEB_SEARCH)
+                        : [];
+                if (webSearchCalls.length === 0) {
                     throw new AppError(
                         "ORCHESTRATOR_MISSING_SEARCH_QUERY",
                         "Tavily search mode: expected last state message to carry a web_search tool call",
                     );
                 }
-                // TYPE COERCION: tool_call args typed as Record<string, unknown>; schema guarantees query: string
-                const searchQuery = (webSearchCall.args as { query: string }).query;
 
-                this.logger.debug({ searchQuery }, "Tavily search node invoking tool");
-
-                const rawResult = await this.tavilyTool.invoke({ query: searchQuery });
-                const { objResponse, parsed } = safeParseTavilyResponse(rawResult);
-
-                if (!parsed.success) {
-                    this.logger.warn(
-                        { error: parsed.error.message },
-                        "Tavily response did not match expected schema — grounding sources will be omitted",
-                    );
-                }
-
-                // ToolMessage responding to the triage AIMessage's web_search tool call.
-                const tavilyResultMessage = new ToolMessage({
-                    content: JSON.stringify(objResponse.results),
-                    name: ToolName.WEB_SEARCH,
-                    tool_call_id: webSearchCall.id ?? "",
-                });
+                const tavilyTool = this.tavilyTool;
+                const searches = await Promise.all(
+                    webSearchCalls.map((toolCall) => runWebSearch(tavilyTool, toolCall, this.logger)),
+                );
+                const tavilyResultMessages = searches.map(({ toolMessage }) => toolMessage);
+                span.setAttribute("agent.web_search_count", searches.length);
 
                 // Grounding chunks in the Google Search shape, to be merged onto the final AIMessage
                 // so resolveGroundingSources can extract Tavily sources transparently.
-                // Only populated on successful schema parse; results whose URL is not an absolute
-                // http(s) URL are dropped by the mapper — see tavilyResultsToGroundingChunks.
-                const tavilyGroundingKwargs = parsed.success
-                    ? {
-                          groundingMetadata: {
-                              groundingChunks: tavilyResultsToGroundingChunks(parsed.data.results, this.logger),
-                          },
-                      }
-                    : {};
+                // Only populated from successful schema parses; searches can overlap, so a source
+                // found by more than one of them is listed once.
+                const parsedGroundingChunks = searches.flatMap(({ groundingChunks }) =>
+                    groundingChunks === null ? [] : [groundingChunks],
+                );
+                const tavilyGroundingKwargs =
+                    parsedGroundingChunks.length > 0
+                        ? {
+                              groundingMetadata: {
+                                  groundingChunks: dedupeGroundingChunks(parsedGroundingChunks.flat()),
+                              },
+                          }
+                        : {};
+
+                // The current turn's results must be flattened along with their triage tool calls,
+                // which are already on the last state message.
+                const history = flattenToolExchanges([...state.messages, ...tavilyResultMessages], this.logger);
+                span.setAttribute("agent.flattened_tool_exchanges", history.exchangeCount);
 
                 const invokeMessages: BaseMessage[] = [
                     new SystemMessage(buildSearchSystemPrompt(this.basePrompt, this.searchMode)),
-                    ...state.messages,
-                    tavilyResultMessage,
+                    ...history.messages,
                 ];
 
                 const invocation = await this.invoker.invoke(
@@ -889,14 +960,17 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 }
 
                 return {
-                    messages: [tavilyResultMessage, result],
+                    messages: [...tavilyResultMessages, result],
                     ...degradationUpdate(invocation, this.nodeFallbackRetryable.search),
                 };
             }
 
+            const history = flattenToolExchanges(state.messages, this.logger);
+            span.setAttribute("agent.flattened_tool_exchanges", history.exchangeCount);
+
             const messages: BaseMessage[] = [
                 new SystemMessage(buildSearchSystemPrompt(this.basePrompt, this.searchMode)),
-                ...state.messages,
+                ...history.messages,
             ];
             const invocation = await this.invoker.invoke(
                 this.nodeApiKeyTypes.search,
