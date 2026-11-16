@@ -40,6 +40,8 @@ function makeEmbed(imageUrl: string): IChatClientMessageEmbed {
         video: null,
         thumbnail: null,
         image: { url: imageUrl, proxyURL: null },
+        componentTexts: [],
+        componentMedia: [],
     };
 }
 
@@ -315,5 +317,108 @@ describe("buildLangchainMessage", () => {
 
         expect(cancelled).toBe(true);
         expect(result.content as unknown[]).toHaveLength(1);
+    });
+});
+
+describe("buildLangchainMessage — embed component media", () => {
+    let fetchSpy: ReturnType<typeof spyFetch>;
+
+    afterEach(() => {
+        fetchSpy.mockRestore();
+    });
+
+    /** A component-based embed: no classic media slots, only component media. */
+    function makeComponentsEmbed(media: IChatClientMessageEmbed["componentMedia"]): IChatClientMessageEmbed {
+        return {
+            ...makeEmbed(""),
+            type: "components",
+            image: null,
+            componentTexts: ["caption"],
+            componentMedia: media,
+        };
+    }
+
+    test("emits a component media token block using Discord's content type, without probing", async () => {
+        fetchSpy = spyFetch(makeHeadResponse("text/html"));
+
+        const result = await buildLangchainMessage({
+            ...BASE_PARAMS,
+            role: "human",
+            content: "text",
+            attachments: [],
+            embeds: [
+                makeComponentsEmbed([
+                    { id: "777", url: "https://m.example/v", proxyURL: "https://proxy/v", contentType: "video/mp4" },
+                ]),
+            ],
+        });
+
+        const blocks = result.content as Record<string, unknown>[];
+        expect(blocks[1]).toEqual({
+            type: "media",
+            mimeType: "video/mp4",
+            url: "discord://guild-1/chan-1/msg-1/embed/0/componentMedia/777",
+        });
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    test("uses the embed's index in the token and keeps gallery order", async () => {
+        fetchSpy = spyFetch(makeHeadResponse("image/png"));
+
+        const result = await buildLangchainMessage({
+            ...BASE_PARAMS,
+            role: "human",
+            content: "",
+            attachments: [],
+            embeds: [
+                makeEmbed("https://example.com/classic.png"),
+                makeComponentsEmbed([
+                    { id: "1", url: "https://m.example/a", proxyURL: null, contentType: "image/jpeg" },
+                    { id: "2", url: "https://m.example/b", proxyURL: null, contentType: "video/mp4" },
+                ]),
+            ],
+        });
+
+        const urls = (result.content as Record<string, unknown>[]).map((block) => block.url);
+        expect(urls).toEqual([
+            "discord://guild-1/chan-1/msg-1/embed/0/image",
+            "discord://guild-1/chan-1/msg-1/embed/1/componentMedia/1",
+            "discord://guild-1/chan-1/msg-1/embed/1/componentMedia/2",
+        ]);
+    });
+
+    test("probes the URL when Discord supplies no content type", async () => {
+        fetchSpy = spyFetch(makeHeadResponse("video/webm"));
+
+        const result = await buildLangchainMessage({
+            ...BASE_PARAMS,
+            role: "human",
+            content: "",
+            attachments: [],
+            embeds: [makeComponentsEmbed([{ id: "5", url: "https://m.example/v", proxyURL: null, contentType: null }])],
+        });
+
+        expect(fetchSpy).toHaveBeenCalledWith("https://m.example/v", expect.objectContaining({ method: "HEAD" }));
+        expect((result.content as Record<string, unknown>[])[0]?.mimeType).toBe("video/webm");
+    });
+
+    test("skips component media that is not image, video or audio", async () => {
+        fetchSpy = spyFetch(makeHeadResponse("text/html"));
+
+        const result = await buildLangchainMessage({
+            ...BASE_PARAMS,
+            role: "human",
+            content: "text",
+            attachments: [],
+            embeds: [
+                makeComponentsEmbed([
+                    { id: "5", url: "https://m.example/p", proxyURL: null, contentType: "text/html" },
+                ]),
+            ],
+        });
+
+        const blocks = result.content as Record<string, unknown>[];
+        expect(blocks).toHaveLength(1);
+        expect(blocks[0]?.type).toBe("text");
     });
 });

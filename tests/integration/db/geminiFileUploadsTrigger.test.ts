@@ -83,8 +83,6 @@ async function insertTestFile(originalGeminiUrl: string, messageId: string): Pro
         .insert(geminiFiles)
         .values({
             originalGeminiUrl,
-            discordAttachmentId: `att-${originalGeminiUrl.slice(-4)}`,
-            discordFilename: "test.png",
             messageId,
         })
         .returning();

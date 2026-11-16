@@ -3,14 +3,19 @@ import type { EmbedMediaKey } from "../../domain/entities/GeminiFile.ts";
 import { EMBED_MEDIA_KEYS } from "../../domain/entities/GeminiFile.ts";
 import type { IChatClientMessageAttachment, IChatClientMessageEmbed } from "../ports/chat/IChatClient.ts";
 import type { Logger } from "../types/Logger.ts";
-import { buildAttachmentTokenUrl, buildEmbedTokenUrl } from "./discordTokenUrl.ts";
+import { buildAttachmentTokenUrl, buildEmbedComponentMediaTokenUrl, buildEmbedTokenUrl } from "./discordTokenUrl.ts";
 import { normalizeGeminiMimeType } from "./geminiMimeType.ts";
 import { MEDIA_REQUEST_HEADERS } from "./mediaRequestHeaders.ts";
 import { parseMimeType } from "./parseMimeType.ts";
 
-/** Returns true if at least one embed contains a URL for any of the tracked media keys. */
+/**
+ * Returns true if at least one embed contains a URL for any of the tracked media keys,
+ * or media in its component tree.
+ */
 function embedsHaveMedia(embeds: IChatClientMessageEmbed[]): boolean {
-    return embeds.some((embed) => EMBED_MEDIA_KEYS.some((key) => embed[key]?.url != null));
+    return embeds.some(
+        (embed) => EMBED_MEDIA_KEYS.some((key) => embed[key]?.url != null) || embed.componentMedia.length > 0,
+    );
 }
 
 /** Maps each embed media key to the MIME type category prefix it must match. */
@@ -19,6 +24,30 @@ const EMBED_KEY_ACCEPT: Record<EmbedMediaKey, string> = {
     thumbnail: "image/",
     video: "video/",
 };
+
+/**
+ * MIME type category prefixes accepted for embed component media. A gallery item is
+ * not tied to a slot the way classic embed media is, so any media category qualifies.
+ */
+const COMPONENT_MEDIA_ACCEPT = ["image/", "video/", "audio/"];
+
+/** An embed media item awaiting MIME type resolution. */
+type EmbedMediaCandidate = {
+    embedIndex: number;
+    /** Slot name or component media ID — identifies the item in log output. */
+    key: string;
+    url: string;
+    proxyURL: string | null;
+    tokenUrl: string;
+    /** MIME type category prefixes the item may resolve to. */
+    accept: readonly string[];
+    /** MIME type reported by Discord itself; when present no HTTP probe is needed. */
+    knownMimeType: string | null;
+};
+
+function matchesAny(mimeType: string, prefixes: readonly string[]): boolean {
+    return prefixes.some((prefix) => mimeType.startsWith(prefix));
+}
 
 // TODO: config var for timeout
 const MIME_PROBE_TIMEOUT_MS = 10_000;
@@ -64,8 +93,10 @@ async function fetchEmbedMimeType(url: string): Promise<string | null> {
  * Builds message content parts as Discord token URL media blocks.
  *
  * Attachment mimeTypes are taken directly from attachment metadata.
- * Embed media mimeTypes are resolved via a header probe (HEAD, then ranged GET) — Discord
- * embed metadata does not carry MIME type information. Embed blocks are skipped when:
+ * Embed media mimeTypes are resolved via a header probe (HEAD, then ranged GET) — classic
+ * embed metadata does not carry MIME type information. Media in the component tree of a
+ * "components" embed comes with a MIME type from Discord and is probed only when that is
+ * missing. Embed blocks are skipped when:
  * - the probe fails or returns no Content-Type (embed URLs are flaky)
  * - the resolved MIME type does not match the expected category for the embed key
  *
@@ -100,13 +131,8 @@ async function buildTokenContentParts(
 
     if (embeds) {
         // Collect all embed media candidates first, then probe all concurrently.
-        const candidates: {
-            embedIndex: number;
-            key: EmbedMediaKey;
-            url: string;
-            proxyURL: string | null;
-            tokenUrl: string;
-        }[] = [];
+        const candidates: EmbedMediaCandidate[] = [];
+        const canBuildToken = guildId && channelId && discordMessageId;
         for (const [embedIndex, embed] of embeds.entries()) {
             for (const key of EMBED_MEDIA_KEYS) {
                 const media = embed[key];
@@ -115,21 +141,41 @@ async function buildTokenContentParts(
                     guildId && channelId && discordMessageId
                         ? buildEmbedTokenUrl(guildId, channelId, discordMessageId, embedIndex, key)
                         : media.url;
-                candidates.push({ embedIndex, key, url: media.url, proxyURL: media.proxyURL, tokenUrl });
+                candidates.push({
+                    embedIndex,
+                    key,
+                    url: media.url,
+                    proxyURL: media.proxyURL,
+                    tokenUrl,
+                    accept: [EMBED_KEY_ACCEPT[key]],
+                    knownMimeType: null,
+                });
+            }
+            // Media nested in the component tree of a "components" embed (e.g. gallery videos)
+            for (const media of embed.componentMedia) {
+                candidates.push({
+                    embedIndex,
+                    key: media.id,
+                    url: media.url,
+                    proxyURL: media.proxyURL,
+                    tokenUrl: canBuildToken
+                        ? buildEmbedComponentMediaTokenUrl(guildId, channelId, discordMessageId, embedIndex, media.id)
+                        : media.url,
+                    accept: COMPONENT_MEDIA_ACCEPT,
+                    knownMimeType: parseMimeType(media.contentType),
+                });
             }
         }
 
         const resolved = await Promise.all(
-            candidates.map(async ({ embedIndex, key, url, proxyURL, tokenUrl }) => {
-                const expected = EMBED_KEY_ACCEPT[key];
-
+            candidates.map(async ({ embedIndex, key, url, proxyURL, tokenUrl, accept, knownMimeType }) => {
                 // Probe the original URL to get the real Content-Type — Discord embed
                 // metadata has no MIME type. For embeds like Instagram link-previews, the
                 // original URL may be a webpage (text/html), but Discord's proxyURL serves the
                 // actual media with the correct MIME type — fall back to it when the primary
                 // URL fails or returns a mismatched type.
-                let mimeType = await fetchEmbedMimeType(url);
-                if (mimeType === null || !mimeType.startsWith(expected)) {
+                let mimeType = knownMimeType ?? (await fetchEmbedMimeType(url));
+                if (mimeType === null || !matchesAny(mimeType, accept)) {
                     if (proxyURL) {
                         mimeType = await fetchEmbedMimeType(proxyURL);
                     }
@@ -144,7 +190,7 @@ async function buildTokenContentParts(
 
                 // Validate the resolved type matches the category implied by the embed key.
                 // A mismatch means the URL is serving unexpected content — skip the block.
-                if (!mimeType.startsWith(expected)) {
+                if (!matchesAny(mimeType, accept)) {
                     return null;
                 }
 
@@ -181,6 +227,8 @@ async function buildTokenContentParts(
  * Token URL formats:
  *   Attachment:  discord://guildId/channelId/messageId/attachmentId
  *   Embed media: discord://guildId/channelId/messageId/embed/embedIndex/mediaKey
+ *   Embed component media:
+ *                discord://guildId/channelId/messageId/embed/embedIndex/componentMedia/mediaId
  */
 export async function buildLangchainMessage<R extends "human" | "assistant">(params: {
     role: R;

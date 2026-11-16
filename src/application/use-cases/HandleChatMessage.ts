@@ -13,6 +13,7 @@ import { emptyResponseNotice, responseFooter } from "../formatters/responseFoote
 import { discordMessageToLlmText, llmTextToDiscordText } from "../formatters/textTransformers.ts";
 import { buildLangchainMessage } from "../helpers/buildLangchainMessage.ts";
 import { parseMessageIntent, removeMentionsAndCommandPrefix } from "../helpers/chatMessageTransformers.ts";
+import { collectMessageMedia } from "../helpers/collectMessageMedia.ts";
 import { hasExtendedMarkdown } from "../helpers/hasExtendedMarkdown.ts";
 import {
     extractInlineDataBlocksAsAttachments,
@@ -170,7 +171,8 @@ export class HandleChatMessageUseCase {
                 }
 
                 const userContent = removeMentionsAndCommandPrefix(message.content, this.bot.userId, message.botRoleId);
-                const attachments = message.attachments;
+                // Includes the media of a forwarded snapshot, which the message itself does not carry
+                const { attachments, embeds } = collectMessageMedia(message);
 
                 // No usable content after stripping mentions/commands, no attachments, and no reply
                 // reference — substitute a synthetic greeting so the agent can introduce itself.
@@ -194,6 +196,7 @@ export class HandleChatMessageUseCase {
                     message,
                     userContent: effectiveUserContent,
                     attachments,
+                    embeds,
                     intent,
                 });
                 await this.sendAgentResponse({
@@ -287,7 +290,7 @@ export class HandleChatMessageUseCase {
                 message: userContent !== null ? message : null,
                 strippedContent: userContent,
                 attachments: attachments ?? [],
-                embeds: embeds ?? message.embeds,
+                embeds: embeds ?? collectMessageMedia(message).embeds,
                 intent,
                 onStatusUpdate,
                 reuseHumanMessage,
@@ -966,12 +969,12 @@ export class HandleChatMessageUseCase {
                             (this.previousBotId !== undefined && liveMsg.authorId === this.previousBotId);
                         const content = ownBot ? liveMsg.cleanContent : discordMessageToLlmText(liveMsg);
 
-                        const attachments = [...liveMsg.attachments, ...(liveMsg.forwardedSnapshot?.attachments ?? [])];
+                        const { attachments, embeds } = collectMessageMedia(liveMsg);
                         const msg = await buildLangchainMessage({
                             role: ownBot ? "assistant" : "human",
                             content,
                             attachments,
-                            embeds: liveMsg.embeds,
+                            embeds,
                             logger: this.logger,
                             guildId: liveMsg.guildId ?? "@me",
                             channelId: liveMsg.channelId,

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
     buildAttachmentTokenUrl,
+    buildEmbedComponentMediaTokenUrl,
     buildEmbedTokenUrl,
     isDiscordTokenUrl,
     parseDiscordTokenUrl,
@@ -166,5 +167,36 @@ describe("parseDiscordTokenUrl", () => {
         test("returns null for embed token with negative embedIndex", () => {
             expect(parseDiscordTokenUrl("discord://g/c/m/embed/-1/image")).toBeNull();
         });
+    });
+});
+
+describe("embed component media token URLs", () => {
+    test("builds a URL addressing the media item by ID", () => {
+        expect(buildEmbedComponentMediaTokenUrl("guild1", "chan1", "msg1", 2, "1571900675489661030")).toBe(
+            "discord://guild1/chan1/msg1/embed/2/componentMedia/1571900675489661030",
+        );
+    });
+
+    test("round-trips through the parser", () => {
+        const url = buildEmbedComponentMediaTokenUrl("@me", "chan1", "msg1", 0, "42");
+        expect(parseDiscordTokenUrl(url)).toEqual({
+            kind: "embedComponentMedia",
+            guildId: "@me",
+            channelId: "chan1",
+            messageId: "msg1",
+            embedIndex: 0,
+            mediaId: "42",
+        });
+    });
+
+    test("is not mistaken for a classic embed media token, and vice versa", () => {
+        expect(parseDiscordTokenUrl("discord://g/c/m/embed/0/video")?.kind).toBe("embed");
+        expect(parseDiscordTokenUrl("discord://g/c/m/embed/0/componentMedia/7")?.kind).toBe("embedComponentMedia");
+    });
+
+    test("rejects a component media token without a media ID or with a bad embed index", () => {
+        expect(parseDiscordTokenUrl("discord://g/c/m/embed/0/componentMedia")).toBeNull();
+        expect(parseDiscordTokenUrl("discord://g/c/m/embed/0/componentMedia/")).toBeNull();
+        expect(parseDiscordTokenUrl("discord://g/c/m/embed/x/componentMedia/7")).toBeNull();
     });
 });

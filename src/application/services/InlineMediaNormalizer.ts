@@ -13,6 +13,7 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import { HumanMessage } from "@langchain/core/messages";
 import { parseDiscordTokenUrl } from "../helpers/discordTokenUrl.ts";
+import { fetchDiscordTokenMedia } from "../helpers/fetchDiscordTokenMedia.ts";
 import type { IAttachmentDownloader } from "../ports/IAttachmentDownloader.ts";
 import type { IDiscordMediaService } from "../ports/IDiscordMediaService.ts";
 import type { IInlineMediaNormalizer } from "../ports/IInlineMediaNormalizer.ts";
@@ -116,18 +117,7 @@ export class InlineMediaNormalizer implements IInlineMediaNormalizer {
             return null;
         }
 
-        let attachment: Awaited<ReturnType<IDiscordMediaService["fetchAttachment"]>>;
-
-        if (token.kind === "attachment") {
-            attachment = await this.mediaService.fetchAttachment(token.channelId, token.messageId, token.attachmentId);
-        } else {
-            attachment = await this.mediaService.fetchEmbedMedia(
-                token.channelId,
-                token.messageId,
-                token.embedIndex,
-                token.mediaKey,
-            );
-        }
+        const attachment = await fetchDiscordTokenMedia(this.mediaService, token);
 
         if (!attachment) {
             this.logger.warn(

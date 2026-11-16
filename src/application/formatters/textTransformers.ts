@@ -149,8 +149,12 @@ export function formatUtcTimestamp(d: Date): string {
 }
 
 /**
- * Renders a single embed's text fields (no URLs) as a labelled block.
+ * Renders a single embed's text fields (no media URLs) as a labelled block.
  * Returns an empty string when there are no displayable text fields.
+ *
+ * Component-based embeds leave the classic fields empty and carry their text in
+ * `componentTexts` instead (author, caption, footer, link to the original post);
+ * those entries are emitted verbatim under "Content:".
  *
  * `timestamp` is a raw ISO 8601 string on {@link IChatClientMessageEmbed} —
  * formatted here to a verbose UTC string for LLM readability.
@@ -172,6 +176,7 @@ function renderEmbed(embed: IChatClientMessageEmbed, index: number): string {
         }
     }
     if (embed.footerText) lines.push(`Footer: ${embed.footerText}`);
+    if (embed.componentTexts?.length) lines.push("Content:", ...embed.componentTexts);
     // URL fields (video/image/thumbnail) are intentionally omitted — used for media, not text context
     return lines.join("\n");
 }

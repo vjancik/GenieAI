@@ -1,8 +1,16 @@
-import type { Client } from "discord.js";
+import type { Client, Embed, Message } from "discord.js";
 import type { IChatClientMessageAttachment } from "../../application/ports/chat/IChatClient.ts";
 import type { IDiscordMediaService } from "../../application/ports/IDiscordMediaService.ts";
 import type { EmbedMediaKey } from "../../domain/entities/GeminiFile.ts";
 import type { DiscordClient } from "./DiscordClient.ts";
+import type { EmbedComponentMedia } from "./embedComponents.ts";
+import { parseEmbedComponents } from "./embedComponents.ts";
+
+/** Finds a media item by ID in the component tree of the given embed, if it has one. */
+function findComponentMedia(embed: Embed | undefined, mediaId: string): EmbedComponentMedia | null {
+    if (!embed) return null;
+    return parseEmbedComponents(embed.data).media.find((media) => media.id === mediaId) ?? null;
+}
 
 /**
  * Fetches Discord media (attachments and embed media) by re-fetching the source
@@ -111,6 +119,53 @@ export class DiscordMediaService implements IDiscordMediaService {
                 // Embed media items do not carry a file size; use 0 as a sentinel
                 size: 0,
                 // Content type is not available from embed metadata; resolved from HTTP response on download
+                contentType: null,
+            };
+        } catch {
+            return null;
+        }
+    }
+
+    async fetchEmbedComponentMedia(
+        channelId: string,
+        messageDiscordId: string,
+        embedIndex: number,
+        mediaId: string,
+    ): Promise<IChatClientMessageAttachment | null> {
+        try {
+            const channel = await this.client.channels.fetch(channelId);
+            if (!channel?.isTextBased()) return null;
+
+            const msg: Message = await channel.messages.fetch(messageDiscordId);
+
+            // The embed the token was built from is tried first. The ID alone identifies the item,
+            // so the remaining embeds — the message's own, then those of any messageSnapshots
+            // (e.g. forwards) — are searched as well in case the index no longer lines up.
+            const embeds = [
+                msg.embeds[embedIndex],
+                ...msg.embeds,
+                ...[...msg.messageSnapshots.values()].flatMap((snapshot) => snapshot.embeds),
+            ];
+            let media: EmbedComponentMedia | null = null;
+            for (const embed of embeds) {
+                media = findComponentMedia(embed, mediaId);
+                if (media) break;
+            }
+
+            if (!media) return null;
+
+            return {
+                id: media.id,
+                // Same preference as classic embed media: Discord's proxy reliably serves the bytes,
+                // the original URL is the fallback.
+                url: media.proxyURL ?? media.url,
+                proxyURL: media.url,
+                name: `Embed-${embedIndex + 1}-Media-${media.id}`,
+                // Embed media items do not carry a file size; use 0 as a sentinel
+                size: 0,
+                // Left null on purpose, like classic embed media: the downloaders then validate the
+                // HTTP response type against the expected one, instead of trusting it blindly —
+                // a host that answers with an HTML page must not be passed on as media.
                 contentType: null,
             };
         } catch {

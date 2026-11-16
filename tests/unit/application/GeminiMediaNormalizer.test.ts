@@ -85,11 +85,6 @@ function makeFile(overrides: Partial<GeminiFile> = {}): GeminiFile {
     return {
         id: "file-uuid-1",
         originalGeminiUrl: TOKEN_URL,
-        sourceType: "attachment",
-        discordAttachmentId: "att-001",
-        discordFilename: "image.png",
-        embedIndex: null,
-        embedMediaKey: null,
         messageId: "msg-uuid-1",
         discordMessageId: "msg-001",
         discordChannelId: "chan-001",
@@ -204,6 +199,7 @@ function makeMediaService(
     return {
         fetchAttachment: mock(async () => attachment),
         fetchEmbedMedia: mock(async () => attachment),
+        fetchEmbedComponentMedia: mock(async () => attachment),
     };
 }
 
@@ -508,5 +504,108 @@ describe("GeminiMediaNormalizer.normalize", () => {
 
         // No token URLs found → same array reference
         expect(result[0]).toBe(msg);
+    });
+});
+
+describe("GeminiMediaNormalizer — locating media from the anchor's token URL", () => {
+    /** Runs a normalize() that must re-upload `file`, and returns the media service used. */
+    async function reuploadWith(file: GeminiFile, msg: HumanMessage, upload: GeminiFileUpload | null = null) {
+        const mediaService = makeMediaService();
+        const normalizer = new GeminiMediaNormalizer(
+            makeRepo([{ file, upload }]),
+            makeMessageRepo(),
+            makeRegistry(makeUploader(GEMINI_URL_NEW)),
+            makeStreamingDownloader(),
+            mediaService,
+            testLogger,
+            testConfig,
+        );
+        const result = await normalizer.normalize([msg], TEST_API_KEY_ID);
+        return { mediaService, blocks: (result[0] as HumanMessage).content as Record<string, unknown>[] };
+    }
+
+    test("re-uploads an attachment found by the attachment ID in the token", async () => {
+        const { mediaService, blocks } = await reuploadWith(makeFile(), makeTokenMsg());
+
+        expect(mediaService.fetchAttachment).toHaveBeenCalledWith("chan-001", "msg-001", "att-001");
+        expect(blocks[0]?.fileUri).toBe(GEMINI_URL_NEW);
+    });
+
+    test("re-uploads classic embed media found by embed index and media key", async () => {
+        const tokenUrl = "discord://guild-001/chan-001/msg-001/embed/1/video";
+        const { mediaService, blocks } = await reuploadWith(
+            makeFile({ originalGeminiUrl: tokenUrl }),
+            makeTokenMsg(tokenUrl),
+        );
+
+        expect(mediaService.fetchEmbedMedia).toHaveBeenCalledWith("chan-001", "msg-001", 1, "video");
+        expect(mediaService.fetchAttachment).not.toHaveBeenCalled();
+        expect(blocks[0]?.fileUri).toBe(GEMINI_URL_NEW);
+    });
+
+    test("re-uploads embed component media found by media ID", async () => {
+        const tokenUrl = "discord://guild-001/chan-001/msg-001/embed/0/componentMedia/9001";
+        const { mediaService, blocks } = await reuploadWith(
+            makeFile({ originalGeminiUrl: tokenUrl }),
+            makeTokenMsg(tokenUrl),
+        );
+
+        expect(mediaService.fetchEmbedComponentMedia).toHaveBeenCalledWith("chan-001", "msg-001", 0, "9001");
+        expect(blocks[0]?.fileUri).toBe(GEMINI_URL_NEW);
+    });
+
+    test("uploads embed component media for the first time when no anchor exists", async () => {
+        const tokenUrl = "discord://guild-001/chan-001/msg-001/embed/0/componentMedia/9001";
+        const repo = makeRepo();
+        const mediaService = makeMediaService();
+        const normalizer = new GeminiMediaNormalizer(
+            repo,
+            makeMessageRepo(),
+            makeRegistry(makeUploader(GEMINI_URL_NEW)),
+            makeStreamingDownloader(),
+            mediaService,
+            testLogger,
+            testConfig,
+        );
+
+        const result = await normalizer.normalize([makeTokenMsg(tokenUrl)], TEST_API_KEY_ID);
+
+        expect(mediaService.fetchEmbedComponentMedia).toHaveBeenCalledWith("chan-001", "msg-001", 0, "9001");
+        expect(((result[0] as HumanMessage).content as Record<string, unknown>[])[0]?.fileUri).toBe(GEMINI_URL_NEW);
+        // The anchor consists of nothing but the token URL and the owning message
+        const saved = (repo.saveFiles as ReturnType<typeof mock>).mock.calls[0]?.[0] as Record<string, unknown>[];
+        expect(Object.keys(saved[0] ?? {}).sort()).toEqual(["messageId", "originalGeminiUrl"]);
+        expect(saved[0]?.originalGeminiUrl).toBe(tokenUrl);
+    });
+
+    test("a stale fileUri block is re-uploaded from the anchor's token, not from the block's Gemini URL", async () => {
+        const tokenUrl = "discord://guild-001/chan-001/msg-001/embed/2/image";
+        const fileUriMsg = new HumanMessage({
+            content: [{ type: "media", mimeType: "image/png", fileUri: GEMINI_URL }],
+        });
+        const { mediaService, blocks } = await reuploadWith(
+            makeFile({ originalGeminiUrl: tokenUrl }),
+            fileUriMsg,
+            makeUpload({ uploadedAt: hoursAgo(48), geminiUrl: GEMINI_URL }),
+        );
+
+        expect(mediaService.fetchEmbedMedia).toHaveBeenCalledWith("chan-001", "msg-001", 2, "image");
+        expect(blocks[0]?.fileUri).toBe(GEMINI_URL_NEW);
+    });
+
+    test("drops the block when the anchor does not hold a token URL", async () => {
+        const legacyKey = "https://generativelanguage.googleapis.com/v1beta/files/legacy";
+        const fileUriMsg = new HumanMessage({
+            content: [{ type: "media", mimeType: "image/png", fileUri: GEMINI_URL }],
+        });
+        const { mediaService, blocks } = await reuploadWith(
+            makeFile({ originalGeminiUrl: legacyKey }),
+            fileUriMsg,
+            makeUpload({ uploadedAt: hoursAgo(48), geminiUrl: GEMINI_URL }),
+        );
+
+        expect(mediaService.fetchAttachment).not.toHaveBeenCalled();
+        expect(mediaService.fetchEmbedMedia).not.toHaveBeenCalled();
+        expect(blocks).toHaveLength(0);
     });
 });

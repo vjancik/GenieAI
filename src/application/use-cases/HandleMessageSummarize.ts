@@ -2,6 +2,7 @@ import * as Sentry from "@sentry/bun";
 import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
 import { MessageIntent } from "../../domain/value-objects/MessageIntent.ts";
 import { removeMentionsAndCommandPrefix } from "../helpers/chatMessageTransformers.ts";
+import { collectMessageMedia } from "../helpers/collectMessageMedia.ts";
 import type {
     IChatClientBot,
     IChatClientContextMenuInteraction,
@@ -84,8 +85,8 @@ export class HandleSummarizeUseCase {
                     },
                     "Handling Summarize command",
                 );
-                const attachments = targetMessage.attachments;
-                const embeds = targetMessage.embeds;
+                // Includes the media of a forwarded snapshot, which the message itself does not carry
+                const { attachments, embeds } = collectMessageMedia(targetMessage);
                 const userContent = removeMentionsAndCommandPrefix(
                     targetMessage.content,
                     botUserId,

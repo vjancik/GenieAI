@@ -1,7 +1,11 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { ContentBlock } from "@langchain/core/messages";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
-import { buildAttachmentTokenUrl, buildEmbedTokenUrl } from "../../../src/application/helpers/discordTokenUrl.ts";
+import {
+    buildAttachmentTokenUrl,
+    buildEmbedComponentMediaTokenUrl,
+    buildEmbedTokenUrl,
+} from "../../../src/application/helpers/discordTokenUrl.ts";
 import type { IAttachmentDownloader } from "../../../src/application/ports/IAttachmentDownloader.ts";
 import type { IDiscordMediaService } from "../../../src/application/ports/IDiscordMediaService.ts";
 import { InlineMediaNormalizer } from "../../../src/application/services/InlineMediaNormalizer.ts";
@@ -228,5 +232,29 @@ describe("InlineMediaNormalizer", () => {
         expect(content).toHaveLength(3);
         expect((content[1] as unknown as { data: string }).data).toBe("alreadyResolved");
         expect((content[2] as unknown as { data: string }).data).toBe("newlyResolved");
+    });
+});
+
+describe("InlineMediaNormalizer — embed component media", () => {
+    test("resolves a component media token block through fetchEmbedComponentMedia", async () => {
+        const msg = humanWithToken(buildEmbedComponentMediaTokenUrl("guild1", "chan1", "msg1", 2, "555"), "video/mp4");
+        const mediaService = {
+            fetchAttachment: mock(),
+            fetchEmbedMedia: mock(),
+            fetchEmbedComponentMedia: mock(() => Promise.resolve({ ...FAKE_ATTACHMENT, contentType: null })),
+        } as unknown as IDiscordMediaService;
+        const downloader = {
+            download: mock(() => Promise.resolve({ data: "videoBase64", mimeType: "video/mp4", name: "v.mp4" })),
+        } as unknown as IAttachmentDownloader;
+
+        const result = await makeNormalizer(mediaService, downloader).normalize([msg]);
+
+        const content = (result[0] as HumanMessage).content as ContentBlock[];
+        expect(content[1]).toEqual({ type: "media", mimeType: "video/mp4", data: "videoBase64" });
+        expect(mediaService.fetchEmbedComponentMedia).toHaveBeenCalledWith("chan1", "msg1", 2, "555");
+        expect(mediaService.fetchAttachment).not.toHaveBeenCalled();
+        expect(mediaService.fetchEmbedMedia).not.toHaveBeenCalled();
+        // The block's MIME type is passed on so the downloader can reject a non-media response
+        expect((downloader.download as ReturnType<typeof mock>).mock.calls[0]?.[1]).toBe("video/mp4");
     });
 });

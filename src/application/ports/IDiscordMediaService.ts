@@ -44,4 +44,22 @@ export interface IDiscordMediaService {
         embedIndex: number,
         embedMediaKey: EmbedMediaKey,
     ): Promise<IChatClientMessageAttachment | null>;
+
+    /**
+     * Fetches a media item nested in the component tree of a "components" embed, by
+     * re-fetching the message to get a fresh CDN URL. Searches the embeds of the
+     * message and of any embedded message snapshots (e.g. forwards).
+     * Returns `null` if the message no longer exists or no embed carries that media item.
+     *
+     * @param channelId - Discord snowflake of the channel containing the message
+     * @param messageDiscordId - Discord snowflake of the message to fetch
+     * @param embedIndex - Zero-based index of the embed the item was found on; searched first
+     * @param mediaId - Snowflake of the media item
+     */
+    fetchEmbedComponentMedia(
+        channelId: string,
+        messageDiscordId: string,
+        embedIndex: number,
+        mediaId: string,
+    ): Promise<IChatClientMessageAttachment | null>;
 }

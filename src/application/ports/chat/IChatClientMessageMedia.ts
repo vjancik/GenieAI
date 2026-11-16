@@ -33,6 +33,20 @@ export interface IChatClientMessageEmbedMedia {
     readonly proxyURL: string | null;
 }
 
+/**
+ * A media item nested in the component tree of a component-based embed.
+ * Unlike {@link IChatClientMessageEmbedMedia} it is individually addressable and
+ * carries the platform-reported content type.
+ */
+export interface IChatClientMessageEmbedComponentMedia {
+    /** Platform ID of the media item, stable across re-fetches of the message. */
+    readonly id: string;
+    readonly url: string;
+    readonly proxyURL: string | null;
+    /** MIME type reported by the platform, or null when it did not provide one. */
+    readonly contentType: string | null;
+}
+
 /** Content of the source message in a Discord forward. */
 export interface IChatClientMessageSnapshot {
     /** Raw message content. Null when unavailable. */
@@ -63,4 +77,15 @@ export interface IChatClientMessageEmbed {
     readonly video: IChatClientMessageEmbedMedia | null;
     readonly image: IChatClientMessageEmbedMedia | null;
     readonly thumbnail: IChatClientMessageEmbedMedia | null;
+    /**
+     * Text of a component-based embed, in display order: one entry per text block, plus
+     * link buttons rendered as Markdown links. Empty for classic embeds, whose text lives
+     * in the fields above — component-based embeds leave those fields blank instead.
+     */
+    readonly componentTexts: string[];
+    /**
+     * Content media (gallery items) of a component-based embed, in display order.
+     * Decorative thumbnails such as author avatars are excluded. Empty for classic embeds.
+     */
+    readonly componentMedia: IChatClientMessageEmbedComponentMedia[];
 }

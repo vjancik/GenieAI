@@ -86,11 +86,6 @@ function filePayload(
 ): Omit<GeminiFile, "id" | "discordMessageId" | "discordChannelId"> {
     return {
         originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/test-file",
-        sourceType: "attachment",
-        discordAttachmentId: "att-001",
-        discordFilename: "photo.png",
-        embedIndex: null,
-        embedMediaKey: null,
         messageId,
         ...overrides,
     };
@@ -203,7 +198,6 @@ describe("PgGeminiFileRepository.findByOriginalUrl", () => {
         const file2 = await insertTestFile(
             filePayload(msg.id, {
                 originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/multi-2",
-                discordAttachmentId: "att-002",
             }),
         );
 
@@ -417,7 +411,6 @@ describe("PgGeminiFileRepository.saveFiles", () => {
             }),
             filePayload(msg.id, {
                 originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/file-2",
-                discordAttachmentId: "att-002",
             }),
         ]);
 

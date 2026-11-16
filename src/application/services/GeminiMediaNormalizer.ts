@@ -4,12 +4,12 @@ import * as Sentry from "@sentry/bun";
 import { randomUUIDv7 } from "bun";
 import { LRUCache } from "lru-cache";
 import type { GeminiFile } from "../../domain/entities/GeminiFile.ts";
-import { GeminiFileSourceType } from "../../domain/entities/GeminiFile.ts";
 import type { GeminiFileUpload } from "../../domain/entities/GeminiFileUpload.ts";
 import type { IGeminiFileRepository } from "../../domain/ports/IGeminiFileRepository.ts";
 import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
 import type { AppConfig } from "../config/AppConfig.ts";
 import { parseDiscordTokenUrl } from "../helpers/discordTokenUrl.ts";
+import { fetchDiscordTokenMedia } from "../helpers/fetchDiscordTokenMedia.ts";
 import type { IDiscordMediaService } from "../ports/IDiscordMediaService.ts";
 import type { IGeminiFileUploaderRegistry } from "../ports/IGeminiFileUploaderRegistry.ts";
 import type { IGeminiMediaNormalizer } from "../ports/IGeminiMediaNormalizer.ts";
@@ -314,15 +314,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
             }
 
             // Fetch fresh CDN URL from Discord
-            const fetched =
-                token.kind === "attachment"
-                    ? await this.mediaService.fetchAttachment(token.channelId, token.messageId, token.attachmentId)
-                    : await this.mediaService.fetchEmbedMedia(
-                          token.channelId,
-                          token.messageId,
-                          token.embedIndex,
-                          token.mediaKey,
-                      );
+            const fetched = await fetchDiscordTokenMedia(this.mediaService, token);
 
             if (!fetched) {
                 this.logger.warn({ tokenUrl }, "Discord media not found for new upload — dropping block");
@@ -342,24 +334,6 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                 byteLength ?? fetched.size,
             );
 
-            // Build the anchor record from the parsed token
-            const anchorBase =
-                token.kind === "attachment"
-                    ? {
-                          sourceType: GeminiFileSourceType.ATTACHMENT,
-                          discordAttachmentId: token.attachmentId,
-                          discordFilename: fetched.name,
-                          embedIndex: null,
-                          embedMediaKey: null,
-                      }
-                    : {
-                          sourceType: GeminiFileSourceType.EMBED_MEDIA,
-                          discordAttachmentId: null,
-                          discordFilename: null,
-                          embedIndex: token.embedIndex,
-                          embedMediaKey: token.mediaKey,
-                      };
-
             // messageId FK: look up the messages row UUID from the discord snowflake encoded in the token
             const messageId = await this.messageRepo.getIdByDiscordMessageId({
                 discordMessageId: token.messageId,
@@ -377,9 +351,8 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                 return uploaded.geminiUrl;
             }
 
-            const [savedFile] = await this.geminiFileRepo.saveFiles([
-                { ...anchorBase, originalGeminiUrl: tokenUrl, messageId },
-            ]);
+            // The token URL is the whole anchor: it is all that is needed to find the media again
+            const [savedFile] = await this.geminiFileRepo.saveFiles([{ originalGeminiUrl: tokenUrl, messageId }]);
 
             await this.geminiFileRepo.upsertUpload({
                 // biome-ignore lint/style/noNonNullAssertion: saveFiles always returns index-aligned results
@@ -400,10 +373,15 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
      * Re-downloads and re-uploads a file whose anchor exists but whose upload record is
      * missing (new key / trigger-cleaned) or stale (approaching Gemini TTL).
      *
+     * The media is located by parsing the anchor's own `discord://` token URL rather than
+     * `blockKey`, which is a Gemini fileUri when the block was already resolved earlier.
+     *
+     * @param blockKey - The URL found in the content block: a token URL or a Gemini fileUri. Used for logging only.
+     *
      * Returns the new Gemini `fileUri`, or `null` if the Discord media is gone.
      */
     private async reupload(
-        tokenUrl: string,
+        blockKey: string,
         acceptMimeType: string | undefined,
         file: GeminiFile,
         existingUpload: GeminiFileUpload | null,
@@ -416,40 +394,21 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                 attributes: { "gemini.is_stale_refresh": existingUpload !== null },
             },
             async () => {
-                let attachment: Awaited<ReturnType<typeof this.mediaService.fetchAttachment>>;
-
-                if (file.sourceType === GeminiFileSourceType.EMBED_MEDIA) {
-                    if (file.embedIndex === null || file.embedMediaKey === null) {
-                        this.logger.error(
-                            { tokenUrl, fileId: file.id },
-                            "embed_media record missing embedIndex or embedMediaKey — skipping re-upload",
-                        );
-                        return null;
-                    }
-                    attachment = await this.mediaService.fetchEmbedMedia(
-                        file.discordChannelId,
-                        file.discordMessageId,
-                        file.embedIndex,
-                        file.embedMediaKey,
+                const tokenUrl = file.originalGeminiUrl;
+                const token = parseDiscordTokenUrl(tokenUrl);
+                if (!token) {
+                    this.logger.error(
+                        { blockKey, tokenUrl, fileId: file.id },
+                        "Gemini file anchor does not hold a valid discord token URL — skipping re-upload",
                     );
-                } else {
-                    if (file.discordAttachmentId === null) {
-                        this.logger.error(
-                            { tokenUrl, fileId: file.id },
-                            "attachment record missing discordAttachmentId — skipping re-upload",
-                        );
-                        return null;
-                    }
-                    attachment = await this.mediaService.fetchAttachment(
-                        file.discordChannelId,
-                        file.discordMessageId,
-                        file.discordAttachmentId,
-                    );
+                    return null;
                 }
+
+                const attachment = await fetchDiscordTokenMedia(this.mediaService, token);
 
                 if (!attachment) {
                     this.logger.warn(
-                        { tokenUrl, sourceType: file.sourceType, discordMessageId: file.discordMessageId },
+                        { tokenUrl, kind: token.kind, discordMessageId: token.messageId },
                         "Discord media no longer exists — dropping block",
                     );
                     return null;

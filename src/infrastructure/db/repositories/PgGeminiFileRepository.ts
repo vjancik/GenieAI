@@ -20,11 +20,6 @@ function buildFindByOriginalUrlStmt(db: Db) {
         .select({
             fileId: geminiFiles.id,
             fileOriginalGeminiUrl: geminiFiles.originalGeminiUrl,
-            fileSourceType: geminiFiles.sourceType,
-            fileDiscordAttachmentId: geminiFiles.discordAttachmentId,
-            fileDiscordFilename: geminiFiles.discordFilename,
-            fileEmbedIndex: geminiFiles.embedIndex,
-            fileEmbedMediaKey: geminiFiles.embedMediaKey,
             fileMessageId: geminiFiles.messageId,
             msgDiscordMessageId: messages.discordMessageId,
             msgChannelId: messages.channelId,
@@ -48,8 +43,8 @@ function buildFindByOriginalUrlStmt(db: Db) {
         .prepare("gemini_file_find_by_original_url");
 }
 
-// LEGACY: Legacy query for pre-refactor pre-discord-token URLs baked in Langchain messages.
-//         Not used for new conversations.
+// Looks anchors up by a resolved Gemini URL, for fileUri blocks carried over from an earlier
+// agent turn of the same execution (and pre-token-refactor histories).
 // NOTE: I hate this with a passion, but this is a limitation introduced by loss of state
 //       due to how Langgraph state is structured. To override it with extra context from DB
 //       would mean losing message formatting in LangSmith. For now this is a painful but acceptable trade-off.
@@ -72,11 +67,6 @@ function buildFindByUploadUrlStmt(db: Db) {
         .select({
             fileId: geminiFiles.id,
             fileOriginalGeminiUrl: geminiFiles.originalGeminiUrl,
-            fileSourceType: geminiFiles.sourceType,
-            fileDiscordAttachmentId: geminiFiles.discordAttachmentId,
-            fileDiscordFilename: geminiFiles.discordFilename,
-            fileEmbedIndex: geminiFiles.embedIndex,
-            fileEmbedMediaKey: geminiFiles.embedMediaKey,
             fileMessageId: geminiFiles.messageId,
             msgDiscordMessageId: messages.discordMessageId,
             msgChannelId: messages.channelId,
@@ -146,11 +136,6 @@ function buildUpsertUploadStmt(db: Db) {
 type UploadStateRow = {
     fileId: string;
     fileOriginalGeminiUrl: string;
-    fileSourceType: GeminiFile["sourceType"];
-    fileDiscordAttachmentId: string | null;
-    fileDiscordFilename: string | null;
-    fileEmbedIndex: number | null;
-    fileEmbedMediaKey: GeminiFile["embedMediaKey"];
     fileMessageId: string;
     msgDiscordMessageId: string;
     msgChannelId: string;
@@ -167,11 +152,6 @@ function buildFileAndUpload(row: UploadStateRow): { file: GeminiFile; upload: Ge
     const file: GeminiFile = {
         id: row.fileId,
         originalGeminiUrl: row.fileOriginalGeminiUrl,
-        sourceType: row.fileSourceType,
-        discordAttachmentId: row.fileDiscordAttachmentId,
-        discordFilename: row.fileDiscordFilename,
-        embedIndex: row.fileEmbedIndex,
-        embedMediaKey: row.fileEmbedMediaKey,
         messageId: row.fileMessageId,
         discordMessageId: row.msgDiscordMessageId,
         discordChannelId: row.msgChannelId,
@@ -204,7 +184,7 @@ function buildFileAndUpload(row: UploadStateRow): { file: GeminiFile; upload: Ge
  * - `gemini_file_uploads` — ephemeral per-(file, api_key) upload tracking.
  *   Rows are cleaned by a BEFORE INSERT trigger when they exceed 48h.
  *
- * The two-table design preserves Discord context (attachment ID, filename, message ID)
+ * The two-table design preserves Discord context (the `discord://` token URL)
  * even after stale upload rows are trigger-cleaned, allowing re-upload without
  * scanning LangChain message JSON.
  *

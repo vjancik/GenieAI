@@ -182,8 +182,6 @@ describe("PgGeminiApiKeyRepository.deactivateNotIn", () => {
             .insert(geminiFiles)
             .values({
                 originalGeminiUrl: "https://generativelanguage.googleapis.com/v1beta/files/deactivate-test",
-                discordAttachmentId: "att-deactivate",
-                discordFilename: "test.png",
                 messageId: msgRow.id,
             })
             .returning();

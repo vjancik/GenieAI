@@ -79,6 +79,8 @@ function makeEmbed(overrides: Partial<IChatClientMessageEmbed> & { type: string 
         video: null,
         image: null,
         thumbnail: null,
+        componentTexts: [],
+        componentMedia: [],
         ...overrides,
     };
 }
@@ -580,5 +582,54 @@ describe("formatUtcTimestamp", () => {
 
     it("always appends UTC suffix", () => {
         expect(formatUtcTimestamp(new Date("2024-06-15T09:05:03Z"))).toMatch(/ UTC$/);
+    });
+});
+
+describe("discordMessageToLlmText — component-based embeds", () => {
+    it("renders the component texts under a Content label", () => {
+        const result = discordMessageToLlmText(
+            makeMsg({
+                content: "https://mirror.example/reel/abc/",
+                embeds: [
+                    makeEmbed({
+                        type: "components",
+                        componentTexts: [
+                            "**Author Name**",
+                            "The caption",
+                            "[Instagram](https://www.instagram.com/reel/abc/)",
+                        ],
+                    }),
+                ],
+            }),
+        );
+
+        expect(result).toContain(
+            "Embed #1\nType: components\nContent:\n**Author Name**\nThe caption\n[Instagram](https://www.instagram.com/reel/abc/)",
+        );
+    });
+
+    it("omits the Content label for classic embeds", () => {
+        const result = discordMessageToLlmText(
+            makeMsg({ content: "x", embeds: [makeEmbed({ type: "rich", title: "Only Title" })] }),
+        );
+
+        expect(result).not.toContain("Content:");
+    });
+
+    it("renders component texts of embeds inside forwarded content", () => {
+        const result = discordMessageToLlmText(
+            makeMsg({
+                content: "",
+                isForwarded: true,
+                forwardedSnapshot: {
+                    content: "fwd",
+                    cleanContent: "fwd",
+                    attachments: [],
+                    embeds: [makeEmbed({ type: "components", componentTexts: ["Forwarded caption"] })],
+                },
+            }),
+        );
+
+        expect(result).toContain("Content:\nForwarded caption");
     });
 });

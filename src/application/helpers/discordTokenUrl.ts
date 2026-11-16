@@ -9,6 +9,13 @@
  * Token URL formats:
  *   Attachment:  discord://guildId/channelId/messageId/attachmentId
  *   Embed media: discord://guildId/channelId/messageId/embed/embedIndex/mediaKey
+ *   Embed component media:
+ *                discord://guildId/channelId/messageId/embed/embedIndex/componentMedia/mediaId
+ *
+ * The two embed forms address different things. A classic embed has at most one
+ * media item per named slot, so the slot name (`mediaKey`) is enough. A "components"
+ * embed has no slots — its media sits in a component tree and a gallery can hold
+ * several items — so each item is addressed by its own snowflake ID instead.
  */
 
 import type { EmbedMediaKey } from "../../domain/entities/GeminiFile.ts";
@@ -32,7 +39,19 @@ export type DiscordTokenUrl =
           messageId: string;
           embedIndex: number;
           mediaKey: EmbedMediaKey;
+      }
+    | {
+          kind: "embedComponentMedia";
+          guildId: string;
+          channelId: string;
+          messageId: string;
+          /** Index of the embed the media was found on. A hint only — `mediaId` is what identifies the item. */
+          embedIndex: number;
+          mediaId: string;
       };
+
+/** Path segment that marks the embed component media form; cannot collide with an {@link EmbedMediaKey}. */
+const COMPONENT_MEDIA_SEGMENT = "componentMedia";
 
 /**
  * Builds a `discord://` token URL for a Discord attachment.
@@ -71,6 +90,26 @@ export function buildEmbedTokenUrl(
 }
 
 /**
+ * Builds a `discord://` token URL for a media item nested in the component tree of a
+ * "components" embed.
+ *
+ * @param guildId - Discord guild snowflake (or "@me" for DMs)
+ * @param channelId - Discord channel snowflake
+ * @param messageId - Discord message snowflake
+ * @param embedIndex - Zero-based index of the embed in the message's embeds array
+ * @param mediaId - Snowflake of the media item, stable across re-fetches of the message
+ */
+export function buildEmbedComponentMediaTokenUrl(
+    guildId: string,
+    channelId: string,
+    messageId: string,
+    embedIndex: number,
+    mediaId: string,
+): string {
+    return `discord://${guildId}/${channelId}/${messageId}/embed/${embedIndex}/${COMPONENT_MEDIA_SEGMENT}/${mediaId}`;
+}
+
+/**
  * Returns true if the given string is a Discord token URL.
  * Only checks the protocol prefix — use {@link parseDiscordTokenUrl} for full validation.
  */
@@ -100,11 +139,17 @@ export function parseDiscordTokenUrl(url: string): DiscordTokenUrl | null {
     if (!guildId || !channelId || !messageId) return null;
 
     if (rest[0] === "embed") {
-        // Embed format: embed / embedIndex / mediaKey (3 elements after messageId)
+        // Embed formats: embed / embedIndex / mediaKey (3 elements after messageId),
+        // or embed / embedIndex / componentMedia / mediaId (4 elements)
         if (rest.length < 3) return null;
         const embedIndex = Number(rest[1]);
         if (!Number.isInteger(embedIndex) || embedIndex < 0) return null;
-        const mediaKey = rest[2] as EmbedMediaKey;
+        if (rest[2] === COMPONENT_MEDIA_SEGMENT) {
+            const mediaId = rest[3];
+            if (!mediaId) return null;
+            return { kind: "embedComponentMedia", guildId, channelId, messageId, embedIndex, mediaId };
+        }
+        const mediaKey = rest[2];
         if (mediaKey !== "image" && mediaKey !== "video" && mediaKey !== "thumbnail") return null;
         return { kind: "embed", guildId, channelId, messageId, embedIndex, mediaKey };
     }

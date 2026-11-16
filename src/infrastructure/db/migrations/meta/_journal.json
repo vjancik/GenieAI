@@ -64,6 +64,13 @@
             "when": 1774474578435,
             "tag": "0008_watery_professor_monster",
             "breakpoints": true
+        },
+        {
+            "idx": 9,
+            "version": "7",
+            "when": 1794854206389,
+            "tag": "0009_fat_owl",
+            "breakpoints": true
         }
     ]
 }

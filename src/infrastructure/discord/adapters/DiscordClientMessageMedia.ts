@@ -2,10 +2,12 @@ import type { Attachment, Embed, MessageSnapshot } from "discord.js";
 import type {
     IChatClientMessageAttachment,
     IChatClientMessageEmbed,
+    IChatClientMessageEmbedComponentMedia,
     IChatClientMessageEmbedField,
     IChatClientMessageEmbedMedia,
     IChatClientMessageSnapshot,
 } from "../../../application/ports/chat/IChatClient.ts";
+import { parseEmbedComponents } from "../embedComponents.ts";
 
 /**
  * Lazy wrapper over a discord.js `Attachment`.
@@ -57,13 +59,20 @@ class DiscordClientMessageEmbedMedia implements IChatClientMessageEmbedMedia {
  * Single-property sub-objects are flattened to scalar getters.
  * Multi-property media sub-objects are wrapped and cached on construction.
  * `type` reads `embed.data.type` — discord.js `Embed` has no `.type` getter.
+ * The component tree of a "components" embed is parsed once on construction.
  */
 export class DiscordClientMessageEmbed implements IChatClientMessageEmbed {
     readonly video: IChatClientMessageEmbedMedia | null;
     readonly image: IChatClientMessageEmbedMedia | null;
     readonly thumbnail: IChatClientMessageEmbedMedia | null;
+    readonly componentTexts: string[];
+    readonly componentMedia: IChatClientMessageEmbedComponentMedia[];
 
     constructor(private readonly embed: Embed) {
+        const components = parseEmbedComponents(embed.data);
+        this.componentTexts = components.texts;
+        // Thumbnails in a component tree are decoration (e.g. the author's avatar), not content
+        this.componentMedia = components.media.filter((media) => media.kind === "gallery");
         this.video = embed.video?.url ? new DiscordClientMessageEmbedMedia(embed.video) : null;
         this.image = embed.image?.url ? new DiscordClientMessageEmbedMedia(embed.image) : null;
         this.thumbnail = embed.thumbnail?.url ? new DiscordClientMessageEmbedMedia(embed.thumbnail) : null;
