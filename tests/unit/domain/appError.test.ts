@@ -3,9 +3,18 @@ import {
     AllFreeKeysExhaustedError,
     AppError,
     DiscordError,
+    EMPTY_MODEL_RESPONSE_MESSAGE,
+    EMPTY_MODEL_RESPONSE_RETRY_ADVICE,
     extractDisplayMessage,
+    findDisplayableError,
+    getDeclaredRetryable,
+    ModelNoCandidatesError,
+    ModelOverloadedError,
+    ModelPromptBlockedError,
+    ModelTimeoutError,
     PaidKeyExhaustedError,
 } from "../../../src/domain/errors/AppError.ts";
+import { BlockReason } from "../../../src/domain/value-objects/BlockReason.ts";
 
 describe("DiscordError", () => {
     it("sets code to DISCORD_ERROR", () => {
@@ -65,6 +74,24 @@ describe("PaidKeyExhaustedError", () => {
     });
 });
 
+describe.each([
+    ["ModelOverloadedError", ModelOverloadedError, "MODEL_OVERLOADED", "overloaded"],
+    ["ModelTimeoutError", ModelTimeoutError, "MODEL_TIMEOUT", "allotted time"],
+] as const)("%s", (_name, ErrorClass, code, displayFragment) => {
+    it(`sets code to ${code}`, () => {
+        expect(new ErrorClass().code).toBe(code);
+    });
+
+    it("carries a user-facing displayMessage", () => {
+        expect(new ErrorClass().displayMessage).toContain(displayFragment);
+    });
+
+    it("sets cause when provided", () => {
+        const cause = new Error("raw model error");
+        expect(new ErrorClass(cause).cause).toBe(cause);
+    });
+});
+
 describe("extractDisplayMessage", () => {
     it("returns displayMessage from a direct AllFreeKeysExhaustedError", () => {
         const err = new AllFreeKeysExhaustedError();
@@ -93,5 +120,58 @@ describe("extractDisplayMessage", () => {
     it("skips AppError instances without a displayMessage", () => {
         const err = new DiscordError("no display");
         expect(extractDisplayMessage(err)).toBeNull();
+    });
+});
+
+describe("ModelPromptBlockedError", () => {
+    it("carries the block reason and declares itself not retryable", () => {
+        const err = new ModelPromptBlockedError(BlockReason.BLOCKLIST);
+
+        expect(err.code).toBe("MODEL_PROMPT_BLOCKED");
+        expect(err.blockReason).toBe(BlockReason.BLOCKLIST);
+        expect(getDeclaredRetryable(err)).toBe(false);
+    });
+
+    it("explains every block reason and warns that replies will be blocked too", () => {
+        for (const reason of Object.values(BlockReason)) {
+            const message = new ModelPromptBlockedError(reason).displayMessage;
+            expect(message).toContain("blocked");
+            expect(message).toContain("Replying to this message will be blocked too");
+        }
+    });
+});
+
+describe("ModelNoCandidatesError", () => {
+    it("shows the empty response message with retry advice and leaves retryability to the default", () => {
+        const err = new ModelNoCandidatesError();
+
+        expect(err.code).toBe("MODEL_NO_CANDIDATES");
+        expect(err.displayMessage).toBe(`${EMPTY_MODEL_RESPONSE_MESSAGE} ${EMPTY_MODEL_RESPONSE_RETRY_ADVICE}`);
+        expect(getDeclaredRetryable(err)).toBeNull();
+    });
+});
+
+describe("findDisplayableError", () => {
+    it("returns the AppError carrying the display message from a nested cause", () => {
+        const inner = new ModelPromptBlockedError(BlockReason.SAFETY);
+        const outer = new Error("graph failed", { cause: inner });
+
+        expect(findDisplayableError(outer)).toBe(inner);
+    });
+
+    it("returns null when no AppError in the chain has a display message", () => {
+        expect(findDisplayableError(new DiscordError("no display message"))).toBeNull();
+        expect(findDisplayableError("not an error")).toBeNull();
+    });
+});
+
+describe("getDeclaredRetryable", () => {
+    it("returns null for an AppError that declares nothing", () => {
+        expect(getDeclaredRetryable(new AllFreeKeysExhaustedError())).toBeNull();
+    });
+
+    it("ignores a retryable property that is not a boolean", () => {
+        const err = Object.assign(new AllFreeKeysExhaustedError(), { retryable: "no" });
+        expect(getDeclaredRetryable(err)).toBeNull();
     });
 });

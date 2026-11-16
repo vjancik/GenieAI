@@ -1,3 +1,5 @@
+import { BlockReason } from "../value-objects/BlockReason.ts";
+
 /**
  * Base class for all application-specific errors.
  * Extends the native Error with a structured `code` field for programmatic error handling.
@@ -20,20 +22,34 @@ export class AppError extends Error {
 /**
  * Walks the `cause` chain of an error looking for the first {@link AppError} that carries a
  * `displayMessage`. Only AppError instances are trusted — this guards against accidentally
- * surfacing display strings from third-party errors that happen to have a `displayMessage`
- * property.
+ * surfacing display strings (or other user-facing hints, see {@link getDeclaredRetryable}) from
+ * third-party errors that happen to have matching properties.
  *
  * Returns `null` if no such error is found.
  */
-export function extractDisplayMessage(err: unknown): string | null {
+export function findDisplayableError(err: unknown): AppError | null {
     let current: unknown = err;
     while (current instanceof Error) {
         if (current instanceof AppError && current.displayMessage !== undefined) {
-            return current.displayMessage;
+            return current;
         }
         current = current.cause;
     }
     return null;
+}
+
+/** Returns the display message of the error found by {@link findDisplayableError}, or `null`. */
+export function extractDisplayMessage(err: unknown): string | null {
+    return findDisplayableError(err)?.displayMessage ?? null;
+}
+
+/**
+ * Returns the retryability an {@link AppError} subclass explicitly declares through a boolean
+ * `retryable` property, or `null` when it declares none and the caller's default applies.
+ * Accepts only AppErrors so the property is never read off an error we didn't create.
+ */
+export function getDeclaredRetryable(err: AppError): boolean | null {
+    return "retryable" in err && typeof err.retryable === "boolean" ? err.retryable : null;
 }
 
 /** Thrown when a required environment variable is missing or misconfigured. */
@@ -138,6 +154,93 @@ export class AllFreeKeysExhaustedError extends AppError {
 export class LlmError extends AppError {
     constructor(message: string, cause?: unknown) {
         super("LLM_ERROR", message, cause);
+    }
+}
+
+/** Thrown when a model call is rejected because the AI provider's servers are overloaded (HTTP 503). */
+export class ModelOverloadedError extends AppError {
+    constructor(cause?: unknown) {
+        super(
+            "MODEL_OVERLOADED",
+            "The AI provider is overloaded and rejected the model call",
+            cause,
+            "The AI provider servers are temporarily overloaded, you can try again later.",
+        );
+    }
+}
+
+/**
+ * States that the model returned no usable content. Shared by {@link ModelNoCandidatesError}
+ * and the empty-response notice in the application formatters so the two can't drift apart.
+ */
+export const EMPTY_MODEL_RESPONSE_MESSAGE = "The AI model returned an empty response.";
+
+/** Retry advice accompanying {@link EMPTY_MODEL_RESPONSE_MESSAGE} when nothing else offers it. */
+export const EMPTY_MODEL_RESPONSE_RETRY_ADVICE =
+    "A retry usually fixes this unless the provider servers are temporarily overloaded.";
+
+/**
+ * Thrown when the model provider responded without a single answer candidate and without saying
+ * the prompt was blocked. Treated as a transient provider-side failure, like a 503.
+ */
+export class ModelNoCandidatesError extends AppError {
+    constructor(cause?: unknown) {
+        super(
+            "MODEL_NO_CANDIDATES",
+            "The AI provider returned no answer candidates",
+            cause,
+            `${EMPTY_MODEL_RESPONSE_MESSAGE} ${EMPTY_MODEL_RESPONSE_RETRY_ADVICE}`,
+        );
+    }
+}
+
+/**
+ * Appended to every blocked-prompt display message. The blocked message stays in the reply chain,
+ * so any reply to it resends the blocked content and is blocked as well.
+ */
+const BLOCKED_PROMPT_ADVICE =
+    "Replying to this message will be blocked too, so try again with different content in a new message or as a reply to an earlier one.";
+
+/** User-facing explanation per {@link BlockReason}; exhaustive so a new reason fails typecheck. */
+const BLOCK_REASON_MESSAGES: Record<BlockReason, string> = {
+    [BlockReason.SAFETY]: "The AI provider's safety filter blocked this request.",
+    [BlockReason.BLOCKLIST]: "The AI provider blocked this request because it contains blocklisted terms.",
+    [BlockReason.PROHIBITED_CONTENT]: "The AI provider blocked this request because it may contain prohibited content.",
+    [BlockReason.IMAGE_SAFETY]: "The AI provider's safety filter blocked an image in this request.",
+    [BlockReason.OTHER]: "The AI provider blocked this request.",
+    [BlockReason.BLOCK_REASON_UNSPECIFIED]: "The AI provider blocked this request.",
+};
+
+/**
+ * Thrown when the model provider refused to process the prompt. Not retryable: the block is a
+ * verdict on the input, so resending the same input is blocked again.
+ */
+export class ModelPromptBlockedError extends AppError {
+    /** Declared for {@link getDeclaredRetryable}, overriding the default that failures are retryable. */
+    readonly retryable = false;
+
+    constructor(
+        public readonly blockReason: BlockReason,
+        cause?: unknown,
+    ) {
+        super(
+            "MODEL_PROMPT_BLOCKED",
+            `The AI provider blocked the prompt: ${blockReason}`,
+            cause,
+            `${BLOCK_REASON_MESSAGES[blockReason]} ${BLOCKED_PROMPT_ADVICE}`,
+        );
+    }
+}
+
+/** Thrown when a model call times out or is aborted before the model responds. */
+export class ModelTimeoutError extends AppError {
+    constructor(cause?: unknown) {
+        super(
+            "MODEL_TIMEOUT",
+            "The model did not respond within the allotted time",
+            cause,
+            "The AI model failed to respond within allotted time, you can try again later.",
+        );
     }
 }
 
