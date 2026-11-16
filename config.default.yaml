@@ -68,9 +68,9 @@ agent:
       thinkingLevel: "high"                   # <optional>
 
     general:
-      model: "gemini-3.6-flash"         # <required>
+      model: "gemini-3.8-flash"         # <required>
       apiKeyType: "free"                # <required>
-      fallbackModel: "gemini-3.5-flash" # <optional>
+      fallbackModel: "gemini-3.6-flash" # <optional>
       # Whether fallback model responses get a Retry button. Set to false when the fallback is an
       # alternative rather than a downgrade. Interrupted responses are always retryable.
       isFallbackRetryable: true         # <optional>
@@ -78,9 +78,9 @@ agent:
       timeoutMs: 120000                 # <required>
 
     computation:
-      model: "gemini-3.6-flash"         # <required>
+      model: "gemini-3.8-flash"         # <required>
       apiKeyType: "free"                # <required>
-      fallbackModel: "gemini-3.5-flash" # <optional>
+      fallbackModel: "gemini-3.6-flash" # <optional>
       # Whether fallback model responses get a Retry button. Set to false when the fallback is an
       # alternative rather than a downgrade. Interrupted responses are always retryable.
       isFallbackRetryable: true         # <optional>
@@ -88,9 +88,9 @@ agent:
       timeoutMs: 120000
 
     search:
-      model: "gemini-3.6-flash"         # <required>
+      model: "gemini-3.8-flash"         # <required>
       apiKeyType: "free"                # <required>
-      fallbackModel: "gemini-3.5-flash" # <optional>
+      fallbackModel: "gemini-3.6-flash" # <optional>
       # Whether fallback model responses get a Retry button. Set to false when the fallback is an
       # alternative rather than a downgrade. Interrupted responses are always retryable.
       isFallbackRetryable: true         # <optional>
