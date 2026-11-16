@@ -174,10 +174,18 @@ const OrchestratorStateSchema = new StateSchema({
      * primary model was unavailable. Always reported, independent of isRetryable: the fallback
      * may be configured as an equal alternative, in which case the response is not retryable.
      *
-     * Persisted with the bot reply, and combined with isRetryable by the caller to decide
-     * whether to show the fallback footer.
+     * Persisted with the bot reply. The fallback footer keys off usedRetryableFallback instead.
      */
     usedFallback: new ReducedValue(z.boolean().default(false), booleanOrReducer),
+    /**
+     * Set to true by an answering node when a fallback model generated the response and that
+     * node's `isFallbackRetryable` is enabled, i.e. the fallback itself is a reason to retry.
+     * Implies usedFallback and isRetryable.
+     *
+     * Kept separate from isRetryable, which may also be set by an interruption or a degraded
+     * finish reason, so the caller only shows the fallback footer when the fallback is the reason.
+     */
+    usedRetryableFallback: new ReducedValue(z.boolean().default(false), booleanOrReducer),
     /**
      * Set to true by generalNode, searchNode, or computationNode when the model stream
      * terminated without a finishReason, indicating a premature upstream termination.
@@ -223,6 +231,7 @@ type NodeResult = {
     messages: BaseMessage[];
     isRetryable: boolean;
     usedFallback: boolean;
+    usedRetryableFallback: boolean;
     wasInterrupted: boolean;
     finishReason: FinishReason | null;
 };
@@ -244,10 +253,11 @@ function degradationUpdate(
     isFallbackRetryable: boolean,
 ): Omit<NodeResult, "messages"> {
     const degradedReason = isDegradedFinishReason(invocation.finishReason) ? invocation.finishReason : null;
+    const usedRetryableFallback = invocation.usedFallback && isFallbackRetryable;
     return {
-        isRetryable:
-            (invocation.usedFallback && isFallbackRetryable) || invocation.wasInterrupted || degradedReason !== null,
+        isRetryable: usedRetryableFallback || invocation.wasInterrupted || degradedReason !== null,
         usedFallback: invocation.usedFallback,
+        usedRetryableFallback,
         wasInterrupted: invocation.wasInterrupted,
         finishReason: degradedReason,
     };
@@ -404,6 +414,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         newMessages: BaseMessage[];
         isRetryable: boolean;
         usedFallback: boolean;
+        usedRetryableFallback: boolean;
         wasInterrupted: boolean;
         finishReason: FinishReason | null;
     }> {
@@ -440,6 +451,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     newMessages,
                     isRetryable: result.isRetryable,
                     usedFallback: result.usedFallback,
+                    usedRetryableFallback: result.usedRetryableFallback,
                     wasInterrupted: result.wasInterrupted,
                     finishReason: result.finishReason,
                 };

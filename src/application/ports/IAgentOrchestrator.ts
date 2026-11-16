@@ -38,6 +38,12 @@ export interface IAgentOrchestrator {
         newMessages: BaseMessage[];
         isRetryable: boolean;
         usedFallback: boolean;
+        /**
+         * True when a fallback model answered and the answering node treats fallback responses
+         * as retryable, i.e. the fallback itself is a reason to retry (not just an interruption
+         * or degraded finish reason that happened to hit a fallback response).
+         */
+        usedRetryableFallback: boolean;
         wasInterrupted: boolean;
         /**
          * A non-STOP reason the model gave for ending generation (e.g. SAFETY), or null when

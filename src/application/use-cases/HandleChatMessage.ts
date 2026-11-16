@@ -1,7 +1,7 @@
 import { type BaseMessage, HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import type { MessageInteractionType, PersistedChatMessage } from "../../domain/entities/Message.ts";
-import { extractDisplayMessage } from "../../domain/errors/AppError.ts";
+import { findDisplayableError, getDeclaredRetryable, ModelPromptBlockedError } from "../../domain/errors/AppError.ts";
 import type { IMessagePageRepository } from "../../domain/ports/IMessagePageRepository.ts";
 import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
 import type { FinishReason } from "../../domain/value-objects/FinishReason.ts";
@@ -9,7 +9,7 @@ import { MessageIntent } from "../../domain/value-objects/MessageIntent.ts";
 import { agentStatusLabel } from "../formatters/agentStatus.ts";
 import { extractWebGroundingChunks } from "../formatters/groundingSources.ts";
 import { splitMarkdown } from "../formatters/markdownSplitter.ts";
-import { FALLBACK_FOOTER, finishReasonFooter, INTERRUPTED_FOOTER } from "../formatters/responseFooters.ts";
+import { emptyResponseNotice, responseFooter } from "../formatters/responseFooters.ts";
 import { discordMessageToLlmText, llmTextToDiscordText } from "../formatters/textTransformers.ts";
 import { buildLangchainMessage } from "../helpers/buildLangchainMessage.ts";
 import { parseMessageIntent, removeMentionsAndCommandPrefix } from "../helpers/chatMessageTransformers.ts";
@@ -44,6 +44,16 @@ import type { Logger } from "../types/Logger.ts";
 const MESSAGE_LENGTH_LIMIT = 2000;
 
 /**
+ * Failures that are an expected outcome rather than a fault in the bot (e.g. user content
+ * tripping the provider's filters). They are logged as warnings and not reported to Sentry.
+ */
+const WARN_ONLY_ERRORS = [ModelPromptBlockedError] as const;
+
+function isWarnOnlyError(err: unknown): boolean {
+    return WARN_ONLY_ERRORS.some((ErrorClass) => err instanceof ErrorClass);
+}
+
+/**
  * Internal agent result produced by {@link HandleChatMessageUseCase.invokeAgent}
  * and consumed immediately by {@link HandleChatMessageUseCase.sendAgentResponse}.
  * `thinkingMessagePromise` is always defined — the thinking placeholder is always sent.
@@ -54,6 +64,7 @@ type AgentResult = {
     isFailure?: boolean;
     isRetryable?: boolean;
     usedFallback?: boolean;
+    usedRetryableFallback?: boolean;
     wasInterrupted?: boolean;
     finishReason?: FinishReason | null;
     thinkingMessagePromise: Promise<IChatClientMessage>;
@@ -258,23 +269,31 @@ export class HandleChatMessageUseCase {
                 });
             };
 
-            const { response, newMessages, isFailure, isRetryable, usedFallback, wasInterrupted, finishReason } =
-                await this.processMessage({
-                    discordMessageId: message.id,
-                    referencedMessageId: message.referencedMessageId,
-                    channelId: message.channelId,
-                    guildId: message.guildId ?? DM_GUILD_TOKEN,
-                    discordAuthorId: message.authorId,
-                    message: userContent !== null ? message : null,
-                    strippedContent: userContent,
-                    attachments: attachments ?? [],
-                    embeds: embeds ?? message.embeds,
-                    intent,
-                    onStatusUpdate,
-                    reuseHumanMessage,
-                    fetchHistory,
-                    ephemeralInstructionMessage,
-                });
+            const {
+                response,
+                newMessages,
+                isFailure,
+                isRetryable,
+                usedFallback,
+                usedRetryableFallback,
+                wasInterrupted,
+                finishReason,
+            } = await this.processMessage({
+                discordMessageId: message.id,
+                referencedMessageId: message.referencedMessageId,
+                channelId: message.channelId,
+                guildId: message.guildId ?? DM_GUILD_TOKEN,
+                discordAuthorId: message.authorId,
+                message: userContent !== null ? message : null,
+                strippedContent: userContent,
+                attachments: attachments ?? [],
+                embeds: embeds ?? message.embeds,
+                intent,
+                onStatusUpdate,
+                reuseHumanMessage,
+                fetchHistory,
+                ephemeralInstructionMessage,
+            });
 
             return {
                 response,
@@ -282,6 +301,7 @@ export class HandleChatMessageUseCase {
                 isFailure,
                 isRetryable,
                 usedFallback,
+                usedRetryableFallback,
                 wasInterrupted,
                 finishReason,
                 // TYPE COERCION: thinkingMessagePromise is always assigned before any await
@@ -324,6 +344,7 @@ export class HandleChatMessageUseCase {
                 isFailure: true,
                 isRetryable: false,
                 usedFallback: false,
+                usedRetryableFallback: false,
                 thinkingMessagePromise,
             };
         }
@@ -403,6 +424,7 @@ export class HandleChatMessageUseCase {
         isFailure?: boolean;
         isRetryable?: boolean;
         usedFallback?: boolean;
+        usedRetryableFallback?: boolean;
         wasInterrupted?: boolean;
         finishReason?: FinishReason | null;
     }> {
@@ -570,19 +592,39 @@ export class HandleChatMessageUseCase {
                         "Processing message with history",
                     );
 
-                    const { content, newMessages, isRetryable, usedFallback, wasInterrupted, finishReason } =
-                        await this.orchestrator.process(llmHistory, params.intent, params.onStatusUpdate);
+                    const {
+                        content,
+                        newMessages,
+                        isRetryable,
+                        usedFallback,
+                        usedRetryableFallback,
+                        wasInterrupted,
+                        finishReason,
+                    } = await this.orchestrator.process(llmHistory, params.intent, params.onStatusUpdate);
 
                     if (!content && !this.hasInlineData(newMessages)) {
                         this.logger.warn(
-                            { discordMessageId: params.discordMessageId },
+                            {
+                                discordMessageId: params.discordMessageId,
+                                finishReason,
+                                wasInterrupted,
+                                usedFallback,
+                            },
                             "Orchestrator returned empty content",
                         );
+                        // The notice replaces the empty answer for display only: newMessages keeps the
+                        // empty AIMessage, which Gemini history conversion drops on replay, so the notice
+                        // never enters the conversation as the model's own words. The generation flags
+                        // are passed on so the footer can explain why the response came back empty.
                         return {
-                            response: "Sorry, I encountered an error processing your request.",
+                            response: emptyResponseNotice({ finishReason, wasInterrupted, usedRetryableFallback }),
                             newMessages,
                             isFailure: true,
                             isRetryable: true,
+                            usedFallback: usedFallback || undefined,
+                            usedRetryableFallback: usedRetryableFallback || undefined,
+                            wasInterrupted: wasInterrupted || undefined,
+                            finishReason,
                         };
                     }
 
@@ -591,20 +633,26 @@ export class HandleChatMessageUseCase {
                         newMessages,
                         isRetryable: isRetryable || undefined,
                         usedFallback: usedFallback || undefined,
+                        usedRetryableFallback: usedRetryableFallback || undefined,
                         wasInterrupted: wasInterrupted || undefined,
                         finishReason,
                     };
                 },
             );
         } catch (err) {
-            this.logger.error({ err, discordMessageId: params.discordMessageId }, "Failed to process message");
-            Sentry.captureException(err);
-            const displayMessage = extractDisplayMessage(err);
+            if (isWarnOnlyError(err)) {
+                this.logger.warn({ err, discordMessageId: params.discordMessageId }, "Failed to process message");
+            } else {
+                this.logger.error({ err, discordMessageId: params.discordMessageId }, "Failed to process message");
+                Sentry.captureException(err);
+            }
+            // Failures are retryable unless the error that supplies the display message declares otherwise
+            const displayableError = findDisplayableError(err);
             return {
-                response: displayMessage ?? "Sorry, I encountered an error processing your request.",
+                response: displayableError?.displayMessage ?? "Sorry, I encountered an error processing your request.",
                 newMessages: [],
                 isFailure: true,
-                isRetryable: true,
+                isRetryable: (displayableError && getDeclaredRetryable(displayableError)) ?? true,
             };
         }
     }
@@ -621,6 +669,7 @@ export class HandleChatMessageUseCase {
         isFailure?: boolean;
         isRetryable?: boolean;
         usedFallback?: boolean;
+        usedRetryableFallback?: boolean;
         wasInterrupted?: boolean;
         finishReason?: FinishReason | null;
         retriesLeft?: number | null;
@@ -638,6 +687,7 @@ export class HandleChatMessageUseCase {
             isFailure,
             isRetryable,
             usedFallback,
+            usedRetryableFallback,
             wasInterrupted,
             finishReason,
             retriesLeft,
@@ -663,26 +713,15 @@ export class HandleChatMessageUseCase {
         // Sanitize LLM output for Discord rendering
         const discordResponse = llmTextToDiscordText(response);
 
-        // Informational footer appended to the first page when a fallback model was used and the
-        // response is retryable. A non-retryable fallback is configured as an equal alternative
-        // rather than a downgrade, so there is nothing to explain and no Retry button to point at.
-        // Kept separate from discordResponse so pagination offsets stored in the DB always
-        // refer to positions within discordResponse — subsequent pages are served from that
-        // string and must not be offset by the footer length.
-        const fallbackFooter = usedFallback && isRetryable ? FALLBACK_FOOTER : "";
-
-        // Informational footer describing how generation ended badly. A reported non-STOP
-        // finish reason (e.g. SAFETY) explains the truncation specifically, so it wins over
-        // the generic interruption notice, which covers the opposite case of a stream that
-        // ended with no reason at all. The two are mutually exclusive per model invocation,
-        // but each is sticky across graph nodes, so the precedence is enforced rather than
-        // assumed and the user never sees both.
-        const reasonFooter = finishReasonFooter(finishReason ?? null);
-        const truncationFooter = reasonFooter === "" && wasInterrupted ? INTERRUPTED_FOOTER : reasonFooter;
-
-        // Combined footer — the fallback notice is orthogonal (which model answered, not how
-        // generation ended) so it may accompany either truncation footer.
-        const combinedFooter = fallbackFooter + truncationFooter;
+        // Informational footer appended to the first page only. Kept separate from
+        // discordResponse so pagination offsets stored in the DB always refer to positions
+        // within discordResponse — subsequent pages are served from that string and must not
+        // be offset by the footer length.
+        const combinedFooter = responseFooter({
+            finishReason: finishReason ?? null,
+            wasInterrupted: wasInterrupted ?? false,
+            usedRetryableFallback: usedRetryableFallback ?? false,
+        });
 
         // Determine whether the response has grounding sources so the Sources button can be appended.
         // Skipped on failure responses — the error message has no meaningful sources to cite,

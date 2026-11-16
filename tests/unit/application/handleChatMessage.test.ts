@@ -1,4 +1,4 @@
-import { describe, expect, it, mock } from "bun:test";
+import { describe, expect, it, mock, spyOn } from "bun:test";
 import type { BaseMessage } from "@langchain/core/messages";
 import pino from "pino";
 import {
@@ -14,9 +14,16 @@ import type {
 import type { IAgentOrchestrator } from "../../../src/application/ports/IAgentOrchestrator.ts";
 import type { StatusMessageUpdater } from "../../../src/application/services/StatusMessageUpdater.ts";
 import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
+import type { Logger } from "../../../src/application/types/Logger.ts";
 import { HandleChatMessageUseCase } from "../../../src/application/use-cases/HandleChatMessage.ts";
+import {
+    ModelOverloadedError,
+    ModelPromptBlockedError,
+    ModelTimeoutError,
+} from "../../../src/domain/errors/AppError.ts";
 import type { IMessagePageRepository } from "../../../src/domain/ports/IMessagePageRepository.ts";
 import type { IMessageRepository } from "../../../src/domain/ports/IMessageRepository.ts";
+import { BlockReason } from "../../../src/domain/value-objects/BlockReason.ts";
 import { FinishReason } from "../../../src/domain/value-objects/FinishReason.ts";
 import { MessageIntent } from "../../../src/domain/value-objects/MessageIntent.ts";
 
@@ -86,21 +93,25 @@ function makeOrchestrator(
         response: string;
         isRetryable: boolean;
         usedFallback: boolean;
+        usedRetryableFallback: boolean;
         wasInterrupted: boolean;
         finishReason: FinishReason | null;
         throws: boolean;
+        /** Error thrown when `throws` is set; defaults to a generic Error. */
+        error: unknown;
     }> = {},
 ): IAgentOrchestrator {
     return {
         buildHistory: mock(() => []),
         process: mock(async (_history, _intent, onStatusUpdate) => {
-            if (overrides.throws) throw new Error("orchestrator exploded");
+            if (overrides.throws) throw overrides.error ?? new Error("orchestrator exploded");
             onStatusUpdate?.({ type: AgentStatusType.SEARCHING });
             return {
                 content: overrides.response ?? "AI response",
                 newMessages: [] as BaseMessage[],
                 isRetryable: overrides.isRetryable ?? false,
                 usedFallback: overrides.usedFallback ?? false,
+                usedRetryableFallback: overrides.usedRetryableFallback ?? false,
                 wasInterrupted: overrides.wasInterrupted ?? false,
                 finishReason: overrides.finishReason ?? null,
             };
@@ -124,13 +135,14 @@ function makeUseCase(
         bot?: IChatClientBot;
         previousBotId?: string;
         retries?: number;
+        logger?: Logger;
     } = {},
 ): HandleChatMessageUseCase {
     return new HandleChatMessageUseCase(
         overrides.orchestrator ?? makeOrchestrator(),
         overrides.messageRepo ?? makeMessageRepo(),
         overrides.statusUpdater ?? makeStatusUpdater(),
-        logger,
+        overrides.logger ?? logger,
         overrides.bot ?? makeBot(),
         overrides.previousBotId,
         overrides.messagePageRepo ?? makePageRepo(),
@@ -330,6 +342,103 @@ describe("HandleChatMessageUseCase.invokeAgent", () => {
         expect(result.isRetryable).toBe(true);
         expect(result.thinkingMessagePromise).toBeDefined();
     });
+
+    it.each([
+        ["an AppError with a displayMessage", new ModelOverloadedError(new Error("503")), ModelOverloadedError],
+        [
+            "a model AppError wrapped in another error's cause",
+            new Error("graph failed", { cause: new ModelTimeoutError() }),
+            ModelTimeoutError,
+        ],
+    ] as const)("surfaces the display message when the orchestrator throws %s", async (_label, error, ErrorClass) => {
+        const useCase = makeUseCase({ orchestrator: makeOrchestrator({ throws: true, error }) });
+        const msg = makeMessage({
+            id: "user-msg-display",
+            content: "!ai hello",
+            reply: mock(async () => makeMessage({ id: "thinking-display" })),
+        });
+
+        const result = await useCase.invokeAgent({
+            message: msg,
+            userContent: "hello",
+            attachments: [],
+            intent: MessageIntent.GENERAL,
+        });
+
+        expect(result.response).toBe(new ErrorClass().displayMessage ?? "");
+        expect(result.isFailure).toBe(true);
+        expect(result.isRetryable).toBe(true);
+    });
+
+    it("falls back to the generic error message when the error carries no display message", async () => {
+        const useCase = makeUseCase({ orchestrator: makeOrchestrator({ throws: true }) });
+        const msg = makeMessage({
+            id: "user-msg-generic",
+            content: "!ai hello",
+            reply: mock(async () => makeMessage({ id: "thinking-generic" })),
+        });
+
+        const result = await useCase.invokeAgent({
+            message: msg,
+            userContent: "hello",
+            attachments: [],
+            intent: MessageIntent.GENERAL,
+        });
+
+        expect(result.response).toBe("Sorry, I encountered an error processing your request.");
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Blocked prompts — non-retryable, logged as warnings only
+// ---------------------------------------------------------------------------
+
+describe("HandleChatMessageUseCase — blocked prompts", () => {
+    /** Runs execute() with an orchestrator throwing `error`; returns the final reply and the logger spies. */
+    async function sendFailing(error: unknown) {
+        const spiedLogger = pino({ level: "silent" });
+        const warn = spyOn(spiedLogger, "warn");
+        const errorLog = spyOn(spiedLogger, "error");
+        const useCase = makeUseCase({
+            orchestrator: makeOrchestrator({ throws: true, error }),
+            logger: spiedLogger,
+            retries: 1,
+        });
+        const thinkingMsg = makeMessage({ id: "thinking", authorId: BOT_USER_ID, isAuthorBot: true });
+        const msg = makeMessage({ id: "user-msg", content: "!ai hello", reply: mock(async () => thinkingMsg) });
+
+        await useCase.execute({ message: msg, shutdownPending: false, isRateLimited: false });
+
+        const reply = (msg.reply as ReturnType<typeof mock>).mock.calls.at(-1)?.[0] as {
+            content: string;
+            buttons?: { label: string }[];
+        };
+        return { reply, warn, errorLog };
+    }
+
+    it("shows the block explanation without offering a retry", async () => {
+        const blocked = new ModelPromptBlockedError(BlockReason.SAFETY);
+
+        const { reply } = await sendFailing(blocked);
+
+        expect(reply.content).toBe(blocked.displayMessage ?? "");
+        expect(reply.buttons?.some((b) => b.label.startsWith("Retry")) ?? false).toBe(false);
+    });
+
+    it("logs a blocked prompt as a warning rather than an error", async () => {
+        const { warn, errorLog } = await sendFailing(new ModelPromptBlockedError(BlockReason.SAFETY));
+
+        expect(warn).toHaveBeenCalledWith(expect.anything(), "Failed to process message");
+        expect(errorLog).not.toHaveBeenCalledWith(expect.anything(), "Failed to process message");
+    });
+
+    it("still logs other failures as errors and offers a retry", async () => {
+        const { reply, warn, errorLog } = await sendFailing(new ModelOverloadedError());
+
+        expect(errorLog).toHaveBeenCalledWith(expect.anything(), "Failed to process message");
+        expect(warn).not.toHaveBeenCalledWith(expect.anything(), "Failed to process message");
+        expect(reply.buttons?.some((b) => b.label.startsWith("Retry"))).toBe(true);
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -403,6 +512,7 @@ describe("HandleChatMessageUseCase — response footers", () => {
                 response: "partial answer",
                 isRetryable: true,
                 usedFallback: true,
+                usedRetryableFallback: true,
                 finishReason: FinishReason.MAX_TOKENS,
             }),
         );
@@ -412,22 +522,43 @@ describe("HandleChatMessageUseCase — response footers", () => {
         expect(content).not.toContain(INTERRUPTED_FOOTER);
     });
 
-    it("shows the fallback notice when the fallback response is retryable", async () => {
+    it("shows the fallback notice when the fallback is a reason to retry", async () => {
         const content = await sendAndGetReplyContent(
-            makeOrchestrator({ response: "fallback answer", isRetryable: true, usedFallback: true }),
+            makeOrchestrator({
+                response: "fallback answer",
+                isRetryable: true,
+                usedFallback: true,
+                usedRetryableFallback: true,
+            }),
         );
 
         expect(content).toBe(`fallback answer${FALLBACK_FOOTER}`);
     });
 
-    // A non-retryable fallback is configured as an equal alternative, so the notice would
-    // only point the user at a Retry button that is not there.
-    it("omits the fallback notice when the fallback response is not retryable", async () => {
+    // A non-retryable fallback is configured as an equal alternative, so there is nothing
+    // to explain and no Retry button to point at.
+    it("omits the fallback notice when the fallback is not retryable", async () => {
         const content = await sendAndGetReplyContent(
-            makeOrchestrator({ response: "fallback answer", isRetryable: false, usedFallback: true }),
+            makeOrchestrator({ response: "fallback answer", usedFallback: true, usedRetryableFallback: false }),
         );
 
         expect(content).toBe("fallback answer");
+    });
+
+    // The response is retryable because of the interruption, not the fallback, so only the
+    // interruption notice applies — the fallback notice would misstate why Retry is offered.
+    it("omits the fallback notice when only an interruption made a fallback response retryable", async () => {
+        const content = await sendAndGetReplyContent(
+            makeOrchestrator({
+                response: "partial answer",
+                isRetryable: true,
+                usedFallback: true,
+                usedRetryableFallback: false,
+                wasInterrupted: true,
+            }),
+        );
+
+        expect(content).toBe(`partial answer${INTERRUPTED_FOOTER}`);
     });
 
     it("appends no footer for a reported clean stop", async () => {
@@ -436,5 +567,69 @@ describe("HandleChatMessageUseCase — response footers", () => {
         );
 
         expect(content).toBe("clean answer");
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Empty responses — display-only notice plus the footer explaining why
+// ---------------------------------------------------------------------------
+
+describe("HandleChatMessageUseCase — empty responses", () => {
+    const EMPTY_NOTICE = "The AI model returned an empty response.";
+
+    /** Runs execute() with an orchestrator returning no content; returns the reply and the persisted bot row. */
+    async function sendEmpty(overrides: Parameters<typeof makeOrchestrator>[0] = {}) {
+        const messageRepo = makeMessageRepo();
+        const useCase = makeUseCase({
+            orchestrator: makeOrchestrator({ response: "", ...overrides }),
+            messageRepo,
+            retries: 1,
+        });
+        const thinkingMsg = makeMessage({ id: "thinking", authorId: BOT_USER_ID, isAuthorBot: true });
+        const msg = makeMessage({ id: "user-msg", content: "!ai hello", reply: mock(async () => thinkingMsg) });
+
+        await useCase.execute({ message: msg, shutdownPending: false, isRateLimited: false });
+
+        const reply = (msg.reply as ReturnType<typeof mock>).mock.calls.at(-1)?.[0] as {
+            content: string;
+            buttons?: { label: string }[];
+        };
+        const saved = (messageRepo.saveBotMessage as ReturnType<typeof mock>).mock.calls.at(-1)?.[0] as {
+            usedFallback: boolean;
+        };
+        return { reply, saved };
+    }
+
+    it("shows the notice with its own retry advice when nothing else explains the empty response", async () => {
+        const { reply } = await sendEmpty();
+
+        expect(reply.content).toBe(
+            `${EMPTY_NOTICE} A retry usually fixes this unless the provider servers are temporarily overloaded.`,
+        );
+    });
+
+    it("shows the short notice followed by the finish reason footer", async () => {
+        const { reply } = await sendEmpty({ finishReason: FinishReason.SAFETY });
+
+        expect(reply.content).toBe(EMPTY_NOTICE + finishReasonFooter(FinishReason.SAFETY));
+    });
+
+    it("shows the short notice followed by the interruption footer", async () => {
+        const { reply } = await sendEmpty({ wasInterrupted: true });
+
+        expect(reply.content).toBe(EMPTY_NOTICE + INTERRUPTED_FOOTER);
+    });
+
+    it("shows the short notice followed by the fallback footer and keeps the fallback flag", async () => {
+        const { reply, saved } = await sendEmpty({ usedFallback: true, usedRetryableFallback: true });
+
+        expect(reply.content).toBe(EMPTY_NOTICE + FALLBACK_FOOTER);
+        expect(saved.usedFallback).toBe(true);
+    });
+
+    it("offers a retry", async () => {
+        const { reply } = await sendEmpty();
+
+        expect(reply.buttons?.some((b) => b.label.startsWith("Retry"))).toBe(true);
     });
 });

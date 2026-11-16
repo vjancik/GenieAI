@@ -1,8 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import {
+    emptyResponseNotice,
     FALLBACK_FOOTER,
     finishReasonFooter,
     INTERRUPTED_FOOTER,
+    responseFooter,
 } from "../../../src/application/formatters/responseFooters.ts";
 import { FinishReason } from "../../../src/domain/value-objects/FinishReason.ts";
 
@@ -45,6 +47,53 @@ describe("finishReasonFooter", () => {
     });
 });
 
+const CLEAN = { finishReason: null, wasInterrupted: false, usedRetryableFallback: false };
+
+describe("responseFooter", () => {
+    it("returns nothing for a clean response", () => {
+        expect(responseFooter(CLEAN)).toBe("");
+        expect(responseFooter({ ...CLEAN, finishReason: FinishReason.STOP })).toBe("");
+    });
+
+    it("explains a degraded finish reason", () => {
+        expect(responseFooter({ ...CLEAN, finishReason: FinishReason.SAFETY })).toBe(
+            finishReasonFooter(FinishReason.SAFETY),
+        );
+    });
+
+    it("falls back to the interruption notice when no reason was reported", () => {
+        expect(responseFooter({ ...CLEAN, wasInterrupted: true })).toBe(INTERRUPTED_FOOTER);
+    });
+
+    it("prefers the specific finish reason over the interruption notice", () => {
+        expect(responseFooter({ ...CLEAN, wasInterrupted: true, finishReason: FinishReason.SAFETY })).toBe(
+            finishReasonFooter(FinishReason.SAFETY),
+        );
+    });
+
+    it("puts the fallback notice ahead of a generation footer", () => {
+        expect(responseFooter({ ...CLEAN, usedRetryableFallback: true, finishReason: FinishReason.MAX_TOKENS })).toBe(
+            FALLBACK_FOOTER + finishReasonFooter(FinishReason.MAX_TOKENS),
+        );
+    });
+});
+
+describe("emptyResponseNotice", () => {
+    it("carries its own retry advice when no footer will follow", () => {
+        const notice = emptyResponseNotice(CLEAN);
+        expect(notice).toStartWith("The AI model returned an empty response.");
+        expect(notice).toContain("A retry usually fixes this");
+    });
+
+    it.each([
+        ["a degraded finish reason", { ...CLEAN, finishReason: FinishReason.SAFETY }],
+        ["an interruption", { ...CLEAN, wasInterrupted: true }],
+        ["a retryable fallback", { ...CLEAN, usedRetryableFallback: true }],
+    ])("leaves the explanation and retry advice to the footer after %s", (_label, flags) => {
+        expect(emptyResponseNotice(flags)).toBe("The AI model returned an empty response.");
+    });
+});
+
 describe("footer copy conventions", () => {
     const allFooters = [FALLBACK_FOOTER, INTERRUPTED_FOOTER, ...DEGRADED_REASONS.map(finishReasonFooter)];
 
@@ -59,6 +108,13 @@ describe("footer copy conventions", () => {
     it("every footer points the user at Retry", () => {
         for (const footer of allFooters) {
             expect(footer).toContain("Retry");
+        }
+    });
+
+    // "Interrupted" is accurate for both the non-streaming and streaming paths; "cut short" is not
+    it("no generation footer says the response was cut short", () => {
+        for (const footer of DEGRADED_REASONS.map(finishReasonFooter)) {
+            expect(footer).not.toContain("cut short");
         }
     });
 

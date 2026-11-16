@@ -964,6 +964,7 @@ describe("Orchestrator.process — fallback retryability", () => {
 
         expect(result.isRetryable).toBe(true);
         expect(result.usedFallback).toBe(true);
+        expect(result.usedRetryableFallback).toBe(true);
     });
 
     test("treats a fallback response as final when the node disallows it, but still reports the fallback", async () => {
@@ -976,6 +977,7 @@ describe("Orchestrator.process — fallback retryability", () => {
 
         expect(result.isRetryable).toBe(false);
         expect(result.usedFallback).toBe(true);
+        expect(result.usedRetryableFallback).toBe(false);
     });
 
     test("keeps an interrupted fallback response retryable even when the node disallows fallback retries", async () => {
@@ -989,6 +991,34 @@ describe("Orchestrator.process — fallback retryability", () => {
         expect(result.isRetryable).toBe(true);
         expect(result.usedFallback).toBe(true);
         expect(result.wasInterrupted).toBe(true);
+        // Retryable because of the interruption, not the fallback
+        expect(result.usedRetryableFallback).toBe(false);
+    });
+
+    test("flags the fallback as a retry reason when an interrupted response also allows fallback retries", async () => {
+        const orchestrator = makeOrchestratorWith(
+            makeStubInvoker({ usedFallback: true, wasInterrupted: true }),
+            configWithFallbackRetryable({ general: true }),
+        );
+
+        const result = await orchestrator.process([new HumanMessage("Hello")], MessageIntent.GENERAL);
+
+        expect(result.isRetryable).toBe(true);
+        expect(result.usedRetryableFallback).toBe(true);
+        expect(result.wasInterrupted).toBe(true);
+    });
+
+    test("never flags a retryable fallback when the primary model answered", async () => {
+        const orchestrator = makeOrchestratorWith(
+            makeStubInvoker({ usedFallback: false, wasInterrupted: true }),
+            configWithFallbackRetryable({ general: true }),
+        );
+
+        const result = await orchestrator.process([new HumanMessage("Hello")], MessageIntent.GENERAL);
+
+        expect(result.isRetryable).toBe(true);
+        expect(result.usedFallback).toBe(false);
+        expect(result.usedRetryableFallback).toBe(false);
     });
 
     test.each([
@@ -1004,6 +1034,7 @@ describe("Orchestrator.process — fallback retryability", () => {
             configWithFallbackRetryable({ [node]: false }),
         ).process([new HumanMessage("Hello")], intent);
         expect(disabledHere.isRetryable).toBe(false);
+        expect(disabledHere.usedRetryableFallback).toBe(false);
 
         // Enabled on this node only — the other nodes' disabled settings must not leak in
         const enabledHereOnly = await makeOrchestratorWith(
@@ -1011,6 +1042,7 @@ describe("Orchestrator.process — fallback retryability", () => {
             configWithFallbackRetryable({ general: false, computation: false, search: false, [node]: true }),
         ).process([new HumanMessage("Hello")], intent);
         expect(enabledHereOnly.isRetryable).toBe(true);
+        expect(enabledHereOnly.usedRetryableFallback).toBe(true);
     });
 });
 
