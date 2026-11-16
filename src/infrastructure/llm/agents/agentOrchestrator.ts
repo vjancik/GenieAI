@@ -282,6 +282,12 @@ type NodeName = keyof NodeConfigs;
 /** Per-node maximum ms to wait for a model response before aborting. */
 interface ModelTimeouts extends Record<NodeName, number> {}
 
+/**
+ * Per-node ms the main model is given to finish after the fallback model answered, in parallel
+ * fallback mode. Treated as 0 when not configured (validation requires it where it matters).
+ */
+interface ModelGracePeriods extends Record<NodeName, number> {}
+
 /** Per-node API key type configuration. */
 interface NodeApiKeyTypes extends Record<NodeName, ApiKeyType> {}
 
@@ -318,6 +324,7 @@ type NodeFallbackRetryable = {
 export class AgentOrchestrator implements IAgentOrchestrator {
     private readonly graph: ReturnType<AgentOrchestrator["buildGraph"]>;
     private readonly nodeTimeoutsMs: ModelTimeouts;
+    private readonly nodeGracePeriodsMs: ModelGracePeriods;
     private readonly nodeApiKeyTypes: NodeApiKeyTypes;
     private readonly nodeFallbackRetryable: NodeFallbackRetryable;
     private readonly searchMode: SearchMode;
@@ -344,6 +351,12 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             general: config.file.agent.nodes.general.timeoutMs,
             computation: config.file.agent.nodes.computation.timeoutMs,
             search: config.file.agent.nodes.search.timeoutMs,
+        };
+        this.nodeGracePeriodsMs = {
+            triage: config.file.agent.nodes.triage.mainGracePeriodMs ?? 0,
+            general: config.file.agent.nodes.general.mainGracePeriodMs ?? 0,
+            computation: config.file.agent.nodes.computation.mainGracePeriodMs ?? 0,
+            search: config.file.agent.nodes.search.mainGracePeriodMs ?? 0,
         };
         this.nodeApiKeyTypes = {
             triage: config.file.agent.nodes.triage.apiKeyType,
@@ -552,9 +565,12 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 activeTriageProvider.get.bind(activeTriageProvider),
                 activeTriageProvider.getFallback.bind(activeTriageProvider),
                 messages,
-                this.nodeTimeoutsMs?.triage,
-                config.context?.onStatusUpdate,
-                AgentStatusType.TRIAGE,
+                {
+                    timeoutMs: this.nodeTimeoutsMs.triage,
+                    mainGracePeriodMs: this.nodeGracePeriodsMs.triage,
+                    onStatusUpdate: config.context?.onStatusUpdate,
+                    beforeInvokeStatus: AgentStatusType.TRIAGE,
+                },
             );
 
             const toolCalls = triageResponse.tool_calls ?? [];
@@ -814,9 +830,12 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 this.generalProvider.get.bind(this.generalProvider),
                 this.generalProvider.getFallback.bind(this.generalProvider),
                 invokeMessages,
-                this.nodeTimeoutsMs?.general,
-                config.context?.onStatusUpdate,
-                AgentStatusType.GENERATING,
+                {
+                    timeoutMs: this.nodeTimeoutsMs.general,
+                    mainGracePeriodMs: this.nodeGracePeriodsMs.general,
+                    onStatusUpdate: config.context?.onStatusUpdate,
+                    beforeInvokeStatus: AgentStatusType.GENERATING,
+                },
             );
             const response = invocation.result;
 
@@ -854,9 +873,12 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 this.computationProvider.get.bind(this.computationProvider),
                 this.computationProvider.getFallback.bind(this.computationProvider),
                 invokeMessages,
-                this.nodeTimeoutsMs.computation,
-                config.context?.onStatusUpdate,
-                AgentStatusType.COMPUTING,
+                {
+                    timeoutMs: this.nodeTimeoutsMs.computation,
+                    mainGracePeriodMs: this.nodeGracePeriodsMs.computation,
+                    onStatusUpdate: config.context?.onStatusUpdate,
+                    beforeInvokeStatus: AgentStatusType.COMPUTING,
+                },
             );
 
             return {
@@ -943,9 +965,12 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     this.searchProvider.get.bind(this.searchProvider),
                     this.searchProvider.getFallback.bind(this.searchProvider),
                     invokeMessages,
-                    this.nodeTimeoutsMs?.search,
-                    config.context?.onStatusUpdate,
-                    AgentStatusType.SEARCHING,
+                    {
+                        timeoutMs: this.nodeTimeoutsMs.search,
+                        mainGracePeriodMs: this.nodeGracePeriodsMs.search,
+                        onStatusUpdate: config.context?.onStatusUpdate,
+                        beforeInvokeStatus: AgentStatusType.SEARCHING,
+                    },
                 );
                 const result = invocation.result;
 
@@ -977,9 +1002,12 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 this.searchProvider.get.bind(this.searchProvider),
                 this.searchProvider.getFallback.bind(this.searchProvider),
                 messages,
-                this.nodeTimeoutsMs?.search,
-                config.context?.onStatusUpdate,
-                AgentStatusType.SEARCHING,
+                {
+                    timeoutMs: this.nodeTimeoutsMs.search,
+                    mainGracePeriodMs: this.nodeGracePeriodsMs.search,
+                    onStatusUpdate: config.context?.onStatusUpdate,
+                    beforeInvokeStatus: AgentStatusType.SEARCHING,
+                },
             );
             const response = invocation.result;
 

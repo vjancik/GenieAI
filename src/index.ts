@@ -191,9 +191,12 @@ const isInlineMode = config.file.agent.uploadAttachmentMode === "inline";
 const resilientInvoker = new ResilientModelInvoker(
     freeKeyProvider,
     paidKeyProvider,
-    config.file.agent.uploadAttachmentMode,
-    config.file.agent.maxInlineAttachmentSizeBytes,
-    config.file.globalModelTimeoutMs,
+    {
+        attachmentMode: config.file.agent.uploadAttachmentMode,
+        maxInlineBytes: config.file.agent.maxInlineAttachmentSizeBytes,
+        globalTimeoutMs: config.file.globalModelTimeoutMs,
+        fallbackExecutionMode: config.file.agent.fallbackExecutionMode,
+    },
     logger.child({ module: "llm:resilient-invoker" }),
     isInlineMode ? undefined : geminiMediaNormalizer,
 );

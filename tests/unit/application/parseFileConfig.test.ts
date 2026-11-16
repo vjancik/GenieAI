@@ -106,6 +106,33 @@ agent:
         expect(config.agent.nodes.search.isFallbackRetryable).toBe(false);
     });
 
+    it("defaults fallbackExecutionMode to sequential and leaves grace periods unset", () => {
+        const config = parseFileConfig(VALID_YAML);
+        expect(config.agent.fallbackExecutionMode).toBe("sequential");
+        expect(config.agent.nodes.triage.mainGracePeriodMs).toBeUndefined();
+        expect(config.agent.nodes.general.mainGracePeriodMs).toBeUndefined();
+    });
+
+    it("reads fallbackExecutionMode case-insensitively and grace periods per node", () => {
+        const yaml = VALID_YAML.replace("agent:\n", 'agent:\n  fallbackExecutionMode: "Parallel"\n')
+            .replace("timeoutMs: 60000\n", "timeoutMs: 60000\n      mainGracePeriodMs: 0\n")
+            .replace("timeoutMs: 120000\n", "timeoutMs: 120000\n      mainGracePeriodMs: 15000\n");
+        const config = parseFileConfig(yaml);
+        expect(config.agent.fallbackExecutionMode).toBe("parallel");
+        expect(config.agent.nodes.triage.mainGracePeriodMs).toBe(0);
+        expect(config.agent.nodes.general.mainGracePeriodMs).toBe(15000);
+    });
+
+    it("throws ConfigError for an unknown fallbackExecutionMode", () => {
+        const yaml = VALID_YAML.replace("agent:\n", 'agent:\n  fallbackExecutionMode: "racing"\n');
+        expect(() => parseFileConfig(yaml)).toThrow(ConfigError);
+    });
+
+    it("throws ConfigError for a negative mainGracePeriodMs", () => {
+        const yaml = VALID_YAML.replace("timeoutMs: 60000\n", "timeoutMs: 60000\n      mainGracePeriodMs: -1\n");
+        expect(() => parseFileConfig(yaml)).toThrow(ConfigError);
+    });
+
     // Triage only routes, so the setting would silently do nothing there
     it("warns when isFallbackRetryable is set on the triage node", () => {
         const { logger, warnMock } = makeLogger();

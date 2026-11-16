@@ -1,7 +1,12 @@
 import { describe, expect, it, mock } from "bun:test";
 import pino from "pino";
 import type { AppConfig } from "../../../src/application/config/AppConfig.ts";
-import { AttachmentMode, SearchMode, validateConfig } from "../../../src/application/config/AppConfig.ts";
+import {
+    AttachmentMode,
+    FallbackExecutionMode,
+    SearchMode,
+    validateConfig,
+} from "../../../src/application/config/AppConfig.ts";
 import type { Logger } from "../../../src/application/types/Logger.ts";
 
 const _testLogger = pino({ level: "silent" });
@@ -44,6 +49,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
                 uploadAttachmentMode: AttachmentMode.upload,
                 maxInlineAttachmentSizeMB: 100,
                 maxInlineAttachmentSizeBytes: 100 * 1024 * 1024,
+                fallbackExecutionMode: FallbackExecutionMode.sequential,
                 nodes: {
                     triage: {
                         model: "gemini-2.5-flash",
@@ -135,6 +141,44 @@ describe("validateConfig", () => {
             apiKeyType: "paid",
         };
         expect(() => validateConfig(config)).toThrow(/GOOGLE_PAID_API_KEY is required/);
+    });
+
+    describe("parallel fallback execution mode", () => {
+        /** Config in parallel mode where general and search have a fallback model. */
+        function makeParallelConfig(grace: { general?: number; search?: number }): AppConfig {
+            const config = makeConfig();
+            // TYPE COERCION: deep-merging into a readonly nested object requires a cast
+            (config.file.agent as Record<string, unknown>).fallbackExecutionMode = FallbackExecutionMode.parallel;
+            (config.file.agent.nodes as Record<string, unknown>).general = {
+                ...config.file.agent.nodes.general,
+                fallbackModel: "gemini-2.5-flash-lite",
+                mainGracePeriodMs: grace.general,
+            };
+            (config.file.agent.nodes as Record<string, unknown>).search = {
+                ...config.file.agent.nodes.search,
+                fallbackModel: "gemini-2.5-flash-lite",
+                mainGracePeriodMs: grace.search,
+            };
+            return config;
+        }
+
+        it("passes when every node with a fallback model has a grace period", () => {
+            // triage and computation have no fallbackModel in the base fixture, so need no grace period
+            expect(() => validateConfig(makeParallelConfig({ general: 10_000, search: 0 }))).not.toThrow();
+        });
+
+        it("throws ConfigError naming each node with a fallback model but no grace period", () => {
+            const config = makeParallelConfig({ general: 10_000 });
+            expect(() => validateConfig(config)).toThrow(/agent\.nodes\.search\.mainGracePeriodMs/);
+            expect(() => validateConfig(config)).not.toThrow(/agent\.nodes\.general\.mainGracePeriodMs/);
+        });
+
+        it("does not require grace periods in sequential mode", () => {
+            const config = makeParallelConfig({});
+            // TYPE COERCION: deep-merging into a readonly nested object requires a cast
+            (config.file.agent as Record<string, unknown>).fallbackExecutionMode = FallbackExecutionMode.sequential;
+            expect(() => validateConfig(config)).not.toThrow();
+        });
     });
 
     it("warns when search uses free key + google mode + gemini-3 primary model", () => {

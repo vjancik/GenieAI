@@ -38,6 +38,7 @@ const testConfig = {
             uploadAttachmentMode: "upload" as const,
             maxInlineAttachmentSizeMB: 100,
             maxInlineAttachmentSizeBytes: 100 * 1024 * 1024,
+            fallbackExecutionMode: "sequential" as const,
             nodes: {
                 triage: {
                     model: "gemini-test",
@@ -176,7 +177,17 @@ function makeFreeKeyProvider() {
  * (inline, zero byte limit) so no attachment filtering or file refresh occurs in tests.
  */
 function makeInvoker(freeKeyProvider = makeFreeKeyProvider()) {
-    return new ResilientModelInvoker(freeKeyProvider, makeFreeKeyProvider(), "inline" as const, 0, 600_000, testLogger);
+    return new ResilientModelInvoker(
+        freeKeyProvider,
+        makeFreeKeyProvider(),
+        {
+            attachmentMode: "inline" as const,
+            maxInlineBytes: 0,
+            globalTimeoutMs: 600_000,
+            fallbackExecutionMode: "sequential" as const,
+        },
+        testLogger,
+    );
 }
 
 describe("dbMessagesToLangchain", () => {
@@ -462,8 +473,8 @@ describe("Orchestrator.process", () => {
 
         const result = await orchestrator.process([new HumanMessage("What happened today?")], MessageIntent.UNKNOWN);
 
-        expect(searchModel.stream).toHaveBeenCalledTimes(1);
-        expect(generalModel.stream).not.toHaveBeenCalled();
+        expect(searchModel.invoke).toHaveBeenCalledTimes(1);
+        expect(generalModel.invoke).not.toHaveBeenCalled();
         expect(result.content).toBe("search response");
         expect(result.newMessages).toHaveLength(1);
         expect(result.newMessages[0]).toBeInstanceOf(AIMessage);
@@ -490,8 +501,8 @@ describe("Orchestrator.process", () => {
 
         const result = await orchestrator.process([new HumanMessage("Tell me a joke")], MessageIntent.UNKNOWN);
 
-        expect(generalModel.stream).toHaveBeenCalledTimes(1);
-        expect(searchModel.stream).not.toHaveBeenCalled();
+        expect(generalModel.invoke).toHaveBeenCalledTimes(1);
+        expect(searchModel.invoke).not.toHaveBeenCalled();
         expect(result.content).toBe("general response");
         expect(result.newMessages).toHaveLength(1);
         expect(result.newMessages[0]).toBeInstanceOf(AIMessage);
@@ -526,8 +537,8 @@ describe("Orchestrator.process", () => {
         expect(websiteTool.invoke).toHaveBeenCalledWith({
             urls: ["https://example.com"],
         });
-        expect(generalModel.stream).toHaveBeenCalledTimes(1);
-        expect(searchModel.stream).not.toHaveBeenCalled();
+        expect(generalModel.invoke).toHaveBeenCalledTimes(1);
+        expect(searchModel.invoke).not.toHaveBeenCalled();
         expect(result.content).toBe("summary of website");
         // triage AIMessage + ToolMessage + final AIMessage
         expect(result.newMessages).toHaveLength(3);
@@ -559,7 +570,7 @@ describe("Orchestrator.process", () => {
         expect(videoTool.invoke).toHaveBeenCalledWith({
             urls: ["https://youtube.com/watch?v=abc"],
         });
-        expect(generalModel.stream).toHaveBeenCalledTimes(1);
+        expect(generalModel.invoke).toHaveBeenCalledTimes(1);
         expect(result.content).toBe("video summary");
         // triage AIMessage + ToolMessage + final AIMessage
         expect(result.newMessages).toHaveLength(3);
@@ -586,7 +597,7 @@ describe("Orchestrator.process", () => {
 
         const result = await orchestrator.process([new HumanMessage("Hello")], MessageIntent.UNKNOWN);
 
-        expect(generalModel.stream).toHaveBeenCalledTimes(1);
+        expect(generalModel.invoke).toHaveBeenCalledTimes(1);
         expect(result.content).toBe("fallback response");
         expect(result.newMessages).toHaveLength(1);
     });
@@ -614,7 +625,7 @@ describe("Orchestrator.process", () => {
 
         await orchestrator.process([...history, new HumanMessage("Follow-up question")], MessageIntent.UNKNOWN);
 
-        const callArgs = (generalModel.stream as ReturnType<typeof mock>).mock.calls[0]?.[0] as BaseMessage[];
+        const callArgs = (generalModel.invoke as ReturnType<typeof mock>).mock.calls[0]?.[0] as BaseMessage[];
         expect(callArgs).toBeDefined();
         // Should include history messages in the invocation
         const contents = callArgs.map((m) => m.content);
@@ -874,7 +885,7 @@ describe("Orchestrator.process — fallback retryability", () => {
         route = "route_to_general",
     ): IResilientModelInvoker {
         const invoke = mock(async (...args: Parameters<IResilientModelInvoker["invoke"]>) => {
-            const beforeInvokeStatus = args[6];
+            const beforeInvokeStatus = args[4]?.beforeInvokeStatus;
             if (beforeInvokeStatus === AgentStatusType.TRIAGE) {
                 const triageResponse = new AIMessage({
                     content: "",
@@ -894,7 +905,7 @@ describe("Orchestrator.process — fallback retryability", () => {
 
     function makeOrchestratorWith(
         invoker: IResilientModelInvoker,
-        config: ReturnType<typeof configWithFallbackRetryable>,
+        config: ConstructorParameters<typeof AgentOrchestrator>[8],
     ) {
         return new AgentOrchestrator(
             asProvider(makeModel("triage")) as never,
@@ -908,6 +919,40 @@ describe("Orchestrator.process — fallback retryability", () => {
             config,
         );
     }
+
+    test("passes each node's own timeout and grace period to the invoker", async () => {
+        const { nodes } = testConfig.file.agent;
+        const invoker = makeStubInvoker({ usedFallback: false, wasInterrupted: false });
+        const orchestrator = makeOrchestratorWith(invoker, {
+            file: {
+                ...testConfig.file,
+                agent: {
+                    ...testConfig.file.agent,
+                    nodes: {
+                        ...nodes,
+                        triage: { ...nodes.triage, mainGracePeriodMs: 2_000 },
+                        general: { ...nodes.general, mainGracePeriodMs: 15_000 },
+                    },
+                },
+            },
+        });
+
+        await orchestrator.process([new HumanMessage("Hello")], MessageIntent.UNKNOWN);
+
+        const calledOptions = (invoker.invoke as ReturnType<typeof mock>).mock.calls.map((args) => args[4]);
+        expect(calledOptions).toEqual([
+            expect.objectContaining({
+                timeoutMs: nodes.triage.timeoutMs,
+                mainGracePeriodMs: 2_000,
+                beforeInvokeStatus: AgentStatusType.TRIAGE,
+            }),
+            expect.objectContaining({
+                timeoutMs: nodes.general.timeoutMs,
+                mainGracePeriodMs: 15_000,
+                beforeInvokeStatus: AgentStatusType.GENERATING,
+            }),
+        ]);
+    });
 
     test("marks a fallback response retryable when the node allows it", async () => {
         const orchestrator = makeOrchestratorWith(
@@ -1032,12 +1077,12 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
         const provider = makeMultiKeyProvider(2);
         let generalCallCount = 0;
         const generalModel = {
-            invoke: mock(async () => new AIMessage("")),
-            stream: mock(async () => {
+            invoke: mock(async () => {
                 generalCallCount++;
                 if (generalCallCount === 1) throw make429Error();
-                return makeStreamIterable(new AIMessage("success on second key"));
+                return new AIMessage("success on second key");
             }),
+            stream: mock(async () => makeStreamIterable(new AIMessage(""))),
         };
 
         const result = await makeOrchestrator(makeTriageWithNoToolCall(), generalModel, provider).process(
@@ -1054,8 +1099,7 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
         const provider = makeMultiKeyProvider(2);
         let generalCallCount = 0;
         const generalModel = {
-            invoke: mock(async () => new AIMessage("")),
-            stream: mock(async () => {
+            invoke: mock(async () => {
                 generalCallCount++;
                 if (generalCallCount === 1) {
                     // Simulate another concurrent request advancing the cursor
@@ -1063,8 +1107,9 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
                     provider.forceAdvance();
                     throw make429Error();
                 }
-                return makeStreamIterable(new AIMessage("success on concurrent-advanced key"));
+                return new AIMessage("success on concurrent-advanced key");
             }),
+            stream: mock(async () => makeStreamIterable(new AIMessage(""))),
         };
 
         const result = await makeOrchestrator(makeTriageWithNoToolCall(), generalModel, provider).process(
@@ -1082,10 +1127,10 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
     test("throws AllFreeKeysExhaustedError when all keys return 429", async () => {
         const provider = makeMultiKeyProvider(2);
         const generalModel = {
-            invoke: mock(async () => new AIMessage("")),
-            stream: mock(async () => {
+            invoke: mock(async () => {
                 throw make429Error();
             }),
+            stream: mock(async () => makeStreamIterable(new AIMessage(""))),
         };
 
         let thrown: unknown;
@@ -1105,23 +1150,23 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
         const provider = makeMultiKeyProvider(2);
         let generalCallCount = 0;
         // Primary always 503s, so fallback is tried. Fallback 429s on first key, succeeds on second.
-        const fallbackStream = mock(async () => {
+        const fallbackInvoke = mock(async () => {
             if (generalCallCount === 1) throw make429Error();
-            return makeStreamIterable(new AIMessage("success from fallback on second key"));
+            return new AIMessage("success from fallback on second key");
         });
         const generalModel = {
-            invoke: mock(async () => new AIMessage("")),
-            stream: mock(async () => {
+            invoke: mock(async () => {
                 generalCallCount++;
                 throw make503Error();
             }),
+            stream: mock(async () => makeStreamIterable(new AIMessage(""))),
         };
         const generalProvider = {
             get(_key: unknown) {
                 return generalModel;
             },
             getFallback(_key: unknown) {
-                return { invoke: mock(async () => new AIMessage("")), stream: fallbackStream };
+                return { invoke: fallbackInvoke, stream: mock(async () => makeStreamIterable(new AIMessage(""))) };
             },
         };
 
@@ -1142,17 +1187,17 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
         expect(result.content).toBe("success from fallback on second key");
         // nextKey() called once: fallback on key-0 returned 429, rotate to key-1
         expect(provider.nextKey).toHaveBeenCalledTimes(1);
-        expect(fallbackStream).toHaveBeenCalledTimes(2);
+        expect(fallbackInvoke).toHaveBeenCalledTimes(2);
     });
 
     test("throws AllFreeKeysExhaustedError when all fallback model invocations return 429", async () => {
         const make503Error = () => new Error("HTTP 503 Service Unavailable");
         const provider = makeMultiKeyProvider(2);
         const generalModel = {
-            invoke: mock(async () => new AIMessage("")),
-            stream: mock(async () => {
+            invoke: mock(async () => {
                 throw make503Error();
             }),
+            stream: mock(async () => makeStreamIterable(new AIMessage(""))),
         };
         const generalProvider = {
             get(_key: unknown) {
@@ -1160,10 +1205,10 @@ describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
             },
             getFallback(_key: unknown) {
                 return {
-                    invoke: mock(async () => new AIMessage("")),
-                    stream: mock(async () => {
+                    invoke: mock(async () => {
                         throw make429Error();
                     }),
+                    stream: mock(async () => makeStreamIterable(new AIMessage(""))),
                 };
             },
         };

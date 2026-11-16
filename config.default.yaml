@@ -59,6 +59,13 @@ agent:
   uploadAttachmentMode: "upload"  # <optional>
   # Maximum total size in MB for inline attachments per message and across conversation history.
   maxInlineAttachmentSizeMB: 100  # <optional>
+  # How fallback models run alongside main models ("sequential" or "parallel").  <optional, default: "sequential">
+  #   sequential: the fallback model is invoked only after the main model fails with a 503 or timeout.
+  #   parallel:   both models are invoked at once. The main model's answer is preferred; a successful
+  #               fallback answer is used once the node's mainGracePeriodMs runs out. Uses each
+  #               model's request quota on every call. Requires mainGracePeriodMs on every node
+  #               with a fallbackModel.
+  fallbackExecutionMode: "sequential"
 
   nodes:
     triage:
@@ -67,6 +74,10 @@ agent:
       fallbackModel: "gemini-3.1-flash-lite"  # <optional>
       # Maximum milliseconds to wait for a triage model response before aborting.
       timeoutMs: 30000                        # <required>
+      # Parallel fallback mode only (no-op in sequential mode): milliseconds the main model is given to
+      # finish after the fallback model answered cleanly. A clean main answer within this window is
+      # preferred, otherwise the fallback answer is used. Required in parallel mode with a fallbackModel.
+      # mainGracePeriodMs: 5000
       thinkingLevel: "high"                   # <optional>
 
     general:
@@ -78,6 +89,10 @@ agent:
       isFallbackRetryable: true         # <optional>
       # Maximum milliseconds to wait for a general model response before aborting.
       timeoutMs: 120000                 # <required>
+      # Parallel fallback mode only (no-op in sequential mode): milliseconds the main model is given to
+      # finish after the fallback model answered cleanly. A clean main answer within this window is
+      # preferred, otherwise the fallback answer is used. Required in parallel mode with a fallbackModel.
+      # mainGracePeriodMs: 30000
 
     computation:
       model: "gemini-3.8-flash"         # <required>
@@ -88,6 +103,10 @@ agent:
       isFallbackRetryable: true         # <optional>
       # Maximum milliseconds to wait for a general model response before aborting.
       timeoutMs: 120000
+      # Parallel fallback mode only (no-op in sequential mode): milliseconds the main model is given to
+      # finish after the fallback model answered cleanly. A clean main answer within this window is
+      # preferred, otherwise the fallback answer is used. Required in parallel mode with a fallbackModel.
+      # mainGracePeriodMs: 30000
 
     search:
       model: "gemini-3.8-flash"         # <required>
@@ -98,6 +117,10 @@ agent:
       isFallbackRetryable: true         # <optional>
       # Maximum milliseconds to wait for a search model response before aborting.
       timeoutMs: 120000                 # <required>
+      # Parallel fallback mode only (no-op in sequential mode): milliseconds the main model is given to
+      # finish after the fallback model answered cleanly. A clean main answer within this window is
+      # preferred, otherwise the fallback answer is used. Required in parallel mode with a fallbackModel.
+      # mainGracePeriodMs: 30000
       # Search backend to use. Options: "google" | "tavily"   <optional, default: "google">
       #   google: Google Search grounding via Gemini API. Requires GOOGLE_PAID_API_KEY.
       #           Free only for gemini-2.5 models — gemini-3+ requires a paid plan.

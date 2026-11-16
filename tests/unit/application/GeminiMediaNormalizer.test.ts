@@ -45,6 +45,7 @@ const testConfig = {
             uploadAttachmentMode: "upload" as const,
             maxInlineAttachmentSizeMB: 100,
             maxInlineAttachmentSizeBytes: 100 * 1024 * 1024,
+            fallbackExecutionMode: "sequential" as const,
             nodes: {
                 triage: {
                     model: "gemini-test",

@@ -43,6 +43,21 @@ export type SearchMode = (typeof SearchMode)[keyof typeof SearchMode];
 
 const SEARCH_MODES = Object.values(SearchMode) as readonly SearchMode[];
 
+/**
+ * Controls how a node's fallback model is used alongside its main model.
+ * - "sequential": the fallback is invoked only after the main model fails with a 503 or timeout.
+ * - "parallel": both models are invoked at once; the main model's answer is preferred, but a
+ *   successful fallback answer is used once the node's `mainGracePeriodMs` runs out.
+ */
+export const FallbackExecutionMode = {
+    sequential: "sequential",
+    parallel: "parallel",
+} as const;
+
+export type FallbackExecutionMode = (typeof FallbackExecutionMode)[keyof typeof FallbackExecutionMode];
+
+const FALLBACK_EXECUTION_MODES = Object.values(FallbackExecutionMode) as readonly FallbackExecutionMode[];
+
 // ---------------------------------------------------------------------------
 // Defaults
 // ---------------------------------------------------------------------------
@@ -108,6 +123,8 @@ const fileConfigDefaults = {
          * inline attachment data across the entire conversation history.
          */
         maxInlineAttachmentSizeMB: 100,
+        /** How fallback models are run alongside main models ("sequential" or "parallel"). */
+        fallbackExecutionMode: FallbackExecutionMode.sequential,
     },
     ytDlp: {
         /** Number of proxy rotation retries on bot-detection or 429 responses. */
@@ -126,6 +143,13 @@ const agentModelSchema = z.object({
     fallbackModel: z.string().optional(),
     /** Maximum milliseconds to wait for a model response before aborting. */
     timeoutMs: z.number().int().positive(),
+    /**
+     * Parallel fallback mode only (no-op in sequential mode): how many milliseconds the main
+     * model is given to finish after the fallback model has answered cleanly. A clean main answer
+     * arriving within this window is preferred; otherwise the fallback answer is used.
+     * Required in parallel mode for nodes with a `fallbackModel`, treated as 0 when absent.
+     */
+    mainGracePeriodMs: z.number().int().nonnegative().optional(),
     /** Which API key pool to use when invoking this node ("free" or "paid"). */
     apiKeyType: z
         .string()
@@ -262,6 +286,12 @@ const fileConfigSchema = z.object({
             .positive()
             .optional()
             .prefault(fileConfigDefaults.agent.maxInlineAttachmentSizeMB),
+        fallbackExecutionMode: z
+            .string()
+            .transform((v) => v.toLowerCase())
+            .pipe(z.enum(FALLBACK_EXECUTION_MODES))
+            .optional()
+            .prefault(fileConfigDefaults.agent.fallbackExecutionMode),
         nodes: z.object({
             triage: triageModelSchema,
             general: answerNodeModelSchema,
@@ -561,6 +591,20 @@ export function validateConfig(config: AppConfig, logger?: Logger): void {
     }
     if (needsPaid && config.googlePaidApiKey === null) {
         throw new ConfigError('GOOGLE_PAID_API_KEY is required because one or more agent nodes use apiKeyType: "paid"');
+    }
+
+    // In parallel mode the grace period decides when a fallback answer wins, and suitable values
+    // vary widely with each node's task complexity, so it must be set explicitly per node.
+    if (config.file.agent.fallbackExecutionMode === FallbackExecutionMode.parallel) {
+        const missingGracePeriod = Object.entries(nodes)
+            .filter(([, node]) => node.fallbackModel !== undefined && node.mainGracePeriodMs === undefined)
+            .map(([name]) => `agent.nodes.${name}.mainGracePeriodMs`);
+        if (missingGracePeriod.length > 0) {
+            throw new ConfigError(
+                'agent.fallbackExecutionMode is "parallel", which requires a grace period on every node ' +
+                    `with a fallbackModel. Missing: ${missingGracePeriod.join(", ")}`,
+            );
+        }
     }
 
     // Warn when search is configured with free keys + Google grounding + a Gemini 3 model,
