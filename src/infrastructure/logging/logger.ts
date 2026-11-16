@@ -9,6 +9,13 @@ const PINO_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent
 const logLevelSchema = z.enum(PINO_LEVELS);
 
 /**
+ * Serializes `cause` as a nested error object rather than folding only its message and stack
+ * into the parent, so the fields of raw provider errors wrapped in an AppError (status code,
+ * response body, headers) remain visible in the logs.
+ */
+const SERIALIZERS = { err: pino.stdSerializers.errWithCause };
+
+/**
  * Formats a Date as a filesystem-safe ISO-like timestamp string.
  * Colons and dots are replaced with dashes to avoid issues on Windows and in filenames.
  * Example: "2026-03-07T12-00-00-000Z"
@@ -40,6 +47,7 @@ export function createLogger(logLevel: string, fileLog = false): Logger {
         // No file transport — original behavior.
         const logger = pino({
             level,
+            serializers: SERIALIZERS,
             transport: isProduction
                 ? undefined
                 : {
@@ -60,7 +68,7 @@ export function createLogger(logLevel: string, fileLog = false): Logger {
     // pino's generic TransportTargetOptions<T>. Casting via unknown to the
     // multi-target overload is safe — pino.transport serializes options as-is.
     const logger = pino(
-        { level },
+        { level, serializers: SERIALIZERS },
         pino.transport({
             targets: isProduction
                 ? [
