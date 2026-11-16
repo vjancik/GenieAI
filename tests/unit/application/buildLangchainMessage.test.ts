@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import pino from "pino";
 import { buildLangchainMessage } from "../../../src/application/helpers/buildLangchainMessage.ts";
+import { MEDIA_REQUEST_HEADERS } from "../../../src/application/helpers/mediaRequestHeaders.ts";
 import type {
     IChatClientMessageAttachment,
     IChatClientMessageEmbed,
@@ -237,6 +238,82 @@ describe("buildLangchainMessage", () => {
             embeds: [makeEmbed(cdnUrl)],
         });
 
-        expect(fetchSpy).toHaveBeenCalledWith(cdnUrl, { method: "HEAD", signal: expect.any(AbortSignal) });
+        expect(fetchSpy).toHaveBeenCalledWith(cdnUrl, expect.objectContaining({ method: "HEAD" }));
+    });
+
+    test("embed media: probes with the Discordbot user agent", async () => {
+        const requests: RequestInit[] = [];
+        fetchSpy.mockRestore();
+        fetchSpy = spyFetchWith((_url, init) => {
+            if (init) requests.push(init);
+            return makeHeadResponse("image/png");
+        });
+
+        await buildLangchainMessage({
+            ...BASE_PARAMS,
+            role: "human",
+            content: "",
+            attachments: [],
+            embeds: [makeEmbed("https://example.com/img.png")],
+        });
+
+        // A successful HEAD needs no GET fallback
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.headers).toEqual(MEDIA_REQUEST_HEADERS);
+    });
+
+    test("embed media: falls back to a one-byte ranged GET when HEAD is rejected", async () => {
+        const requests: RequestInit[] = [];
+        fetchSpy.mockRestore();
+        fetchSpy = spyFetchWith((_url, init) => {
+            if (init) requests.push(init);
+            // The host answers HEAD with 405 Method Not Allowed and a JSON error body type
+            return init?.method === "HEAD"
+                ? new Response(null, { status: 405, headers: { "content-type": "application/json" } })
+                : new Response("x", { status: 206, headers: { "content-type": "image/png" } });
+        });
+
+        const result = await buildLangchainMessage({
+            ...BASE_PARAMS,
+            role: "human",
+            content: "",
+            attachments: [],
+            embeds: [makeEmbed("https://example.com/img.png")],
+        });
+
+        expect(requests.map((request) => request.method)).toEqual(["HEAD", "GET"]);
+        expect(requests[1]?.headers).toEqual({ ...MEDIA_REQUEST_HEADERS, Range: "bytes=0-0" });
+        const blocks = result.content as Record<string, unknown>[];
+        expect(blocks).toHaveLength(1);
+        expect(blocks[0]?.mimeType).toBe("image/png");
+    });
+
+    test("embed media: does not read the GET fallback body when the server ignores Range", async () => {
+        let cancelled = false;
+        const body = new ReadableStream<Uint8Array>({
+            pull(controller) {
+                controller.enqueue(new Uint8Array(1024));
+            },
+            cancel() {
+                cancelled = true;
+            },
+        });
+        fetchSpy.mockRestore();
+        fetchSpy = spyFetchWith((_url, init) =>
+            init?.method === "HEAD"
+                ? new Response(null, { status: 405 })
+                : new Response(body, { status: 200, headers: { "content-type": "image/png" } }),
+        );
+
+        const result = await buildLangchainMessage({
+            ...BASE_PARAMS,
+            role: "human",
+            content: "",
+            attachments: [],
+            embeds: [makeEmbed("https://example.com/img.png")],
+        });
+
+        expect(cancelled).toBe(true);
+        expect(result.content as unknown[]).toHaveLength(1);
     });
 });

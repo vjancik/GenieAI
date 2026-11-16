@@ -5,6 +5,7 @@ import type { IChatClientMessageAttachment, IChatClientMessageEmbed } from "../p
 import type { Logger } from "../types/Logger.ts";
 import { buildAttachmentTokenUrl, buildEmbedTokenUrl } from "./discordTokenUrl.ts";
 import { normalizeGeminiMimeType } from "./geminiMimeType.ts";
+import { MEDIA_REQUEST_HEADERS } from "./mediaRequestHeaders.ts";
 import { parseMimeType } from "./parseMimeType.ts";
 
 /** Returns true if at least one embed contains a URL for any of the tracked media keys. */
@@ -19,30 +20,53 @@ const EMBED_KEY_ACCEPT: Record<EmbedMediaKey, string> = {
     video: "video/",
 };
 
+// TODO: config var for timeout
+const MIME_PROBE_TIMEOUT_MS = 10_000;
+
 /**
- * Resolves the MIME type of an embed media URL via an HTTP HEAD request.
+ * Requests only the response headers of a URL and returns its MIME type.
  *
- * Returns `null` when the request fails or the response carries no `Content-Type` header.
- * Does not validate the type against any expected category — that is the caller's responsibility.
+ * Returns `null` when the request fails, answers with an error status, or carries
+ * no `Content-Type` header.
  */
-async function fetchEmbedMimeType(url: string): Promise<string | null> {
+async function probeMimeType(url: string, method: "HEAD" | "GET"): Promise<string | null> {
     try {
-        // TODO: config var for timeout
-        const response = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(10_000) });
-        const contentType = response.headers.get("content-type");
-        return parseMimeType(contentType);
+        const response = await fetch(url, {
+            method,
+            // A one-byte range keeps a GET probe from transferring the media itself
+            headers: method === "GET" ? { ...MEDIA_REQUEST_HEADERS, Range: "bytes=0-0" } : MEDIA_REQUEST_HEADERS,
+            signal: AbortSignal.timeout(MIME_PROBE_TIMEOUT_MS),
+        });
+        // Only the headers matter. Servers may ignore the Range header and start sending
+        // the whole file, so the body is discarded rather than read.
+        await response.body?.cancel();
+        if (!response.ok) return null;
+        return parseMimeType(response.headers.get("content-type"));
     } catch {
         return null;
     }
 }
 
 /**
+ * Resolves the MIME type of an embed media URL from its response headers.
+ *
+ * Tries a HEAD request first and falls back to a one-byte ranged GET, because some
+ * media hosts reject HEAD outright (405) while serving the same URL to GET.
+ *
+ * Returns `null` when neither request yields a `Content-Type`.
+ * Does not validate the type against any expected category — that is the caller's responsibility.
+ */
+async function fetchEmbedMimeType(url: string): Promise<string | null> {
+    return (await probeMimeType(url, "HEAD")) ?? (await probeMimeType(url, "GET"));
+}
+
+/**
  * Builds message content parts as Discord token URL media blocks.
  *
  * Attachment mimeTypes are taken directly from attachment metadata.
- * Embed media mimeTypes are resolved via HEAD request — Discord embed metadata
- * does not carry MIME type information. Embed blocks are skipped when:
- * - the HEAD request fails or returns no Content-Type (embed URLs are flaky)
+ * Embed media mimeTypes are resolved via a header probe (HEAD, then ranged GET) — Discord
+ * embed metadata does not carry MIME type information. Embed blocks are skipped when:
+ * - the probe fails or returns no Content-Type (embed URLs are flaky)
  * - the resolved MIME type does not match the expected category for the embed key
  *
  * Each attachment and embed media item is encoded as a `discord://` token URL.
@@ -75,7 +99,7 @@ async function buildTokenContentParts(
     }
 
     if (embeds) {
-        // Collect all embed media candidates first, then HEAD-fetch all concurrently.
+        // Collect all embed media candidates first, then probe all concurrently.
         const candidates: {
             embedIndex: number;
             key: EmbedMediaKey;
@@ -99,9 +123,9 @@ async function buildTokenContentParts(
             candidates.map(async ({ embedIndex, key, url, proxyURL, tokenUrl }) => {
                 const expected = EMBED_KEY_ACCEPT[key];
 
-                // HEAD-fetch the original URL to get the real Content-Type — Discord embed
+                // Probe the original URL to get the real Content-Type — Discord embed
                 // metadata has no MIME type. For embeds like Instagram link-previews, the
-                // original URL is a webpage (text/html), but Discord's proxyURL serves the
+                // original URL may be a webpage (text/html), but Discord's proxyURL serves the
                 // actual media with the correct MIME type — fall back to it when the primary
                 // URL fails or returns a mismatched type.
                 let mimeType = await fetchEmbedMimeType(url);
@@ -112,7 +136,7 @@ async function buildTokenContentParts(
                     if (mimeType === null) {
                         logger.warn(
                             { url, proxyURL, embedIndex, key },
-                            "Could not resolve MIME type for embed media via HEAD request — skipping block",
+                            "Could not resolve MIME type for embed media — skipping block",
                         );
                         return null;
                     }
@@ -145,7 +169,7 @@ async function buildTokenContentParts(
  * Produces a {@link HumanMessage} for role "human" and an {@link AIMessage} for role "assistant".
  *
  * Attachment mimeTypes are taken from Discord metadata. Embed media mimeTypes are resolved
- * via HTTP HEAD request — Discord embed metadata carries no MIME type information.
+ * via an HTTP header probe — Discord embed metadata carries no MIME type information.
  * Embed blocks are skipped when the mimeType cannot be resolved or does not match the
  * expected category for the embed key.
  *

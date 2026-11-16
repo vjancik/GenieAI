@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 import pino from "pino";
 import type { AppConfig } from "../../../src/application/config/AppConfig.ts";
+import { MEDIA_REQUEST_HEADERS } from "../../../src/application/helpers/mediaRequestHeaders.ts";
 import type { IChatClientMessageAttachment } from "../../../src/application/ports/chat/IChatClient.ts";
 import { AppError } from "../../../src/domain/errors/AppError.ts";
 import { FetchAttachmentDownloader } from "../../../src/infrastructure/attachments/FetchAttachmentDownloader.ts";
@@ -55,6 +56,22 @@ describe("FetchAttachmentDownloader", () => {
         expect(result.mimeType).toBe("image/jpeg");
         // base64 of [1,2,3,4]
         expect(result.data).toBe(Buffer.from(data).toString("base64"));
+
+        globalFetch.mockRestore();
+    });
+
+    test("sends the Discordbot user agent, alongside Accept for embeds", async () => {
+        const globalFetch = spyOn(globalThis, "fetch").mockImplementation((async () =>
+            makeResponse(new Uint8Array([1]), "video/mp4")) as unknown as typeof fetch);
+
+        await downloader.download(testAttachment);
+        await downloader.download({ ...testAttachment, contentType: null }, "video/mp4");
+
+        expect((globalFetch.mock.calls[0]?.[1] as RequestInit).headers).toEqual(MEDIA_REQUEST_HEADERS);
+        expect((globalFetch.mock.calls[1]?.[1] as RequestInit).headers).toEqual({
+            ...MEDIA_REQUEST_HEADERS,
+            Accept: "video/mp4",
+        });
 
         globalFetch.mockRestore();
     });

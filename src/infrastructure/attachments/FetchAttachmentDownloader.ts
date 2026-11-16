@@ -1,5 +1,6 @@
 import * as Sentry from "@sentry/bun";
 import type { AppConfig } from "../../application/config/AppConfig.ts";
+import { MEDIA_REQUEST_HEADERS } from "../../application/helpers/mediaRequestHeaders.ts";
 import { parseMimeType } from "../../application/helpers/parseMimeType.ts";
 import type { IChatClientMessageAttachment } from "../../application/ports/chat/IChatClient.ts";
 import type { DownloadedAttachment, IAttachmentDownloader } from "../../application/ports/IAttachmentDownloader.ts";
@@ -117,7 +118,7 @@ export class FetchAttachmentDownloader implements IAttachmentDownloader {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), this.responseTimeoutMs);
 
-        const headers: Record<string, string> = {};
+        const headers: Record<string, string> = { ...MEDIA_REQUEST_HEADERS };
         if (acceptTypes !== undefined) headers.Accept = acceptTypes;
 
         let response: Response;
