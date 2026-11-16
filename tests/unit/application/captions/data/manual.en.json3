@@ -1,0 +1,167 @@
+{
+  "wireMagic": "pb3",
+  "pens": [
+    {}
+  ],
+  "wsWinStyles": [
+    {}
+  ],
+  "wpWinPositions": [
+    {}
+  ],
+  "events": [
+    {
+      "tStartMs": 34,
+      "dDurationMs": 3886,
+      "segs": [
+        {
+          "utf8": "- This might be the most\nambitious long shot precision"
+        }
+      ]
+    },
+    {
+      "tStartMs": 3920,
+      "dDurationMs": 2240,
+      "segs": [
+        {
+          "utf8": "experiment that I've ever seen."
+        }
+      ]
+    },
+    {
+      "tStartMs": 6160,
+      "dDurationMs": 2880,
+      "segs": [
+        {
+          "utf8": "Scientists have put one\natomic clock down in Boulder,"
+        }
+      ]
+    },
+    {
+      "tStartMs": 9040,
+      "dDurationMs": 3200,
+      "segs": [
+        {
+          "utf8": "Colorado, and one up in this\nobservatory 4,000 meters"
+        }
+      ]
+    },
+    {
+      "tStartMs": 12240,
+      "dDurationMs": 1360,
+      "segs": [
+        {
+          "utf8": "above sea level, and they're going to try"
+        }
+      ]
+    },
+    {
+      "tStartMs": 13600,
+      "dDurationMs": 2160,
+      "segs": [
+        {
+          "utf8": "and measure the difference\nin time dilation"
+        }
+      ]
+    },
+    {
+      "tStartMs": 15760,
+      "dDurationMs": 2240,
+      "segs": [
+        {
+          "utf8": "according to general relativity."
+        }
+      ]
+    },
+    {
+      "tStartMs": 18000,
+      "dDurationMs": 3120,
+      "segs": [
+        {
+          "utf8": "Because up here, time itself\nshould be passing faster"
+        }
+      ]
+    },
+    {
+      "tStartMs": 21120,
+      "dDurationMs": 2040,
+      "segs": [
+        {
+          "utf8": "relative to down in Boulder."
+        }
+      ]
+    },
+    {
+      "tStartMs": 23160,
+      "dDurationMs": 2280,
+      "segs": [
+        {
+          "utf8": "- If you go into a science center,"
+        }
+      ]
+    },
+    {
+      "tStartMs": 25440,
+      "dDurationMs": 2320,
+      "segs": [
+        {
+          "utf8": "often they will explain\ngravity as the bending"
+        }
+      ]
+    },
+    {
+      "tStartMs": 27760,
+      "dDurationMs": 2240,
+      "segs": [
+        {
+          "utf8": "of space time, and what they\nwill have is a little funnel"
+        }
+      ]
+    },
+    {
+      "tStartMs": 30000,
+      "dDurationMs": 2640,
+      "segs": [
+        {
+          "utf8": "where the particle goes around the funnel,"
+        }
+      ]
+    },
+    {
+      "tStartMs": 32640,
+      "dDurationMs": 2240,
+      "segs": [
+        {
+          "utf8": "and that's meant to give you an impression"
+        }
+      ]
+    },
+    {
+      "tStartMs": 34880,
+      "dDurationMs": 2320,
+      "segs": [
+        {
+          "utf8": "of why the earth goes around the sun."
+        }
+      ]
+    },
+    {
+      "tStartMs": 37200,
+      "dDurationMs": 1920,
+      "segs": [
+        {
+          "utf8": "But that's not actually what happens."
+        }
+      ]
+    },
+    {
+      "tStartMs": 39120,
+      "dDurationMs": 2720,
+      "segs": [
+        {
+          "utf8": "It's not as much that\nspace is curving, it's"
+        }
+      ]
+    }
+  ]
+}

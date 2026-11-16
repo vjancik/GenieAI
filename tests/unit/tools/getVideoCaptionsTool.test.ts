@@ -4,6 +4,8 @@ import { join } from "node:path";
 import pino from "pino";
 import { NoCaptionsError, ToolError } from "../../../src/domain/errors/AppError.ts";
 import type {
+    CaptionDownloader,
+    CaptionTrack,
     YtDlpInfoJson,
     YtDlpMetadataRunner,
     YtDlpRunResult,
@@ -13,7 +15,8 @@ import {
     fetchMetadataWithRetries,
     InfoJsonSchema,
     isProxyRetryableYtDlpError,
-    selectCaptionUrls,
+    resolveCaptions,
+    selectCaptionTracks,
     toVideoCaptionsError,
 } from "../../../src/infrastructure/llm/tools/getVideoCaptionsTool.ts";
 
@@ -61,71 +64,51 @@ async function loadFixture(): Promise<YtDlpInfoJson> {
 // Known URLs from the fixture (verified by inspection)
 const MANUAL_EN_SRT =
     "https://www.youtube.com/api/timedtext?v=P-4pbFcERnk&ei=HpG1aePmKfGjw-AP9oyo8Aw&caps=asr&opi=112496729&xoaf=5&xowf=1&xospf=1&hl=en&ip=0.0.0.0&ipbits=0&expire=1773532046&sparams=ip%2Cipbits%2Cexpire%2Cv%2Cei%2Ccaps%2Copi%2Cxoaf&signature=95D329309046F015CF394E6CB958D1E3C22FB609.66CCA301E05012CDF5A94D00D66E4C08BEE25B4A&key=yt8&lang=en&fmt=srt";
-const MANUAL_EN_VTT =
-    "https://www.youtube.com/api/timedtext?v=P-4pbFcERnk&ei=HpG1aePmKfGjw-AP9oyo8Aw&caps=asr&opi=112496729&xoaf=5&xowf=1&xospf=1&hl=en&ip=0.0.0.0&ipbits=0&expire=1773532046&sparams=ip%2Cipbits%2Cexpire%2Cv%2Cei%2Ccaps%2Copi%2Cxoaf&signature=95D329309046F015CF394E6CB958D1E3C22FB609.66CCA301E05012CDF5A94D00D66E4C08BEE25B4A&key=yt8&lang=en&fmt=vtt";
 const AUTO_EN_SRT =
     "https://www.youtube.com/api/timedtext?v=P-4pbFcERnk&ei=HpG1aePmKfGjw-AP9oyo8Aw&caps=asr&opi=112496729&xoaf=5&xowf=1&xospf=1&hl=en&ip=0.0.0.0&ipbits=0&expire=1773532046&sparams=ip%2Cipbits%2Cexpire%2Cv%2Cei%2Ccaps%2Copi%2Cxoaf&signature=95D329309046F015CF394E6CB958D1E3C22FB609.66CCA301E05012CDF5A94D00D66E4C08BEE25B4A&key=yt8&kind=asr&lang=en&fmt=srt";
-const AUTO_EN_VTT =
-    "https://www.youtube.com/api/timedtext?v=P-4pbFcERnk&ei=HpG1aePmKfGjw-AP9oyo8Aw&caps=asr&opi=112496729&xoaf=5&xowf=1&xospf=1&hl=en&ip=0.0.0.0&ipbits=0&expire=1773532046&sparams=ip%2Cipbits%2Cexpire%2Cv%2Cei%2Ccaps%2Copi%2Cxoaf&signature=95D329309046F015CF394E6CB958D1E3C22FB609.66CCA301E05012CDF5A94D00D66E4C08BEE25B4A&key=yt8&kind=asr&lang=en&fmt=vtt";
 const AUTO_DE_SRT =
     "https://www.youtube.com/api/timedtext?v=P-4pbFcERnk&ei=HpG1aePmKfGjw-AP9oyo8Aw&caps=asr&opi=112496729&xoaf=5&xowf=1&xospf=1&hl=en&ip=0.0.0.0&ipbits=0&expire=1773532046&sparams=ip%2Cipbits%2Cexpire%2Cv%2Cei%2Ccaps%2Copi%2Cxoaf&signature=95D329309046F015CF394E6CB958D1E3C22FB609.66CCA301E05012CDF5A94D00D66E4C08BEE25B4A&key=yt8&kind=asr&lang=en&fmt=srt&tlang=de";
 
-describe("selectCaptionUrls", () => {
-    test("returns empty array for info with no captions", () => {
+/** Lists the formats of a track in the order they would be tried. */
+const formatsOf = (track: CaptionTrack | undefined) => track?.candidates.map((candidate) => candidate.ext);
+
+describe("selectCaptionTracks", () => {
+    test("returns no tracks for info with no captions", () => {
         const info: YtDlpInfoJson = { id: "test", subtitles: {}, automatic_captions: {} };
-        expect(selectCaptionUrls(info)).toEqual([]);
+        expect(selectCaptionTracks(info)).toEqual([]);
     });
 
-    test("manual en srt is the first URL in the real fixture", async () => {
-        const info = await loadFixture();
-        const urls = selectCaptionUrls(info);
-        expect(urls[0]).toBe(MANUAL_EN_SRT);
+    test("the manual en track comes first in the real fixture, with formats in preference order", async () => {
+        const tracks = selectCaptionTracks(await loadFixture());
+        expect(tracks[0]).toMatchObject({ isAuto: false, lang: "en" });
+        expect(formatsOf(tracks[0])).toEqual(["srv3", "srt", "json3", "srv1", "ttml"]);
+        expect(tracks[0]?.candidates[1]?.url).toBe(MANUAL_EN_SRT);
     });
 
-    test("manual en vtt comes before any auto captions", async () => {
-        const info = await loadFixture();
-        const urls = selectCaptionUrls(info);
-        const manualVttIdx = urls.indexOf(MANUAL_EN_VTT);
-        const autoEnSrtIdx = urls.indexOf(AUTO_EN_SRT);
-        expect(manualVttIdx).toBeGreaterThan(-1);
-        expect(autoEnSrtIdx).toBeGreaterThan(-1);
-        expect(manualVttIdx).toBeLessThan(autoEnSrtIdx);
+    test("automatic tracks follow the manual ones in the real fixture", async () => {
+        // The fixture's en-orig track lists the same URLs as en, so it is dropped as a duplicate
+        const tracks = selectCaptionTracks(await loadFixture());
+        expect(tracks.map((track) => `${track.isAuto ? "auto" : "manual"}:${track.lang}`)).toEqual([
+            "manual:en",
+            "auto:en",
+        ]);
+        expect(formatsOf(tracks[1])).toEqual(["srv3", "srt", "json3", "srv1", "ttml"]);
+        expect(tracks[1]?.candidates[1]?.url).toBe(AUTO_EN_SRT);
     });
 
-    test("auto en srt comes before auto en vtt", async () => {
-        const info = await loadFixture();
-        const urls = selectCaptionUrls(info);
-        const srtIdx = urls.indexOf(AUTO_EN_SRT);
-        const vttIdx = urls.indexOf(AUTO_EN_VTT);
-        expect(srtIdx).toBeGreaterThan(-1);
-        expect(vttIdx).toBeGreaterThan(-1);
-        expect(srtIdx).toBeLessThan(vttIdx);
-    });
-
-    test("auto slots are filled by en before de (de excluded when en fills all 5)", async () => {
-        const info = await loadFixture();
-        const urls = selectCaptionUrls(info);
-        // The fixture has 7 non-streaming en auto tracks (srt, vtt, ttml, srv1-3, json3),
-        // so all 5 auto slots are taken by en — de should not appear at all
-        expect(urls.indexOf(AUTO_EN_SRT)).toBeGreaterThan(-1);
-        expect(urls.indexOf(AUTO_DE_SRT)).toBe(-1);
+    test("excludes auto-translated tracks", async () => {
+        const urls = selectCaptionTracks(await loadFixture()).flatMap((track) => track.candidates.map((c) => c.url));
+        expect(urls).not.toContain(AUTO_DE_SRT);
+        expect(urls.every((url) => !new URL(url).searchParams.has("tlang"))).toBe(true);
     });
 
     test("result contains no duplicate URLs", async () => {
-        const info = await loadFixture();
-        const urls = selectCaptionUrls(info);
+        const urls = selectCaptionTracks(await loadFixture()).flatMap((track) => track.candidates.map((c) => c.url));
         expect(urls.length).toBe(new Set(urls).size);
     });
 
-    test("never returns more than 10 URLs (5 manual + 5 auto)", async () => {
-        const info = await loadFixture();
-        const urls = selectCaptionUrls(info);
-        expect(urls.length).toBeLessThanOrEqual(10);
-    });
-
     test("excludes HLS/m3u8 protocol entries", async () => {
-        const info = await loadFixture();
-        const urls = selectCaptionUrls(info);
+        const urls = selectCaptionTracks(await loadFixture()).flatMap((track) => track.candidates.map((c) => c.url));
         // HLS entries use protocol: "m3u8_native" and are served from manifest.googlevideo.com
         expect(urls.every((u: string) => !u.includes("manifest.googlevideo.com"))).toBe(true);
     });
@@ -140,71 +123,260 @@ describe("selectCaptionUrls", () => {
                 en: [{ ext: "srt", url: "https://example.com/auto-en.srt" }],
             },
         };
-        const urls = selectCaptionUrls(info);
-        expect(urls[0]).toBe("https://example.com/manual-en.vtt");
-        expect(urls[1]).toBe("https://example.com/auto-en.srt");
+        expect(selectCaptionTracks(info)).toEqual([
+            { isAuto: false, lang: "en", candidates: [{ ext: "vtt", url: "https://example.com/manual-en.vtt" }] },
+            { isAuto: true, lang: "en", candidates: [{ ext: "srt", url: "https://example.com/auto-en.srt" }] },
+        ]);
     });
 
-    test("prefers en over de in automatic captions", () => {
-        const info: YtDlpInfoJson = {
-            id: "test",
-            subtitles: {},
-            automatic_captions: {
-                de: [{ ext: "srt", url: "https://example.com/auto-de.srt" }],
-                en: [{ ext: "srt", url: "https://example.com/auto-en.srt" }],
-            },
-        };
-        const urls = selectCaptionUrls(info);
-        expect(urls[0]).toBe("https://example.com/auto-en.srt");
-        expect(urls[1]).toBe("https://example.com/auto-de.srt");
-    });
-
-    test("prefers srt over vtt for same language and source type", () => {
-        const info: YtDlpInfoJson = {
-            id: "test",
-            subtitles: {},
-            automatic_captions: {
-                en: [
-                    { ext: "vtt", url: "https://example.com/auto-en.vtt" },
-                    { ext: "srt", url: "https://example.com/auto-en.srt" },
-                ],
-            },
-        };
-        const urls = selectCaptionUrls(info);
-        expect(urls[0]).toBe("https://example.com/auto-en.srt");
-        expect(urls[1]).toBe("https://example.com/auto-en.vtt");
-    });
-
-    test("unknown format comes after srt and vtt", () => {
-        const info: YtDlpInfoJson = {
-            id: "test",
-            subtitles: {},
-            automatic_captions: {
-                en: [
-                    { ext: "json3", url: "https://example.com/auto-en.json3" },
-                    { ext: "srt", url: "https://example.com/auto-en.srt" },
-                    { ext: "vtt", url: "https://example.com/auto-en.vtt" },
-                ],
-            },
-        };
-        const urls = selectCaptionUrls(info);
-        expect(urls[0]).toBe("https://example.com/auto-en.srt");
-        expect(urls[1]).toBe("https://example.com/auto-en.vtt");
-        expect(urls[2]).toBe("https://example.com/auto-en.json3");
-    });
-
-    test("unknown language comes after all priority languages", () => {
+    test("prefers en over de, and priority languages over unknown ones", () => {
         const info: YtDlpInfoJson = {
             id: "test",
             subtitles: {},
             automatic_captions: {
                 sw: [{ ext: "srt", url: "https://example.com/auto-sw.srt" }],
                 de: [{ ext: "srt", url: "https://example.com/auto-de.srt" }],
+                en: [{ ext: "srt", url: "https://example.com/auto-en.srt" }],
             },
         };
-        const urls = selectCaptionUrls(info);
-        expect(urls[0]).toBe("https://example.com/auto-de.srt");
-        expect(urls[1]).toBe("https://example.com/auto-sw.srt");
+        // Capped at two tracks per kind, so the unknown language is dropped
+        expect(selectCaptionTracks(info).map((track) => track.lang)).toEqual(["en", "de"]);
+    });
+
+    test("orders formats srv3 > srt > json3 > srv1 > ttml > vtt > srv2, capped at five per track", () => {
+        const exts = ["vtt", "srv2", "json3", "ttml", "srt", "srv1", "srv3"];
+        const info: YtDlpInfoJson = {
+            id: "test",
+            subtitles: {},
+            automatic_captions: { en: exts.map((ext) => ({ ext, url: `https://example.com/auto-en.${ext}` })) },
+        };
+        expect(formatsOf(selectCaptionTracks(info)[0])).toEqual(["srv3", "srt", "json3", "srv1", "ttml"]);
+    });
+
+    test("formats without an extractor come after the known ones", () => {
+        const info: YtDlpInfoJson = {
+            id: "test",
+            subtitles: {},
+            automatic_captions: {
+                en: [
+                    { ext: "sbv", url: "https://example.com/auto-en.sbv" },
+                    { ext: "vtt", url: "https://example.com/auto-en.vtt" },
+                    { ext: "srt", url: "https://example.com/auto-en.srt" },
+                ],
+            },
+        };
+        expect(formatsOf(selectCaptionTracks(info)[0])).toEqual(["srt", "vtt", "sbv"]);
+    });
+
+    test("a track left without fetchable formats is dropped", () => {
+        const info: YtDlpInfoJson = {
+            id: "test",
+            subtitles: { en: [{ ext: "vtt", url: "https://example.com/manual-en.m3u8", protocol: "m3u8_native" }] },
+            automatic_captions: {},
+        };
+        expect(selectCaptionTracks(info)).toEqual([]);
+    });
+});
+
+describe("resolveCaptions", () => {
+    const SRT = "1\n00:00:01,000 --> 00:00:03,000\nHello there.\n\n2\n00:00:03,000 --> 00:00:05,000\nGeneral Kenobi.\n";
+    const SRT_UNPARSEABLE = "Hello there.\n\nGeneral Kenobi.\n";
+    const SRV3 =
+        '<timedtext format="3"><body><p t="1000" d="2000">Hello there.</p><p t="3000" d="2000">General Kenobi.</p></body></timedtext>';
+    const SRV3_EMPTY = '<timedtext format="3"><body></body></timedtext>';
+    const SRV3_UNPARSEABLE = '<timedtext format="3"><body><p start="1">Hello there.</p></body></timedtext>';
+    const JSON3_EMPTY = '{"events":[]}';
+    const FORMATTED = "0:01 Hello there.\n0:03 General Kenobi.";
+
+    /** Builds a track whose candidate URLs are `<kind>-<lang>.<ext>`. */
+    function track(kind: "manual" | "auto", lang: string, exts: string[]): CaptionTrack {
+        return {
+            isAuto: kind === "auto",
+            lang,
+            candidates: exts.map((ext) => ({ ext, url: `${kind}-${lang}.${ext}` })),
+        };
+    }
+
+    /** Builds a downloader serving the given contents by URL; unlisted URLs fail to download. */
+    function makeDownloader(contents: Record<string, string>) {
+        const downloaded: string[] = [];
+        const download: CaptionDownloader = async (url) => {
+            downloaded.push(url);
+            return contents[url] ?? null;
+        };
+        return { download, downloaded };
+    }
+
+    test("formats the first format of the first track and stops there", async () => {
+        const { download, downloaded } = makeDownloader({ "manual-en.srv3": SRV3, "manual-en.srt": SRT });
+        const tracks = [track("manual", "en", ["srv3", "srt"]), track("auto", "en", ["srv3", "srt"])];
+        expect(await resolveCaptions(tracks, download, testLogger)).toEqual({ status: "ok", captions: FORMATTED });
+        expect(downloaded).toEqual(["manual-en.srv3"]);
+    });
+
+    test("moves to the next format when a download fails", async () => {
+        const { download, downloaded } = makeDownloader({ "auto-en.srt": SRT });
+        const tracks = [track("auto", "en", ["srv3", "srt", "json3"])];
+        expect(await resolveCaptions(tracks, download, testLogger)).toEqual({ status: "ok", captions: FORMATTED });
+        expect(downloaded).toEqual(["auto-en.srv3", "auto-en.srt"]);
+    });
+
+    test("moves to the next format when extraction fails", async () => {
+        const { download, downloaded } = makeDownloader({ "auto-en.srv3": SRV3_UNPARSEABLE, "auto-en.srt": SRT });
+        const tracks = [track("auto", "en", ["srv3", "srt", "json3"])];
+        expect(await resolveCaptions(tracks, download, testLogger)).toEqual({ status: "ok", captions: FORMATTED });
+        expect(downloaded).toEqual(["auto-en.srv3", "auto-en.srt"]);
+    });
+
+    test("forwards the raw srt file of an automatic track when its extraction fails", async () => {
+        const { download, downloaded } = makeDownloader({
+            "auto-en.srv3": SRV3_UNPARSEABLE,
+            "auto-en.srt": SRT_UNPARSEABLE,
+            "auto-en.json3": JSON3_EMPTY,
+        });
+        const tracks = [track("auto", "en", ["srv3", "srt", "json3"])];
+        expect(await resolveCaptions(tracks, download, testLogger)).toEqual({
+            status: "ok",
+            captions: SRT_UNPARSEABLE,
+        });
+        expect(downloaded).toEqual(["auto-en.srv3", "auto-en.srt"]);
+    });
+
+    test("never forwards the raw srt of an uploader-provided track", async () => {
+        const { download, downloaded } = makeDownloader({
+            "manual-en.srv3": SRV3_UNPARSEABLE,
+            "manual-en.srt": SRT_UNPARSEABLE,
+            "manual-en.json3": JSON3_EMPTY,
+            "auto-en.srv3": SRV3,
+        });
+        const tracks = [track("manual", "en", ["srv3", "srt", "json3"]), track("auto", "en", ["srv3"])];
+        // The unparseable srt counts as the track's second extraction failure, like any other format
+        expect(await resolveCaptions(tracks, download, testLogger)).toEqual({ status: "ok", captions: FORMATTED });
+        expect(downloaded).toEqual(["manual-en.srv3", "manual-en.srt", "auto-en.srv3"]);
+    });
+
+    test("reports unparseable captions when only an uploader-provided track exists and it can't be parsed", async () => {
+        const { download } = makeDownloader({ "manual-en.srv3": SRV3_UNPARSEABLE, "manual-en.srt": SRT_UNPARSEABLE });
+        const tracks = [track("manual", "en", ["srv3", "srt", "json3"])];
+        expect(await resolveCaptions(tracks, download, testLogger)).toEqual({
+            status: "unparseable",
+            extractionFailures: 2,
+        });
+    });
+
+    test("gives up on a track after two extraction failures and tries the next track", async () => {
+        const { download, downloaded } = makeDownloader({
+            "manual-en.srv3": SRV3_UNPARSEABLE,
+            "manual-en.json3": "<html>not json</html>",
+            "manual-en.srv1": "<transcript></transcript>",
+            "auto-en.srv3": SRV3,
+        });
+        const tracks = [track("manual", "en", ["srv3", "srt", "json3", "srv1"]), track("auto", "en", ["srv3"])];
+        expect(await resolveCaptions(tracks, download, testLogger)).toEqual({ status: "ok", captions: FORMATTED });
+        expect(downloaded).toEqual(["manual-en.srv3", "manual-en.srt", "manual-en.json3", "auto-en.srv3"]);
+    });
+
+    test("reports unparseable captions when extraction fails everywhere and no srt can be had", async () => {
+        const { download } = makeDownloader({
+            "auto-en.srv3": SRV3_UNPARSEABLE,
+            "auto-en.json3": "<html>not json</html>",
+        });
+        const tracks = [track("auto", "en", ["srv3", "srt", "json3", "srv1"])];
+        expect(await resolveCaptions(tracks, download, testLogger)).toEqual({
+            status: "unparseable",
+            extractionFailures: 2,
+        });
+    });
+
+    test("skips an empty uploader-provided track after a single download", async () => {
+        const { download, downloaded } = makeDownloader({
+            "manual-en.srv3": SRV3_EMPTY,
+            "manual-en.srt": "",
+            "auto-en.srv3": SRV3,
+        });
+        const tracks = [track("manual", "en", ["srv3", "srt", "json3"]), track("auto", "en", ["srv3", "srt"])];
+        expect(await resolveCaptions(tracks, download, testLogger)).toEqual({ status: "ok", captions: FORMATTED });
+        expect(downloaded).toEqual(["manual-en.srv3", "auto-en.srv3"]);
+    });
+
+    test("confirms an empty automatic track with srt before any other format, then stops", async () => {
+        const { download, downloaded } = makeDownloader({
+            "auto-en.srv3": SRV3_EMPTY,
+            "auto-en.json3": JSON3_EMPTY,
+            "auto-en.srt": "\n",
+            "auto-en-orig.srv3": SRV3,
+        });
+        const tracks = [track("auto", "en", ["srv3", "json3", "srt"]), track("auto", "en-orig", ["srv3"])];
+        expect(await resolveCaptions(tracks, download, testLogger)).toEqual({ status: "empty" });
+        expect(downloaded).toEqual(["auto-en.srv3", "auto-en.srt"]);
+    });
+
+    test("uses the srt when it has the text an empty-looking format lacked", async () => {
+        const { download, downloaded } = makeDownloader({ "auto-en.srv3": SRV3_EMPTY, "auto-en.srt": SRT });
+        const tracks = [track("auto", "en", ["srv3", "srt"])];
+        expect(await resolveCaptions(tracks, download, testLogger)).toEqual({ status: "ok", captions: FORMATTED });
+        expect(downloaded).toEqual(["auto-en.srv3", "auto-en.srt"]);
+    });
+
+    test("accepts a second empty format as confirmation when the srt can't be downloaded", async () => {
+        const { download, downloaded } = makeDownloader({
+            "auto-en.srv3": SRV3_EMPTY,
+            "auto-en.json3": JSON3_EMPTY,
+            "auto-en.srv1": "<transcript></transcript>",
+        });
+        const tracks = [track("auto", "en", ["srv3", "srt", "json3", "srv1"])];
+        expect(await resolveCaptions(tracks, download, testLogger)).toEqual({ status: "empty" });
+        expect(downloaded).toEqual(["auto-en.srv3", "auto-en.srt", "auto-en.json3"]);
+    });
+
+    test("reports empty captions when the only tracks are empty uploader-provided ones", async () => {
+        const { download } = makeDownloader({ "manual-en.srv3": SRV3_EMPTY, "manual-de.srt": "" });
+        const tracks = [track("manual", "en", ["srv3", "srt"]), track("manual", "de", ["srt"])];
+        expect(await resolveCaptions(tracks, download, testLogger)).toEqual({ status: "empty" });
+    });
+
+    test("reports unavailable rather than empty when other downloads failed", async () => {
+        const { download } = makeDownloader({ "manual-en.srv3": SRV3_EMPTY });
+        const tracks = [track("manual", "en", ["srv3", "srt"]), track("auto", "en", ["srv3", "srt"])];
+        expect(await resolveCaptions(tracks, download, testLogger)).toEqual({
+            status: "unavailable",
+            downloadAttempts: 3,
+        });
+    });
+
+    test("stops after ten downloads in total", async () => {
+        const { download, downloaded } = makeDownloader({});
+        const exts = ["srv3", "srt", "json3", "srv1", "ttml"];
+        const tracks = [
+            track("manual", "en", exts),
+            track("manual", "de", exts),
+            track("auto", "en", exts),
+            track("auto", "de", exts),
+        ];
+        expect(await resolveCaptions(tracks, download, testLogger)).toEqual({
+            status: "unavailable",
+            downloadAttempts: 10,
+        });
+        expect(downloaded.length).toBe(10);
+    });
+
+    test("passes a format without an extractor through unchanged", async () => {
+        const { download } = makeDownloader({ "manual-en.sbv": "0:00:01.000,0:00:03.000\nHello there." });
+        expect(await resolveCaptions([track("manual", "en", ["sbv"])], download, testLogger)).toEqual({
+            status: "ok",
+            captions: "0:00:01.000,0:00:03.000\nHello there.",
+        });
+    });
+
+    test("includes a few unparseable units verbatim instead of failing", async () => {
+        const cues = Array.from({ length: 19 }, (_, i) => `<p t="${i * 1000}" d="1000">Line ${i}.</p>`);
+        const content = `<timedtext format="3"><body>${cues.join("")}<p d="5">no time</p></body></timedtext>`;
+        const { download } = makeDownloader({ "auto-en.srv3": content });
+        const resolution = await resolveCaptions([track("auto", "en", ["srv3", "srt"])], download, testLogger);
+        expect(resolution.status === "ok" && resolution.captions.split("\n").slice(-2)).toEqual([
+            "0:18 Line 18.",
+            '<p d="5">no time</p>',
+        ]);
     });
 });
 

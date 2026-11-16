@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<tt xml:lang="en" xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xmlns:tts="http://www.w3.org/ns/ttml#styling" xmlns:ttp="http://www.w3.org/ns/ttml#parameter" ttp:profile="http://www.w3.org/TR/profile/sdp-us" >
+<head>
+<styling>
+<style xml:id="s1" tts:textAlign="center" tts:extent="90% 90%" tts:origin="5% 5%" tts:displayAlign="after"/>
+<style xml:id="s2" tts:fontSize=".72c" tts:backgroundColor="black" tts:color="white"/>
+</styling>
+<layout>
+<region xml:id="r1" style="s1"/>
+</layout>
+</head>
+<body region="r1">
+<div>
+<p begin="00:00:00.000" end="00:00:05.280" style="s2">This might be the most ambitious long</p>
+<p begin="00:00:03.000" end="00:00:07.800" style="s2">shot precision experiment that I&#39;ve ever</p>
+<p begin="00:00:05.280" end="00:00:09.960" style="s2">seen. Scientists have put one atomic</p>
+<p begin="00:00:07.800" end="00:00:12.520" style="s2">clock down in Boulder, Colorado and one</p>
+<p begin="00:00:09.960" end="00:00:13.520" style="s2">up in this observatory 4,000 m above sea</p>
+<p begin="00:00:12.520" end="00:00:15.560" style="s2">level and they&#39;re going to try and</p>
+<p begin="00:00:13.520" end="00:00:17.960" style="s2">measure the difference in time dilation</p>
+<p begin="00:00:15.560" end="00:00:19.520" style="s2">according to general relativity.</p>
+<p begin="00:00:17.960" end="00:00:21.600" style="s2">Because up here, time [music] itself</p>
+<p begin="00:00:19.520" end="00:00:24.000" style="s2">should be passing faster relative to</p>
+<p begin="00:00:21.600" end="00:00:25.760" style="s2">down in Boulder.</p>
+<p begin="00:00:24.000" end="00:00:27.680" style="s2">&gt;&gt; If you go into a science center, often</p>
+<p begin="00:00:25.760" end="00:00:29.080" style="s2">they will explain gravity as the bending</p>
+<p begin="00:00:27.680" end="00:00:31.440" style="s2">of space-time and what they will have is</p>
+<p begin="00:00:29.080" end="00:00:33.000" style="s2">a little funnel here the particle goes</p>
+<p begin="00:00:31.440" end="00:00:35.760" style="s2">[music] around the funnel and that&#39;s</p>
+<p begin="00:00:33.000" end="00:00:37.160" style="s2">meant to give you an impression of why</p>
+<p begin="00:00:35.760" end="00:00:39.240" style="s2">the Earth goes around the Sun. But</p>
+<p begin="00:00:37.160" end="00:00:41.640" style="s2">that&#39;s not actually what happens. It&#39;s</p>
+<p begin="00:00:39.240" end="00:00:43.960" style="s2">not as much that space is curving, it&#39;s</p>
+</div>
+</body>
+</tt>

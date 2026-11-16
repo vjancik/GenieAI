@@ -1,0 +1,222 @@
+Token stats of pre-processed caption files
+====================================================================================================
+
+Model:     gemini-3.8-flash (@google/genai countTokens)
+Generated: 2026-11-16T16:11:30.005Z
+
+Pipelines:
+  Raw        the caption file as downloaded (what the tool feeds the LLM today, for "srt")
+  Unified    one "<M:SS|H:MM:SS> <text>" line per cue; markup, end times, word timing dropped
+  Sentences  the unified cues regrouped into one line per sentence
+
+Tracks are "<kind> <language> <format>": "manual" = uploader provided, "auto" = automatic
+speech recognition. Durations are single runs without warm-up, so the first files processed
+include JIT compilation; extraction includes rendering, grouping excludes extraction.
+"1-word" counts sentences of a single word; "Max words" is the longest sentence;
+"Raw units" are cue-like units that failed to parse and are passed through verbatim.
+
+====================================================================================================
+Video:    I finally saw quantum mechanics with my own eyes... (It's spookier than I expected)
+Channel:  Veritasium
+Duration: 1:05:55
+URL:      https://www.youtube.com/watch?v=KfODG5REyss
+
+Token counts
+
+Track                Raw  Unified  vs raw  Sentences  vs raw  vs unified
+---------------  -------  -------  ------  ---------  ------  ----------
+manual en srv1    44,941   22,380  -50.2%     18,023  -59.9%      -19.5%
+manual en srv2    45,000   22,380  -50.3%     18,023  -59.9%      -19.5%
+manual en srv3    47,320   22,380  -52.7%     18,023  -61.9%      -19.5%
+auto en srv1      50,936   23,776  -53.3%     18,586  -63.5%      -21.8%
+manual en vtt     55,377   22,380  -59.6%     18,023  -67.5%      -19.5%
+manual en srt     61,588   22,380  -63.7%     18,023  -70.7%      -19.5%
+auto en srt       68,154   23,776  -65.1%     18,586  -72.7%      -21.8%
+manual en ttml    75,666   22,380  -70.4%     18,023  -76.2%      -19.5%
+auto en ttml      83,780   23,776  -71.6%     18,586  -77.8%      -21.8%
+manual en json3   89,520   22,380  -75.0%     18,023  -79.9%      -19.5%
+auto en srv3     245,069   23,776  -90.3%     18,589  -92.4%      -21.8%
+auto en vtt      327,953   23,776  -92.8%     18,589  -94.3%      -21.8%
+auto en srv2     380,659   23,776  -93.8%     18,589  -95.1%      -21.8%
+auto en json3    566,092   23,776  -95.8%     18,589  -96.7%      -21.8%
+
+Line counts, sentence shape and transformation durations
+
+Track            Cue lines  Raw units  Sentences  Avg words  Max words  1-word  Fallback  Extract ms  Group ms
+---------------  ---------  ---------  ---------  ---------  ---------  ------  --------  ----------  --------
+manual en srv1       1,466          0        746       14.4         77       8        no        4.67      1.54
+manual en srv2       1,466          0        746       14.4         77       8        no        3.69      1.43
+manual en srv3       1,466          0        746       14.4         77       8        no        2.62      1.40
+auto en srv1         1,680          0        826       13.1        182      19        no        6.01      2.00
+manual en vtt        1,466          0        746       14.4         77       8        no        5.00      2.02
+manual en srt        1,466          0        746       14.4         77       8        no        2.88      1.35
+auto en srt          1,680          0        826       13.1        182      19        no        6.31      3.31
+manual en ttml       1,466          0        746       14.4         77       8        no        3.53      1.47
+auto en ttml         1,680          0        826       13.1        182      19        no        4.47      2.02
+manual en json3      1,466          0        746       14.4         77       8        no        3.07      1.49
+auto en srv3         1,680          0        826       13.1        182      19        no       17.36      6.83
+auto en vtt          1,680          0        826       13.1        182      19        no       19.59      4.84
+auto en srv2         1,680          0        826       13.1        182      19        no       17.02      2.73
+auto en json3        1,680          0        826       13.1        182      19        no       25.36      6.95
+
+Cross-format consistency
+
+  manual tracks, unified output compared to srv1:
+    srv2: identical
+    srv3: identical
+    vtt: identical
+    srt: identical
+    ttml: identical
+    json3: identical
+  manual tracks, sentence lines compared to json3:
+    srv1: identical
+    srv2: identical
+    srv3: identical
+    vtt: identical
+    srt: identical
+    ttml: identical
+  auto tracks, unified output compared to srv1:
+    srt: identical
+    ttml: identical
+    srv3: identical
+    vtt: identical
+    srv2: identical
+    json3: identical
+  auto tracks, sentence lines compared to json3:
+    srv1: text differs on 0 of 826 lines; timestamp differs on 517; drift avg 1.03s, max 4.40s
+    srt: text differs on 0 of 826 lines; timestamp differs on 517; drift avg 1.03s, max 4.40s
+    ttml: text differs on 0 of 826 lines; timestamp differs on 517; drift avg 1.03s, max 4.40s
+    srv3: identical
+    vtt: identical
+    srv2: identical
+
+====================================================================================================
+Video:    IF ONLY SOMEBODY TOLD US ABOUT THE NVIDIA GPU SMUGGLING
+Channel:  Gamers Nexus
+Duration: 44:22
+URL:      https://www.youtube.com/watch?v=SxFJ5QGNxwo
+
+Token counts
+
+Track              Raw  Unified  vs raw  Sentences  vs raw  vs unified
+-------------  -------  -------  ------  ---------  ------  ----------
+auto en srv1    36,049   16,349  -54.6%     11,849  -67.1%      -27.5%
+auto en srt     47,996   16,349  -65.9%     11,849  -75.3%      -27.5%
+auto en ttml    59,717   16,349  -72.6%     11,849  -80.2%      -27.5%
+auto en srv3   175,024   16,349  -90.7%     11,849  -93.2%      -27.5%
+auto en vtt    233,573   16,349  -93.0%     11,849  -94.9%      -27.5%
+auto en srv2   271,269   16,349  -94.0%     11,849  -95.6%      -27.5%
+auto en json3  404,533   16,349  -96.0%     11,849  -97.1%      -27.5%
+
+Line counts, sentence shape and transformation durations
+
+Track          Cue lines  Raw units  Sentences  Avg words  Max words  1-word  Fallback  Extract ms  Group ms
+-------------  ---------  ---------  ---------  ---------  ---------  ------  --------  ----------  --------
+auto en srv1       1,197          0        420       18.4        105       4        no        2.46      0.98
+auto en srt        1,197          0        420       18.4        105       4        no        6.78      1.21
+auto en ttml       1,197          0        420       18.4        105       4        no        2.44      0.89
+auto en srv3       1,197          0        420       18.4        105       4        no        6.98      2.80
+auto en vtt        1,197          0        420       18.4        105       4        no       11.94      1.87
+auto en srv2       1,197          0        420       18.4        105       4        no        8.96      2.39
+auto en json3      1,197          0        420       18.4        105       4        no        8.54      1.91
+
+Cross-format consistency
+
+  auto tracks, unified output compared to srv1:
+    srt: identical
+    ttml: identical
+    srv3: identical
+    vtt: identical
+    srv2: identical
+    json3: identical
+  auto tracks, sentence lines compared to json3:
+    srv1: text differs on 0 of 420 lines; timestamp differs on 295; drift avg 1.03s, max 3.68s
+    srt: text differs on 0 of 420 lines; timestamp differs on 295; drift avg 1.03s, max 3.68s
+    ttml: text differs on 0 of 420 lines; timestamp differs on 295; drift avg 1.03s, max 3.68s
+    srv3: identical
+    vtt: identical
+    srv2: identical
+
+====================================================================================================
+Video:    Relativity is so much weirder than we thought...
+Channel:  Veritasium
+Duration: 34:27
+URL:      https://www.youtube.com/watch?v=eyZEqSPeMwg
+
+Token counts
+
+Track                Raw  Unified  vs raw  Sentences  vs raw  vs unified
+---------------  -------  -------  ------  ---------  ------  ----------
+manual en srv1    24,138   12,000  -50.3%      9,658  -60.0%      -19.5%
+manual en srv2    24,537   12,000  -51.1%      9,658  -60.6%      -19.5%
+manual en srv3    25,755   12,000  -53.4%      9,658  -62.5%      -19.5%
+manual en vtt     30,093   12,000  -60.1%      9,658  -67.9%      -19.5%
+auto en srv1      30,103   13,712  -54.4%     10,452  -65.3%      -23.8%
+manual en srt     33,141   12,000  -63.8%      9,658  -70.9%      -19.5%
+auto en srt       40,226   13,712  -65.9%     10,452  -74.0%      -23.8%
+manual en ttml    41,418   12,000  -71.0%      9,658  -76.7%      -19.5%
+manual en json3   48,485   12,000  -75.3%      9,658  -80.1%      -19.5%
+auto en ttml      50,463   13,712  -72.8%     10,452  -79.3%      -23.8%
+auto en srv3     118,579   13,712  -88.4%     10,452  -91.2%      -23.8%
+auto en vtt      192,940   13,712  -92.9%     10,452  -94.6%      -23.8%
+auto en srv2     220,210   13,712  -93.8%     10,452  -95.3%      -23.8%
+auto en json3    266,009   13,712  -94.8%     10,452  -96.1%      -23.8%
+
+Line counts, sentence shape and transformation durations
+
+Track            Cue lines  Raw units  Sentences  Avg words  Max words  1-word  Fallback  Extract ms  Group ms
+---------------  ---------  ---------  ---------  ---------  ---------  ------  --------  ----------  --------
+manual en srv1         792          0        380       16.2         64       2        no        1.85      0.72
+manual en srv2         792          0        380       16.2         64       2        no        1.69      0.85
+manual en srv3         792          0        380       16.2         64       2        no        1.58      0.81
+manual en vtt          792          0        380       16.2         64       2        no        2.91      1.29
+auto en srv1         1,010          0        437       14.5         55       2        no        2.18      0.82
+manual en srt          792          0        380       16.2         64       2        no        3.32      0.90
+auto en srt          1,010          0        437       14.5         55       2        no        2.22      0.84
+manual en ttml         792          0        380       16.2         64       2        no        2.24      0.82
+manual en json3        792          0        380       16.2         64       2        no        4.05      1.32
+auto en ttml         1,010          0        437       14.5         55       2        no        2.24      0.75
+auto en srv3         1,010          0        437       14.5         55       2        no        6.21      1.40
+auto en vtt          1,010          0        437       14.5         55       2        no        8.10      1.62
+auto en srv2         1,010          0        437       14.5         55       2        no       10.68      1.69
+auto en json3        1,010          0        437       14.5         55       2        no        6.14      1.54
+
+Cross-format consistency
+
+  manual tracks, unified output compared to srv1:
+    srv2: identical
+    srv3: identical
+    vtt: identical
+    srt: identical
+    ttml: identical
+    json3: identical
+  manual tracks, sentence lines compared to json3:
+    srv1: identical
+    srv2: identical
+    srv3: identical
+    vtt: identical
+    srt: identical
+    ttml: identical
+  auto tracks, unified output compared to srv1:
+    srt: identical
+    ttml: identical
+    srv3: identical
+    vtt: identical
+    srv2: identical
+    json3: identical
+  auto tracks, sentence lines compared to json3:
+    srv1: text differs on 0 of 437 lines; timestamp differs on 161; drift avg 0.57s, max 4.64s
+    srt: text differs on 0 of 437 lines; timestamp differs on 161; drift avg 0.57s, max 4.64s
+    ttml: text differs on 0 of 437 lines; timestamp differs on 161; drift avg 0.57s, max 4.64s
+    srv3: identical
+    vtt: identical
+    srv2: identical
+
+====================================================================================================
+Edge case: no punctuation
+
+  eyZEqSPeMwg.manual.en.srv1 with all .!?… removed: 792 lines from 792 cues, fallback to cue lines: YES
+  eyZEqSPeMwg.auto.en.srv1 with all .!?… removed: 167 lines from 1,010 cues, fallback to cue lines: no
+  SxFJ5QGNxwo.auto.en.srv1 with all .!?… removed: 1,197 lines from 1,197 cues, fallback to cue lines: YES
+  KfODG5REyss.manual.en.srv1 with all .!?… removed: 1,466 lines from 1,466 cues, fallback to cue lines: YES
+  KfODG5REyss.auto.en.srv1 with all .!?… removed: 1,680 lines from 1,680 cues, fallback to cue lines: YES

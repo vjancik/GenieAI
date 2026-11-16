@@ -1,0 +1,5 @@
+# Test fixtures and dev script data are not source code: keep them out of the
+# repository language statistics and collapse them in diffs.
+tests/**/data/** linguist-generated
+scripts/dev/**/data/** linguist-generated
+scripts/dev/**/outputs/** linguist-generated

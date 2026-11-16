@@ -50,4 +50,10 @@ scripts/dev/*.html
 scripts/dev/*.png
 scripts/dev/*.json
 
+# Downloaded data and bulk generated outputs of dev script subfolders
+scripts/dev/*/data/
+scripts/dev/yt-captions-processing/outputs/unified/
+scripts/dev/yt-captions-processing/outputs/sentences/
+scripts/dev/yt-captions-processing/outputs/token_cache.json
+
 docs/architecture/

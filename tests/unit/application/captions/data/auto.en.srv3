@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8" ?><timedtext format="3">
+<head>
+<ws id="0"/>
+<ws id="1" mh="2" ju="0" sd="3"/>
+<wp id="0"/>
+<wp id="1" ap="6" ah="20" av="100" rc="2" cc="40"/>
+</head>
+<body>
+<w t="0" id="1" wp="1" ws="1"/>
+<p t="0" d="5280" w="1"><s>This</s><s t="360"> might</s><s t="680"> be</s><s t="920"> the</s><s t="1280"> most</s><s t="1800"> ambitious</s><s t="2560"> long</s></p>
+<p t="2990" d="2290" w="1" a="1">
+</p>
+<p t="3000" d="4800" w="1"><s>shot</s><s t="320"> precision</s><s t="800"> experiment</s><s t="1440"> that</s><s t="1800"> I&#39;ve</s><s t="2040"> ever</s></p>
+<p t="5270" d="2530" w="1" a="1">
+</p>
+<p t="5280" d="4680" w="1"><s>seen.</s><s t="720"> Scientists</s><s t="1280"> have</s><s t="1400"> put</s><s t="1760"> one</s><s t="2120"> atomic</s></p>
+<p t="7790" d="2170" w="1" a="1">
+</p>
+<p t="7800" d="4720" w="1"><s>clock</s><s t="320"> down</s><s t="560"> in</s><s t="720"> Boulder,</s><s t="1080"> Colorado</s><s t="1600"> and</s><s t="1800"> one</s></p>
+<p t="9950" d="2570" w="1" a="1">
+</p>
+<p t="9960" d="3560" w="1"><s>up</s><s t="240"> in</s><s t="320"> this</s><s t="440"> observatory</s><s t="1080"> 4,000</s><s t="1840"> m</s><s t="2160"> above</s><s t="2440"> sea</s></p>
+<p t="12510" d="1010" w="1" a="1">
+</p>
+<p t="12520" d="3040" w="1"><s>level</s><s t="320"> and</s><s t="400"> they&#39;re</s><s t="520"> going</s><s t="680"> to</s><s t="760"> try</s><s t="920"> and</s></p>
+<p t="13510" d="2050" w="1" a="1">
+</p>
+<p t="13520" d="4440" w="1"><s>measure</s><s t="280"> the</s><s t="400"> difference</s><s t="1000"> in</s><s t="1200"> time</s><s t="1520"> dilation</s></p>
+<p t="15550" d="2410" w="1" a="1">
+</p>
+<p t="15560" d="3960" w="1"><s>according</s><s t="400"> to</s><s t="520"> general</s><s t="880"> relativity.</s></p>
+<p t="17950" d="1570" w="1" a="1">
+</p>
+<p t="17960" d="3640" w="1"><s>Because</s><s t="320"> up</s><s t="520"> here,</s><s t="920"> time</s><s t="1035"> [music]</s><s t="1160"> itself</s></p>
+<p t="19510" d="2090" w="1" a="1">
+</p>
+<p t="19520" d="4480" w="1"><s>should</s><s t="120"> be</s><s t="200"> passing</s><s t="760"> faster</s><s t="1400"> relative</s><s t="1960"> to</s></p>
+<p t="21590" d="2410" w="1" a="1">
+</p>
+<p t="21600" d="4160" w="1"><s>down</s><s t="360"> in</s><s t="480"> Boulder.</s></p>
+<p t="23990" d="1770" w="1" a="1">
+</p>
+<p t="24000" d="3680" w="1"><s>&gt;&gt; If</s><s t="120"> you</s><s t="200"> go</s><s t="280"> into</s><s t="440"> a</s><s t="520"> science</s><s t="880"> center,</s><s t="1280"> often</s></p>
+<p t="25750" d="1930" w="1" a="1">
+</p>
+<p t="25760" d="3320" w="1"><s>they</s><s t="120"> will</s><s t="360"> explain</s><s t="760"> gravity</s><s t="1360"> as</s><s t="1520"> the</s><s t="1600"> bending</s></p>
+<p t="27670" d="1410" w="1" a="1">
+</p>
+<p t="27680" d="3760" w="1"><s>of</s><s t="80"> space-time</s><s t="560"> and</s><s t="640"> what</s><s t="760"> they</s><s t="880"> will</s><s t="1040"> have</s><s t="1280"> is</s></p>
+<p t="29070" d="2370" w="1" a="1">
+</p>
+<p t="29080" d="3920" w="1"><s>a</s><s t="40"> little</s><s t="360"> funnel</s><s t="720"> here</s><s t="960"> the</s><s t="1080"> particle</s><s t="1840"> goes</s></p>
+<p t="31430" d="1570" w="1" a="1">
+</p>
+<p t="31440" d="4320" w="1"><s>[music]</s><s t="160"> around</s><s t="640"> the</s><s t="720"> funnel</s><s t="1200"> and</s><s t="1319"> that&#39;s</s></p>
+<p t="32990" d="2770" w="1" a="1">
+</p>
+<p t="33000" d="4160" w="1"><s>meant</s><s t="320"> to</s><s t="760"> give</s><s t="920"> you</s><s t="1000"> an</s><s t="1120"> impression</s><s t="1720"> of</s><s t="2440"> why</s></p>
+<p t="35750" d="1410" w="1" a="1">
+</p>
+<p t="35760" d="3480" w="1"><s>the</s><s t="200"> Earth</s><s t="360"> goes</s><s t="560"> around</s><s t="760"> the</s><s t="840"> Sun.</s><s t="1280"> But</s></p>
+<p t="37150" d="2090" w="1" a="1">
+</p>
+<p t="37160" d="4480" w="1"><s>that&#39;s</s><s t="240"> not</s><s t="440"> actually</s><s t="920"> what</s><s t="1120"> happens.</s><s t="1920"> It&#39;s</s></p>
+<p t="39230" d="2410" w="1" a="1">
+</p>
+<p t="39240" d="4720" w="1"><s>not</s><s t="200"> as</s><s t="320"> much</s><s t="560"> that</s><s t="1200"> space</s><s t="1680"> is</s><s t="1840"> curving,</s><s t="2240"> it&#39;s</s></p>
+</body>
+</timedtext>

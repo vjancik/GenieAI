@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<tt xml:lang="en" xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xmlns:tts="http://www.w3.org/ns/ttml#styling" xmlns:ttp="http://www.w3.org/ns/ttml#parameter" ttp:profile="http://www.w3.org/TR/profile/sdp-us" >
+<head>
+<styling>
+<style xml:id="s1" tts:textAlign="center" tts:extent="90% 90%" tts:origin="5% 5%" tts:displayAlign="after"/>
+<style xml:id="s2" tts:fontSize=".72c" tts:backgroundColor="black" tts:color="white"/>
+</styling>
+<layout>
+<region xml:id="r1" style="s1"/>
+</layout>
+</head>
+<body region="r1">
+<div>
+<p begin="00:00:00.034" end="00:00:03.920" style="s2">- This might be the most<br />ambitious long shot precision</p>
+<p begin="00:00:03.920" end="00:00:06.160" style="s2">experiment that I&#39;ve ever seen.</p>
+<p begin="00:00:06.160" end="00:00:09.040" style="s2">Scientists have put one<br />atomic clock down in Boulder,</p>
+<p begin="00:00:09.040" end="00:00:12.240" style="s2">Colorado, and one up in this<br />observatory 4,000 meters</p>
+<p begin="00:00:12.240" end="00:00:13.600" style="s2">above sea level, and they&#39;re going to try</p>
+<p begin="00:00:13.600" end="00:00:15.760" style="s2">and measure the difference<br />in time dilation</p>
+<p begin="00:00:15.760" end="00:00:18.000" style="s2">according to general relativity.</p>
+<p begin="00:00:18.000" end="00:00:21.120" style="s2">Because up here, time itself<br />should be passing faster</p>
+<p begin="00:00:21.120" end="00:00:23.160" style="s2">relative to down in Boulder.</p>
+<p begin="00:00:23.160" end="00:00:25.440" style="s2">- If you go into a science center,</p>
+<p begin="00:00:25.440" end="00:00:27.760" style="s2">often they will explain<br />gravity as the bending</p>
+<p begin="00:00:27.760" end="00:00:30.000" style="s2">of space time, and what they<br />will have is a little funnel</p>
+<p begin="00:00:30.000" end="00:00:32.640" style="s2">where the particle goes around the funnel,</p>
+<p begin="00:00:32.640" end="00:00:34.880" style="s2">and that&#39;s meant to give you an impression</p>
+<p begin="00:00:34.880" end="00:00:37.200" style="s2">of why the earth goes around the sun.</p>
+<p begin="00:00:37.200" end="00:00:39.120" style="s2">But that&#39;s not actually what happens.</p>
+<p begin="00:00:39.120" end="00:00:41.840" style="s2">It&#39;s not as much that<br />space is curving, it&#39;s</p>
+</div>
+</body>
+</tt>

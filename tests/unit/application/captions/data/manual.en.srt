@@ -1,0 +1,76 @@
+1
+00:00:00,034 --> 00:00:03,920
+- This might be the most
+ambitious long shot precision
+
+2
+00:00:03,920 --> 00:00:06,160
+experiment that I've ever seen.
+
+3
+00:00:06,160 --> 00:00:09,040
+Scientists have put one
+atomic clock down in Boulder,
+
+4
+00:00:09,040 --> 00:00:12,240
+Colorado, and one up in this
+observatory 4,000 meters
+
+5
+00:00:12,240 --> 00:00:13,600
+above sea level, and they're going to try
+
+6
+00:00:13,600 --> 00:00:15,760
+and measure the difference
+in time dilation
+
+7
+00:00:15,760 --> 00:00:18,000
+according to general relativity.
+
+8
+00:00:18,000 --> 00:00:21,120
+Because up here, time itself
+should be passing faster
+
+9
+00:00:21,120 --> 00:00:23,160
+relative to down in Boulder.
+
+10
+00:00:23,160 --> 00:00:25,440
+- If you go into a science center,
+
+11
+00:00:25,440 --> 00:00:27,760
+often they will explain
+gravity as the bending
+
+12
+00:00:27,760 --> 00:00:30,000
+of space time, and what they
+will have is a little funnel
+
+13
+00:00:30,000 --> 00:00:32,640
+where the particle goes around the funnel,
+
+14
+00:00:32,640 --> 00:00:34,880
+and that's meant to give you an impression
+
+15
+00:00:34,880 --> 00:00:37,200
+of why the earth goes around the sun.
+
+16
+00:00:37,200 --> 00:00:39,120
+But that's not actually what happens.
+
+17
+00:00:39,120 --> 00:00:41,840
+It's not as much that
+space is curving, it's
+

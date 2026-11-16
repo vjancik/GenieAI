@@ -1,0 +1,107 @@
+Token stats of unprocessed caption files
+==============================================================================
+
+Model:     gemini-3.8-flash (@google/genai countTokens)
+Generated: 2026-11-16T15:36:30.970Z
+
+Tracks are "<kind> <language> <format>": "manual" = uploader provided,
+"auto" = automatic speech recognition. The whole raw file content is counted as-is.
+"Rank" and "vs smallest" are relative to the cheapest track of the same video.
+
+==============================================================================
+Video:    I finally saw quantum mechanics with my own eyes... (It's spookier than I expected)
+Channel:  Veritasium
+Duration: 1:05:55
+URL:      https://www.youtube.com/watch?v=KfODG5REyss
+
+Track            Rank      Bytes      Chars   Tokens  Chars/token  Tokens/min  vs smallest
+---------------  ----  ---------  ---------  -------  -----------  ----------  -----------
+manual en srv1      1    119,670    119,670   44,941         2.66         682        1.00x
+manual en srv2      2    110,929    110,929   45,000         2.47         683        1.00x
+manual en srv3      3    102,383    102,383   47,320         2.16         718        1.05x
+auto en srv1        4    129,800    129,791   50,936         2.55         773        1.13x
+manual en vtt       5    105,865    105,865   55,377         1.91         840        1.23x
+manual en srt       6    112,052    112,052   61,588         1.82         934        1.37x
+auto en srt         7    119,792    119,783   68,154         1.76       1,034        1.52x
+manual en ttml      8    150,723    150,723   75,666         1.99       1,148        1.68x
+auto en ttml        9    160,272    160,263   83,780         1.91       1,271        1.86x
+manual en json3    10    203,016    203,016   89,520         2.27       1,358        1.99x
+auto en srv3       11    415,301    415,292  245,069         1.69       3,718        5.45x
+auto en vtt        12    559,918    559,891  327,953         1.71       4,975        7.30x
+auto en srv2       13    696,339    696,330  380,659         1.83       5,775        8.47x
+auto en json3      14  1,171,266  1,171,257  566,092         2.07       8,588       12.60x
+
+==============================================================================
+Video:    IF ONLY SOMEBODY TOLD US ABOUT THE NVIDIA GPU SMUGGLING
+Channel:  Gamers Nexus
+Duration: 44:22
+URL:      https://www.youtube.com/watch?v=SxFJ5QGNxwo
+
+Track          Rank    Bytes    Chars   Tokens  Chars/token  Tokens/min  vs smallest
+-------------  ----  -------  -------  -------  -----------  ----------  -----------
+auto en srv1      1   93,752   93,752   36,049         2.60         813        1.00x
+auto en srt       2   86,451   86,451   47,996         1.80       1,082        1.33x
+auto en ttml      3  115,847  115,847   59,717         1.94       1,346        1.66x
+auto en srv3      4  298,683  298,683  175,024         1.71       3,945        4.86x
+auto en vtt       5  403,991  403,991  233,573         1.73       5,265        6.48x
+auto en srv2      6  498,591  498,591  271,269         1.84       6,114        7.53x
+auto en json3     7  839,150  839,150  404,533         2.07       9,118       11.22x
+
+==============================================================================
+Video:    Relativity is so much weirder than we thought...
+Channel:  Veritasium
+Duration: 34:27
+URL:      https://www.youtube.com/watch?v=eyZEqSPeMwg
+
+Track            Rank    Bytes    Chars   Tokens  Chars/token  Tokens/min  vs smallest
+---------------  ----  -------  -------  -------  -----------  ----------  -----------
+manual en srv1      1   65,205   65,203   24,138         2.70         701        1.00x
+manual en srv2      2   60,848   60,846   24,537         2.48         712        1.02x
+manual en srv3      3   56,164   56,162   25,755         2.18         748        1.07x
+manual en vtt       4   58,163   58,161   30,093         1.93         874        1.25x
+auto en srv1        5   77,064   77,061   30,103         2.56         874        1.25x
+manual en srt       6   61,187   61,185   33,141         1.85         962        1.37x
+auto en srt         7   69,950   69,947   40,226         1.74       1,168        1.67x
+manual en ttml      8   82,808   82,806   41,418         2.00       1,202        1.72x
+manual en json3     9  110,486  110,484   48,485         2.28       1,407        2.01x
+auto en ttml       10   95,668   95,665   50,463         1.90       1,465        2.09x
+auto en srv3       11  198,977  198,974  118,579         1.68       3,442        4.91x
+auto en vtt        12  328,267  328,258  192,940         1.70       5,601        7.99x
+auto en srv2       13  403,768  403,765  220,210         1.83       6,392        9.12x
+auto en json3      14  552,555  552,552  266,009         2.08       7,722       11.02x
+
+==============================================================================
+Cross-video comparison
+
+Automatic captions, formats by token count
+
+Format  KfODG5REyss tokens  rank  SxFJ5QGNxwo tokens  rank  eyZEqSPeMwg tokens  rank
+------  ------------------  ----  ------------------  ----  ------------------  ----
+srv1                50,936    #1              36,049    #1              30,103    #1
+srt                 68,154    #2              47,996    #2              40,226    #2
+ttml                83,780    #3              59,717    #3              50,463    #3
+srv3               245,069    #4             175,024    #4             118,579    #4
+vtt                327,953    #5             233,573    #5             192,940    #5
+srv2               380,659    #6             271,269    #6             220,210    #6
+json3              566,092    #7             404,533    #7             266,009    #7
+
+Same format order in all 3 videos: YES
+  KfODG5REyss: srv1 < srt < ttml < srv3 < vtt < srv2 < json3
+  SxFJ5QGNxwo: srv1 < srt < ttml < srv3 < vtt < srv2 < json3
+  eyZEqSPeMwg: srv1 < srt < ttml < srv3 < vtt < srv2 < json3
+
+Uploader-provided (manual) captions, formats by token count
+
+Format  KfODG5REyss tokens  rank  eyZEqSPeMwg tokens  rank
+------  ------------------  ----  ------------------  ----
+srv1                44,941    #1              24,138    #1
+srv2                45,000    #2              24,537    #2
+srv3                47,320    #3              25,755    #3
+vtt                 55,377    #4              30,093    #4
+srt                 61,588    #5              33,141    #5
+ttml                75,666    #6              41,418    #6
+json3               89,520    #7              48,485    #7
+
+Same format order in all 2 videos: YES
+  KfODG5REyss: srv1 < srv2 < srv3 < vtt < srt < ttml < json3
+  eyZEqSPeMwg: srv1 < srv2 < srv3 < vtt < srt < ttml < json3

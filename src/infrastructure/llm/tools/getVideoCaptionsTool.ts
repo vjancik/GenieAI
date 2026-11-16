@@ -1,6 +1,8 @@
 import { tool } from "@langchain/core/tools";
 import { spawn } from "bun";
 import { z } from "zod";
+import { isSupportedCaptionFormat } from "../../../application/formatters/captions/captionExtractors.ts";
+import { type CaptionFormatResult, formatCaptions } from "../../../application/formatters/captions/formatCaptions.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
 import { ToolName } from "../../../application/types/ToolName.ts";
 import { NoCaptionsError, ToolError } from "../../../domain/errors/AppError.ts";
@@ -55,12 +57,33 @@ export type VideoCaptionsResultEntry = VideoCaptionsResult | VideoCaptionsError;
 const LANG_PRIORITY_PREFIXES = ["en", "de", "fr", "it", "es", "ko", "zh", "hi"];
 
 /**
- * Caption formats in preference order.
- * srt/vtt are plain-text with timestamps; ttml is XML but structured;
- * srv3/srv2/srv1 are YouTube XML variants (srv3 has word-level timing, srv1 is simplest);
- * json3 is raw JSON requiring custom parsing — least useful as a transcript.
+ * Caption formats in preference order. All of them are reduced to the same compact
+ * transcript by {@link formatCaptions}, so the order reflects timestamp accuracy,
+ * download size and how safe the format is as a fallback, not its raw size:
+ *   - srv3: word-level timing on automatic tracks (exact sentence timestamps) at a
+ *     third of json3's size, and the smallest download for uploader-provided tracks
+ *   - srt: line-level timing, but plain text that can be forwarded raw to the LLM
+ *     should extraction of an automatic track ever fail, which makes it the sanity fallback
+ *   - json3: word-level timing and real JSON, but the largest download
+ *   - srv1, ttml: line-level timing
+ *   - vtt: YouTube's automatic vtt needs fragile rolling-display handling
+ *   - srv2: word-level timing, but nothing srv3 and json3 don't already cover
  */
-const FORMAT_PRIORITY = ["srt", "vtt", "ttml", "srv3", "srv2", "srv1", "json3"];
+const FORMAT_PRIORITY = ["srv3", "srt", "json3", "srv1", "ttml", "vtt", "srv2"];
+
+/** Most formats tried for a single caption track. */
+const MAX_FORMATS_PER_TRACK = 5;
+/** Most uploader-provided, and most automatic, caption tracks (languages) tried per video. */
+const MAX_TRACKS_PER_KIND = 2;
+/** Most caption downloads attempted per video, across all tracks and formats. */
+const MAX_DOWNLOAD_ATTEMPTS = 10;
+/** Extraction failures after which the remaining formats of a track are given up on. */
+const MAX_EXTRACTION_FAILURES_PER_TRACK = 2;
+/**
+ * The one format forwarded raw when its extraction fails (automatic tracks only); it also
+ * confirms an empty automatic track.
+ */
+const RAW_FALLBACK_FORMAT = "srt";
 
 /**
  * Returns a numeric priority score for a language code (lower = higher priority).
@@ -83,67 +106,203 @@ function formatScore(ext: string): number {
     return idx === -1 ? FORMAT_PRIORITY.length : idx;
 }
 
+/** One downloadable format of a caption track. */
+export interface CaptionCandidate {
+    /** Caption format as reported by yt-dlp, e.g. "srv3". */
+    ext: string;
+    url: string;
+}
+
+/** A caption track (one language of one kind) with its formats in preference order. */
+export interface CaptionTrack {
+    /** False for uploader-provided subtitles, true for automatic speech recognition. */
+    isAuto: boolean;
+    lang: string;
+    candidates: CaptionCandidate[];
+}
+
 /**
- * Builds a priority-ordered list of caption URLs from yt-dlp info JSON.
+ * Builds a priority-ordered list of caption tracks from yt-dlp info JSON, each holding
+ * its downloadable formats in preference order.
  *
- * Ordering rules (ascending priority = earlier in result = preferred):
+ * Ordering rules (earlier in result = preferred):
  *   1. Manual subtitles before automatic captions
  *   2. Language priority: en.* > de.*, fr.*, it.*, es.*, ko.*, zh.*, hi.* > any
- *   3. Format priority: srt > vtt > any
+ *   3. Within a track, formats by FORMAT_PRIORITY, then formats without an extractor
  *
  * Excludes entries using non-HTTP protocols (e.g. m3u8_native HLS streams),
- * as those cannot be fetched directly with a simple HTTP request.
+ * as those cannot be fetched directly with a simple HTTP request, and auto-translated
+ * tracks. Capped at MAX_TRACKS_PER_KIND tracks per kind and MAX_FORMATS_PER_TRACK formats
+ * per track, to avoid excessive fallback attempts across dozens of languages.
  *
  * @param info - Parsed yt-dlp info JSON object
- * @returns Ordered array of URLs to try (most preferred first)
+ * @returns Ordered array of tracks to try (most preferred first)
  */
-export function selectCaptionUrls(info: YtDlpInfoJson): string[] {
-    interface Candidate {
-        url: string;
-        isAuto: number; // 0 = manual, 1 = auto
-        lang: string;
-        ext: string;
-    }
+export function selectCaptionTracks(info: YtDlpInfoJson): CaptionTrack[] {
+    const seenUrls = new Set<string>();
 
-    const candidates: Candidate[] = [];
-
-    const collect = (map: Record<string, YtDlpCaptionEntry[]>, isAuto: number) => {
+    const collect = (map: Record<string, YtDlpCaptionEntry[]>, isAuto: boolean): CaptionTrack[] => {
+        const tracks: CaptionTrack[] = [];
         for (const [lang, entries] of Object.entries(map)) {
+            const candidates: CaptionCandidate[] = [];
             for (const entry of entries) {
                 // Skip HLS/DASH streaming protocols — not directly fetchable
                 if (entry.protocol && entry.protocol !== "https" && entry.protocol !== "http") continue;
                 // Skip auto-translated tracks (tlang param) — YouTube rate-limits these aggressively
                 if (new URL(entry.url).searchParams.has("tlang")) continue;
-                candidates.push({ url: entry.url, isAuto, lang, ext: entry.ext });
+                if (seenUrls.has(entry.url)) continue;
+                seenUrls.add(entry.url);
+                candidates.push({ ext: entry.ext, url: entry.url });
             }
+            if (candidates.length === 0) continue;
+            candidates.sort((a, b) => formatScore(a.ext) - formatScore(b.ext));
+            tracks.push({ isAuto, lang, candidates: candidates.slice(0, MAX_FORMATS_PER_TRACK) });
         }
+        // Array.prototype.sort is stable, so equally ranked languages keep yt-dlp's order
+        tracks.sort((a, b) => langScore(a.lang) - langScore(b.lang));
+        return tracks.slice(0, MAX_TRACKS_PER_KIND);
     };
 
-    collect(info.subtitles, 0);
-    collect(info.automatic_captions, 1);
+    // Manual tracks are collected first, so a URL listed under both kinds counts as manual
+    return [...collect(info.subtitles, false), ...collect(info.automatic_captions, true)];
+}
 
-    candidates.sort((a, b) => {
-        if (a.isAuto !== b.isAuto) return a.isAuto - b.isAuto;
-        const langDiff = langScore(a.lang) - langScore(b.lang);
-        if (langDiff !== 0) return langDiff;
-        return formatScore(a.ext) - formatScore(b.ext);
-    });
+/** Outcome of trying to obtain formatted captions from a video's caption tracks. */
+export type CaptionResolution =
+    /** Captions were obtained; `captions` is the formatted transcript, or a raw file as a last resort. */
+    | { status: "ok"; captions: string }
+    /** Caption files were downloaded but hold no text. */
+    | { status: "empty" }
+    /** Caption files were downloaded, but none could be parsed. */
+    | { status: "unparseable"; extractionFailures: number }
+    /** No caption file could be downloaded. */
+    | { status: "unavailable"; downloadAttempts: number };
 
-    // Deduplicate by URL then cap at top 5 manual + top 5 auto to avoid
-    // excessive fallback attempts across hundreds of translated tracks
-    const seen = new Set<string>();
-    let manualCount = 0;
-    let autoCount = 0;
-    return candidates.reduce<string[]>((acc, c) => {
-        const count = c.isAuto === 0 ? manualCount : autoCount;
-        if (!seen.has(c.url) && count < 5) {
-            seen.add(c.url);
-            if (c.isAuto === 0) manualCount++;
-            else autoCount++;
-            acc.push(c.url);
+/** Downloads one caption file, resolving to its content, or null when the download failed. */
+export type CaptionDownloader = (captionUrl: string) => Promise<string | null>;
+
+/**
+ * Formats a downloaded caption file. Formats without an extractor (as offered by some
+ * non-YouTube sites) are passed through unchanged, as there is nothing better to do with them.
+ */
+function formatDownloadedCaptions(ext: string, raw: string): CaptionFormatResult {
+    if (isSupportedCaptionFormat(ext)) return formatCaptions(ext, raw);
+    if (raw.trim() === "") return { status: "empty" };
+    return { status: "ok", text: raw, cueCount: 0, rawUnitCount: 0, sentenceGrouped: false };
+}
+
+/**
+ * Walks the caption tracks in priority order until one yields captions, downloading
+ * and formatting one format at a time. What happens after each download depends on
+ * what the formatter reports:
+ *
+ *   - Formatted fine: done. Up to 5% of the file's units may have failed to parse;
+ *     those are included verbatim for the LLM to interpret.
+ *   - Download failed: the next format of the track is tried.
+ *   - Empty (no cue with text), uploader-provided track: an uploader mistake rather than
+ *     a format problem, and every format of the track is equally empty, so the whole
+ *     track is skipped.
+ *   - Empty, automatic track: confirmed with the srt format (or any second format when
+ *     srt can't be had), then reported as empty without trying further formats.
+ *   - Extraction failed, srt of an automatic track: the raw file is forwarded as-is. Raw
+ *     srt is what the LLM was given before formatting existed, so this can't do worse.
+ *   - Extraction failed, any other format or any uploader-provided track: the next format
+ *     is tried, giving up on the track after MAX_EXTRACTION_FAILURES_PER_TRACK failures.
+ *
+ * At most MAX_DOWNLOAD_ATTEMPTS downloads are made in total.
+ *
+ * @param tracks - Caption tracks in priority order, from {@link selectCaptionTracks}
+ * @param download - Downloads one caption file (carries proxy, retries and deadline)
+ * @param logger - Logger instance
+ */
+export async function resolveCaptions(
+    tracks: CaptionTrack[],
+    download: CaptionDownloader,
+    logger: Logger,
+): Promise<CaptionResolution> {
+    let downloadAttempts = 0;
+    let downloadFailures = 0;
+    let extractionFailures = 0;
+    let emptyTracks = 0;
+
+    for (const track of tracks) {
+        const { isAuto, lang } = track;
+        const queue = [...track.candidates];
+        let trackExtractionFailures = 0;
+        let emptyFormats = 0;
+
+        for (let candidate = queue.shift(); candidate; candidate = queue.shift()) {
+            if (downloadAttempts >= MAX_DOWNLOAD_ATTEMPTS) break;
+            downloadAttempts++;
+            const { ext, url } = candidate;
+            const context = { isAuto, lang, ext };
+
+            const raw = await download(url);
+            if (raw === null) {
+                downloadFailures++;
+                continue;
+            }
+
+            const result = formatDownloadedCaptions(ext, raw);
+            if (result.status === "ok") {
+                const stats = {
+                    ...context,
+                    rawChars: raw.length,
+                    formattedChars: result.text.length,
+                    cueCount: result.cueCount,
+                    sentenceGrouped: result.sentenceGrouped,
+                };
+                if (result.rawUnitCount > 0) {
+                    logger.warn(
+                        { ...stats, rawUnitCount: result.rawUnitCount },
+                        "Some caption units could not be parsed and were included verbatim",
+                    );
+                } else {
+                    logger.debug(stats, "Formatted captions");
+                }
+                return { status: "ok", captions: result.text };
+            }
+
+            if (result.status === "empty") {
+                if (!isAuto) {
+                    logger.info(context, "Uploader-provided caption track is empty, skipping the track");
+                    emptyTracks++;
+                    break;
+                }
+                emptyFormats++;
+                if (ext === RAW_FALLBACK_FORMAT || emptyFormats >= 2) {
+                    logger.info({ ...context, emptyFormats }, "Automatic caption track is empty");
+                    return { status: "empty" };
+                }
+                // Let srt confirm the track is really empty before any other format is tried
+                const confirmation = queue.findIndex((other) => other.ext === RAW_FALLBACK_FORMAT);
+                if (confirmation > 0) queue.unshift(...queue.splice(confirmation, 1));
+                continue;
+            }
+
+            extractionFailures++;
+            // An uploader's srt is as likely to be malformed as any of their formats, so only
+            // the machine-generated srt of an automatic track is trusted enough to forward raw
+            if (isAuto && ext === RAW_FALLBACK_FORMAT) {
+                logger.warn(
+                    { ...context, reason: result.reason, rawChars: raw.length },
+                    "Caption extraction failed, forwarding the raw file",
+                );
+                return { status: "ok", captions: raw };
+            }
+            logger.warn({ ...context, reason: result.reason, rawChars: raw.length }, "Caption extraction failed");
+            trackExtractionFailures++;
+            if (trackExtractionFailures >= MAX_EXTRACTION_FAILURES_PER_TRACK) {
+                logger.warn(context, "Giving up on caption track after repeated extraction failures");
+                break;
+            }
         }
-        return acc;
-    }, []);
+    }
+
+    if (extractionFailures > 0) return { status: "unparseable", extractionFailures };
+    // Only call the captions empty when nothing else was left untried because of a failed download
+    if (emptyTracks > 0 && downloadFailures === 0) return { status: "empty" };
+    return { status: "unavailable", downloadAttempts };
 }
 
 /**
@@ -234,9 +393,10 @@ function throwIfDeadlineExceeded(deadline: AbortSignal): void {
  * TODO: use dynamic tool registration to gracefully omit the tool when yt-dlp is unavailable
  *
  * For each URL, yt-dlp dumps the video metadata JSON (-J) to stdout. The metadata
- * is parsed to build a priority-ordered list of caption URLs (manual > auto,
- * preferred languages first, srt > vtt). URLs are tried in order until one
- * returns a successful response, handling transient 429s gracefully.
+ * is parsed to build a priority-ordered list of caption tracks (manual > auto,
+ * preferred languages first), each with its formats in preference order. Formats are
+ * downloaded and formatted into a compact transcript one at a time until one succeeds,
+ * handling transient 429s, empty tracks and extraction failures gracefully.
  *
  * Each tool call is capped at `timeoutMs` overall: once it elapses, running yt-dlp
  * processes are killed, in-flight caption requests are aborted, and every URL that
@@ -285,7 +445,9 @@ export async function createGetVideoCaptionsTool(logger: Logger, options: VideoC
             name: ToolName.GET_VIDEO_CAPTIONS,
             description:
                 "Fetch captions/subtitles from video URLs (YouTube, social media, etc.). " +
-                "Use this when the user provides URLs pointing to video content they want summarized or analyzed.",
+                "Use this when the user provides URLs pointing to video content they want summarized or analyzed. " +
+                "Captions are returned as a transcript where each line starts with the timestamp " +
+                "(M:SS or H:MM:SS) at which it is spoken.",
             schema: z.object({
                 urls: z.array(z.url()).min(1).describe("Video URLs to fetch captions for"),
             }),
@@ -498,10 +660,10 @@ const DEFAULT_CAPTIONS_TIMEOUT_MS = 15_000;
 const PROXY_CAPTIONS_TIMEOUT_MS = 30_000;
 
 /**
- * Runs yt-dlp -J for a single video URL to get metadata, selects the best
- * available caption URL by priority, fetches it (retrying on 429s and request
- * errors when proxied), and returns
- * the raw caption content formatted with the video URL as a heading.
+ * Runs yt-dlp -J for a single video URL to get metadata, selects its caption tracks
+ * by priority, then downloads (retrying on 429s and request errors when proxied) and
+ * formats them one format at a time until one yields a compact transcript; see
+ * {@link resolveCaptions} for the fallback rules.
  *
  * @param url - The video URL to process
  * @param logger - Logger instance for progress tracking
@@ -540,23 +702,28 @@ async function extractCaptions(
     }
     const info = parsed.data;
 
-    const captionUrls = selectCaptionUrls(info);
+    const tracks = selectCaptionTracks(info);
+    const title = info.title ?? null;
+    const author = info.channel ?? info.uploader ?? null;
 
-    if (captionUrls.length === 0) {
+    if (tracks.length === 0) {
         // Distinguish a video without any captions from one whose tracks were all filtered
         // out (streaming-only or auto-translated), to spot overly strict filtering in logs
         const trackCount = countCaptionTracks(info);
-        logger.debug({ url, trackCount }, "No caption URLs selected");
+        logger.debug({ url, trackCount }, "No caption tracks selected");
         throw new NoCaptionsError(
             trackCount === 0
                 ? "This video has no captions or subtitles available"
                 : "This video has no captions in a format that can be retrieved",
-            info.title ?? null,
-            info.channel ?? info.uploader ?? null,
+            title,
+            author,
         );
     }
 
-    logger.debug({ url, count: captionUrls.length }, "Trying caption URLs in priority order");
+    logger.debug(
+        { url, tracks: tracks.map((track) => `${track.isAuto ? "auto" : "manual"}:${track.lang}`) },
+        "Trying caption tracks in priority order",
+    );
 
     const timeout = proxy ? PROXY_CAPTIONS_TIMEOUT_MS : DEFAULT_CAPTIONS_TIMEOUT_MS;
     // Abort on whichever fires first: the per-request timeout or the overall deadline
@@ -564,26 +731,34 @@ async function extractCaptions(
         fetch(captionUrl, { signal: AbortSignal.any([AbortSignal.timeout(timeout), deadline]), proxy });
     // Retrying only helps when a rotating proxy can hand out a fresh IP
     const retries = proxy ? proxyRetries : 0;
-    // Try each URL in priority order, falling through to the next URL on persistent failure
-    for (const captionUrl of captionUrls) {
+    const download: CaptionDownloader = async (captionUrl) => {
         const response = await fetchCaptionWithRetries(captionUrl, request, retries, logger, deadline);
-
         if (!response?.ok) {
-            logger.debug({ captionUrl, status: response?.status }, "Caption fetch non-OK, trying next URL");
-            continue;
+            logger.debug({ captionUrl, status: response?.status }, "Caption fetch non-OK, trying next format");
+            return null;
         }
+        return response.text();
+    };
 
-        const videoCaptions = await response.text();
-        logger.debug({ url, captionUrl }, "Successfully fetched captions");
-        return {
-            url,
-            videoCaptions,
-            ...(info.title && { title: info.title }),
-            ...((info.channel ?? info.uploader) ? { author: info.channel ?? info.uploader } : {}),
-        };
+    const resolution = await resolveCaptions(tracks, download, logger);
+    switch (resolution.status) {
+        case "ok":
+            logger.debug({ url }, "Successfully fetched captions");
+            return {
+                url,
+                videoCaptions: resolution.captions,
+                ...(title !== null && title !== "" && { title }),
+                ...(author !== null && author !== "" && { author }),
+            };
+        case "empty":
+            throw new NoCaptionsError("This video's captions are empty", title, author);
+        case "unparseable":
+            throw new ToolError(
+                `Captions were downloaded but could not be parsed (${resolution.extractionFailures} formats tried)`,
+            );
+        case "unavailable":
+            throw new ToolError(`All ${resolution.downloadAttempts} caption downloads failed`);
     }
-
-    throw new ToolError(`All ${captionUrls.length} caption URLs failed`);
 }
 
 export type GetVideoCaptionsTool = Awaited<ReturnType<typeof createGetVideoCaptionsTool>>;
