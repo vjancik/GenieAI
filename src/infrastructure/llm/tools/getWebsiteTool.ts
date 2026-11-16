@@ -5,6 +5,7 @@ import { gfm } from "turndown-plugin-gfm";
 import { z } from "zod";
 import { parseMimeType } from "../../../application/helpers/parseMimeType.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
+import { ToolName } from "../../../application/types/ToolName.ts";
 import type { WebFetchFailure } from "../../../domain/errors/AppError.ts";
 import { ToolError, WebFetchError } from "../../../domain/errors/AppError.ts";
 import type { BrowserPageFetcher } from "../../browser/BrowserPageFetcher.ts";
@@ -490,7 +491,7 @@ export function createGetWebsiteTool(logger: Logger, browserFetcher?: BrowserPag
             });
         },
         {
-            name: "get_website",
+            name: ToolName.GET_WEBSITE,
             description:
                 "Fetch one or more web page URLs and return their full content as Markdown. " +
                 "Use this when the user provides URLs to web pages they want analyzed, summarized, or referenced. " +

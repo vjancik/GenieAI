@@ -5,6 +5,7 @@ import { z } from "zod";
 import { SearchMode } from "../../../application/config/AppConfig.ts";
 import type { IModelTool } from "../../../application/ports/IModelTool.ts";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
+import { ToolName } from "../../../application/types/ToolName.ts";
 import { ModelProvider } from "../ModelProvider.ts";
 import type { GetVideoCaptionsTool } from "../tools/getVideoCaptionsTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
@@ -61,15 +62,15 @@ const routeToPythonTool = tool(async () => JSON.stringify({ route: "python" }), 
  * @param searchMode - Determines the name of the search tool referenced in the prompt.
  */
 export function buildTriageSystemPrompt(searchMode: SearchMode): string {
-    const searchToolName = searchMode === SearchMode.tavily ? "web_search" : "route_to_search";
+    const searchToolName = searchMode === SearchMode.tavily ? ToolName.WEB_SEARCH : "route_to_search";
 
     return (
         "You are a request analysis agent. Your job is to intelligently respond to the user's message with the right " +
         "tools and call exactly one route tool to route the request to another agent or one or more data retrieval " +
         "tools to retrieve the necessary information to satisfy the request.\n" +
         "Rules:\n" +
-        "- If the message contains web page URLs to analyze: call get_website\n" +
-        "- If the message contains video URLs (YouTube, social media, etc.): call get_video_captions\n" +
+        `- If the message contains web page URLs to analyze: call ${ToolName.GET_WEBSITE}\n` +
+        `- If the message contains video URLs (YouTube, social media, etc.): call ${ToolName.GET_VIDEO_CAPTIONS}\n` +
         "- DO NOT ever call the previous 2 tools for the same URLs more than once\n" +
         "- You should only use URLs present in the user's message — do not make assumptions or add new URLs on your own\n" +
         "- If the question needs current/live information or very niche topics: call " +

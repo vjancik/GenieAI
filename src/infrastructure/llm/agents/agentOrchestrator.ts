@@ -15,6 +15,7 @@ import type {
 import type { OnStatusUpdate } from "../../../application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../../application/types/AgentStatus.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
+import { CONTENT_TOOLS, ToolName } from "../../../application/types/ToolName.ts";
 import type { PersistedChatMessage } from "../../../domain/entities/Message.ts";
 import { AppError, LlmError } from "../../../domain/errors/AppError.ts";
 import { type FinishReason, isDegradedFinishReason } from "../../../domain/value-objects/FinishReason.ts";
@@ -34,8 +35,6 @@ import { safeParseTavilyResponse, tavilyResultsToGroundingChunks } from "../tool
  * tool call can be checked against already-fetched content, preventing the LLM
  * from re-fetching URLs whose results are already in context.
  */
-const CONTENT_TOOLS = new Set(["get_website", "get_video_captions"]);
-
 function collectFetchedUrls(messages: BaseMessage[]): Set<string> {
     const fetched = new Set<string>();
 
@@ -586,7 +585,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                     // Routing sentinel (Google mode): do NOT add triage message to state.
                     return new Command({ goto: OrchestratorNode.SEARCH });
 
-                case "web_search":
+                case ToolName.WEB_SEARCH:
                     // Real Tavily tool call (Tavily mode): add triage AIMessage to state so the
                     // ToolMessage created in searchNode has a valid tool_call_id in history.
                     return new Command({
@@ -643,7 +642,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             const toolResults = await Promise.all(
                 toolCalls.map(async (toolCall) => {
                     const result =
-                        toolCall.name === "get_website"
+                        toolCall.name === ToolName.GET_WEBSITE
                             ? await this.getWebsiteTool.invoke(toolCall.args as { urls: string[] })
                             : await this.getVideoCaptionsTool.invoke(toolCall.args as { urls: string[] });
                     return { toolCall, result };
@@ -722,7 +721,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             const lastMsg = state.messages.at(-1);
             const hasToolResult = lastMsg instanceof ToolMessage;
             const hasVideoCaptions = state.messages.some(
-                (msg) => msg instanceof ToolMessage && msg.name === "get_video_captions",
+                (msg) => msg instanceof ToolMessage && msg.name === ToolName.GET_VIDEO_CAPTIONS,
             );
 
             span.setAttributes({
@@ -820,7 +819,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 const triageMessage = state.messages.at(-1);
                 const webSearchCall =
                     triageMessage instanceof AIMessage
-                        ? triageMessage.tool_calls?.find((tc) => tc.name === "web_search")
+                        ? triageMessage.tool_calls?.find((tc) => tc.name === ToolName.WEB_SEARCH)
                         : undefined;
                 if (!webSearchCall) {
                     throw new AppError(
@@ -846,7 +845,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
                 // ToolMessage responding to the triage AIMessage's web_search tool call.
                 const tavilyResultMessage = new ToolMessage({
                     content: JSON.stringify(objResponse.results),
-                    name: "web_search",
+                    name: ToolName.WEB_SEARCH,
                     tool_call_id: webSearchCall.id ?? "",
                 });
 

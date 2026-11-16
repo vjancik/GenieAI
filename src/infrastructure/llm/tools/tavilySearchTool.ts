@@ -2,6 +2,7 @@ import { tool } from "@langchain/core/tools";
 import { TavilySearch } from "@langchain/tavily";
 import { z } from "zod";
 import type { Logger } from "../../../application/types/Logger.ts";
+import { ToolName } from "../../../application/types/ToolName.ts";
 
 const TavilySearchResultSchema = z.object({
     url: z.string(),
@@ -105,7 +106,6 @@ export function tavilyResultsToGroundingChunks(results: TavilySearchResult[], lo
     return chunks;
 }
 
-const TAVILY_SEARCH_NAME = "web_search";
 const TAVILY_SEARCH_DESCRIPTION =
     "Use this tool when the question requires " +
     "up-to-date information, current events, recent news, live data, or " +
@@ -134,7 +134,7 @@ export function createTavilyTool() {
     });
 
     return tool(({ query }) => inner.invoke({ query }), {
-        name: TAVILY_SEARCH_NAME,
+        name: ToolName.WEB_SEARCH,
         description: TAVILY_SEARCH_DESCRIPTION,
         schema: z.object({
             query: z.string().describe(QUERY_DESCRIPTION),

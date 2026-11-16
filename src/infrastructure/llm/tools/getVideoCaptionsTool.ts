@@ -2,6 +2,7 @@ import { tool } from "@langchain/core/tools";
 import { spawn } from "bun";
 import { z } from "zod";
 import type { Logger } from "../../../application/types/Logger.ts";
+import { ToolName } from "../../../application/types/ToolName.ts";
 import { NoCaptionsError, ToolError } from "../../../domain/errors/AppError.ts";
 
 /**
@@ -281,7 +282,7 @@ export async function createGetVideoCaptionsTool(logger: Logger, options: VideoC
             });
         },
         {
-            name: "get_video_captions",
+            name: ToolName.GET_VIDEO_CAPTIONS,
             description:
                 "Fetch captions/subtitles from video URLs (YouTube, social media, etc.). " +
                 "Use this when the user provides URLs pointing to video content they want summarized or analyzed.",
