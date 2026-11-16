@@ -2,7 +2,7 @@ import * as Sentry from "@sentry/bun";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
 import { SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
-import { blockHighSafetySettings, neverTool, noInternalRetries } from "./sharedGeminiSettings.ts";
+import { blockNoneSafetySettings, neverTool, noInternalRetries } from "./sharedGeminiSettings.ts";
 import { ValidatedChatGoogle } from "./ValidatedChatGoogle.ts";
 
 /**
@@ -71,7 +71,7 @@ function createGeneralModel(
             thinkingLevel: "HIGH" satisfies ThinkingLevel,
             includeThoughts: options.includeThoughts,
         },
-        safetySettings: blockHighSafetySettings,
+        safetySettings: blockNoneSafetySettings,
         callbacks: sentryCallback,
         maxRetries: noInternalRetries,
     });
