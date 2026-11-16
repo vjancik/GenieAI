@@ -51,6 +51,8 @@ ytDlp:
 # httpProxy: "http://proxy:8080"    # <optional>
   # Number of proxy rotation retries on bot-detection or 429 responses.
   retries: 1         # <optional>
+  # Hard cap in milliseconds on a whole captions fetch, including all retries.
+  timeoutMs: 300000         # <optional>
 
 agent:
   # How file attachments are passed to the LLM ("inline" or "upload").

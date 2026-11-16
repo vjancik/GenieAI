@@ -112,6 +112,8 @@ const fileConfigDefaults = {
     ytDlp: {
         /** Number of proxy rotation retries on bot-detection or 429 responses. */
         retries: 1,
+        /** Hard cap in milliseconds on a whole captions tool call, including all retries. */
+        timeoutMs: 5 * 60 * 1000,
     },
 } as const;
 
@@ -271,6 +273,7 @@ const fileConfigSchema = z.object({
         .object({
             httpProxy: z.url().optional(),
             retries: z.number().int().nonnegative().optional().prefault(fileConfigDefaults.ytDlp.retries),
+            timeoutMs: z.number().int().positive().optional().prefault(fileConfigDefaults.ytDlp.timeoutMs),
         })
         .optional()
         .prefault(fileConfigDefaults.ytDlp),

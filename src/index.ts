@@ -114,8 +114,7 @@ const getWebsiteTool = createGetWebsiteTool(
 );
 const getVideoCaptionsTool = await createGetVideoCaptionsTool(
     logger.child({ module: "tool:video" }),
-    config.file.ytDlp?.httpProxy,
-    config.file.ytDlp?.retries,
+    config.file.ytDlp,
 );
 const tavilyTool = config.file.agent.nodes.search.mode === "tavily" ? createTavilyTool() : undefined;
 

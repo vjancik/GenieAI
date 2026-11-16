@@ -87,6 +87,21 @@ export class WebFetchError extends ToolError {
     }
 }
 
+/**
+ * Thrown when a video's metadata was retrieved but it has no usable caption tracks.
+ * Unlike transient fetch failures, this is a definitive answer the model should relay
+ * to the user, so it carries the video's title and author for context.
+ */
+export class NoCaptionsError extends ToolError {
+    constructor(
+        message: string,
+        public readonly title: string | null,
+        public readonly author: string | null,
+    ) {
+        super(message);
+    }
+}
+
 /** Thrown when a Discord event cannot be processed. */
 export class DiscordError extends AppError {
     constructor(message: string, cause?: unknown) {
