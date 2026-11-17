@@ -112,7 +112,7 @@ Copy `.env.example` to `.env` and fill in the required values.
 | `DISCORD_CLIENT_ID` | ✅ | Application ID from the Discord Developer Portal |
 | `DATABASE_URL` | ✅ | PostgreSQL connection string |
 | `GOOGLE_FREE_API_KEYS` | ✅* | Comma-separated free-tier Google AI API keys (required when any agent node uses `apiKeyType: "free"`) |
-| `GOOGLE_PAID_API_KEY` | ✅* | Single paid Google AI API key (required when any agent node uses `apiKeyType: "paid"`) |
+| `GOOGLE_PAID_API_KEYS` | ✅* | Comma-separated paid Google AI API keys, used in the listed order (required when any agent node uses `apiKeyType: "paid"`) |
 | `TAVILY_API_KEY` | | [Tavily](https://app.tavily.com/playground) API key — required only when `agent.nodes.search.mode` is set to `"tavily"` |
 | `LOG_LEVEL` | | Pino log level: `trace`, `debug`, `info`, `warn`, `error` (default: `info`) |
 | `FILE_LOG` | | Write structured JSON logs to `./logs/` alongside console output (default: `false`) |

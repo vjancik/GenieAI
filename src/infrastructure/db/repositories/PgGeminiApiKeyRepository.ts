@@ -120,7 +120,7 @@ export class PgGeminiApiKeyRepository implements IGeminiApiKeyRepository {
 
     /**
      * Sets `lastUsed = true` on the given key and `lastUsed = false` on all others
-     * in a single UPDATE pass. Used by {@link RoundRobinFreeKeyProvider} to persist
+     * in a single UPDATE pass. Used by the free pool's {@link RoundRobinKeyProvider} to persist
      * rotation position across restarts. Errors are logged and not re-thrown.
      */
     async setLastUsed(id: GeminiApiKey["id"]): Promise<void> {

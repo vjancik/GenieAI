@@ -35,9 +35,13 @@ export interface IGeminiApiKeyRepository {
 
     /**
      * Marks the given key as `lastUsed = true` and clears the flag from all
-     * other keys in a single UPDATE. Used by {@link RoundRobinFreeKeyProvider}
+     * other free keys in a single UPDATE. Used by the free pool's {@link RoundRobinKeyProvider}
      * to persist rotation position across restarts. Fire-and-forget — errors are
      * logged but not propagated.
+     *
+     * NOTE: tracks a single cursor, scoped to the free keys. It must not be shared by more
+     * than one key provider instance (e.g. the paid pool's) without first being made per-pool,
+     * otherwise the instances overwrite each other's position.
      *
      * @param id - The UUID of the key to mark as last-used
      */

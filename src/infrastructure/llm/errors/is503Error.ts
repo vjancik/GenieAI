@@ -3,7 +3,6 @@
  * from the Gemini API as surfaced through the LangChain stack.
  *
  * Checks HTTP status code and common message patterns to catch all known representations.
- * Mirrors the structure of {@link is429Error}.
  */
 export function is503Error(err: unknown): boolean {
     const SERVICE_UNAVAILABLE_PATTERN = /503|Service\s*Unavailable|server\s*error/i;

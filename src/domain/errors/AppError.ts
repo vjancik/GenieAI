@@ -138,15 +138,35 @@ export function isMissingPermissionsError(err: unknown): boolean {
     );
 }
 
-/** Thrown when all free-tier Gemini API keys have responded with HTTP 429. */
+/** Thrown when every free-tier Gemini API key has been rejected (HTTP 401, 402, 403) or rate-limited (HTTP 429). */
 export class AllFreeKeysExhaustedError extends AppError {
     constructor(cause?: unknown) {
         super(
             "ALL_FREE_KEYS_EXHAUSTED",
-            "All free Gemini API keys are rate-limited",
+            "All free Gemini API keys are rejected or rate-limited",
             cause,
             "All free API keys are currently exhausted, please try again later.",
         );
+    }
+}
+
+/**
+ * Thrown when a Gemini Files API upload request is answered with a non-OK HTTP response.
+ * Carries the response's `status` as a structured property so that callers can classify the
+ * failure (e.g. a rejected or rate-limited API key) without parsing the message.
+ */
+export class GeminiUploadHttpError extends AppError {
+    /**
+     * @param message - Description of the upload step that failed
+     * @param status  - HTTP status code of the failed response
+     * @param body    - Raw response body, kept for diagnostics
+     */
+    constructor(
+        message: string,
+        public readonly status: number,
+        public readonly body: string,
+    ) {
+        super("GEMINI_UPLOAD_FAILED", message);
     }
 }
 
@@ -244,14 +264,14 @@ export class ModelTimeoutError extends AppError {
     }
 }
 
-/** Thrown when the paid Gemini API key responds with HTTP 429. */
-export class PaidKeyExhaustedError extends AppError {
+/** Thrown when every paid Gemini API key has been rejected (HTTP 401, 402, 403) or rate-limited (HTTP 429). */
+export class AllPaidKeysExhaustedError extends AppError {
     constructor(cause?: unknown) {
         super(
-            "PAID_KEY_EXHAUSTED",
-            "The paid Gemini API key is rate-limited",
+            "ALL_PAID_KEYS_EXHAUSTED",
+            "All paid Gemini API keys are rejected or rate-limited",
             cause,
-            "The paid API key has reached spending quota and is being rate limited.",
+            "All paid API keys are currently rejected or rate limited, please try again later.",
         );
     }
 }

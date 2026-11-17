@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
     AllFreeKeysExhaustedError,
+    AllPaidKeysExhaustedError,
     AppError,
     DiscordError,
     EMPTY_MODEL_RESPONSE_MESSAGE,
@@ -12,7 +13,6 @@ import {
     ModelOverloadedError,
     ModelPromptBlockedError,
     ModelTimeoutError,
-    PaidKeyExhaustedError,
 } from "../../../src/domain/errors/AppError.ts";
 import { BlockReason } from "../../../src/domain/value-objects/BlockReason.ts";
 
@@ -56,20 +56,20 @@ describe("AllFreeKeysExhaustedError", () => {
     });
 });
 
-describe("PaidKeyExhaustedError", () => {
-    it("sets code to PAID_KEY_EXHAUSTED", () => {
-        expect(new PaidKeyExhaustedError().code).toBe("PAID_KEY_EXHAUSTED");
+describe("AllPaidKeysExhaustedError", () => {
+    it("sets code to ALL_PAID_KEYS_EXHAUSTED", () => {
+        expect(new AllPaidKeysExhaustedError().code).toBe("ALL_PAID_KEYS_EXHAUSTED");
     });
 
     it("carries a user-facing displayMessage", () => {
-        const err = new PaidKeyExhaustedError();
+        const err = new AllPaidKeysExhaustedError();
         expect(err.displayMessage).toBeTruthy();
-        expect(err.displayMessage).toContain("quota");
+        expect(err.displayMessage).toContain("paid API keys");
     });
 
     it("sets cause when provided", () => {
         const cause = new Error("429");
-        const err = new PaidKeyExhaustedError(cause);
+        const err = new AllPaidKeysExhaustedError(cause);
         expect(err.cause).toBe(cause);
     });
 });
@@ -99,7 +99,7 @@ describe("extractDisplayMessage", () => {
     });
 
     it("returns displayMessage from a nested cause", () => {
-        const inner = new PaidKeyExhaustedError();
+        const inner = new AllPaidKeysExhaustedError();
         const outer = new Error("wrapper");
         // TYPE COERCION: assigning cause to a plain Error for test purposes
         (outer as unknown as { cause: unknown }).cause = inner;

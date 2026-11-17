@@ -29,22 +29,23 @@ export class GeminiApiKeySyncService {
      * node `apiKeyType`s before this method is called.
      *
      * @param freeApiKeys - Raw free-tier key strings from `GOOGLE_FREE_API_KEYS`, or null if unset
-     * @param paidApiKey - Raw paid key string from `GOOGLE_PAID_API_KEY`, or null if unset
-     * @returns DB records for all keys, split into free and paid groups
+     * @param paidApiKeys - Raw paid key strings from `GOOGLE_PAID_API_KEYS`, or null if unset
+     * @returns DB records for all keys, split into free and paid groups, each in the given order
      */
     async sync(
         freeApiKeys: string[] | null,
-        paidApiKey: string | null,
-    ): Promise<{ freeKeys: GeminiApiKey[]; paidKey: GeminiApiKey | null }> {
-        const allKeyStrings: string[] = [...(freeApiKeys ?? []), ...(paidApiKey !== null ? [paidApiKey] : [])];
+        paidApiKeys: string[] | null,
+    ): Promise<{ freeKeys: GeminiApiKey[]; paidKeys: GeminiApiKey[] }> {
+        const allKeyStrings: string[] = [...(freeApiKeys ?? []), ...(paidApiKeys ?? [])];
 
         // Upsert all keys — free first, then paid
         // NOTE: Multiple queries preferred to single unnest() ARRAY query on process initialization
         const freeKeyRecords = await Promise.all(
             (freeApiKeys ?? []).map((apiKey) => this.geminiApiKeyRepo.upsert({ apiKey, isPaid: false })),
         );
-        const paidKeyRecord =
-            paidApiKey !== null ? await this.geminiApiKeyRepo.upsert({ apiKey: paidApiKey, isPaid: true }) : null;
+        const paidKeyRecords = await Promise.all(
+            (paidApiKeys ?? []).map((apiKey) => this.geminiApiKeyRepo.upsert({ apiKey, isPaid: true })),
+        );
 
         // Deactivate keys removed from env. Rows are kept (not deleted) so their
         // gemini_file_uploads rows survive, avoiding unnecessary re-uploads.
@@ -53,11 +54,11 @@ export class GeminiApiKeySyncService {
         this.logger.info(
             {
                 freeKeyCount: freeKeyRecords.length,
-                paidKeyId: paidKeyRecord?.id ?? null,
+                paidKeyCount: paidKeyRecords.length,
             },
             "Gemini API keys synced",
         );
 
-        return { freeKeys: freeKeyRecords, paidKey: paidKeyRecord };
+        return { freeKeys: freeKeyRecords, paidKeys: paidKeyRecords };
     }
 }

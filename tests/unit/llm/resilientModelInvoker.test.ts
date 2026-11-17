@@ -9,11 +9,11 @@ import type { IRoundRobinKeyProvider } from "../../../src/application/ports/IRou
 import type { GeminiApiKey } from "../../../src/domain/entities/GeminiApiKey.ts";
 import {
     AllFreeKeysExhaustedError,
+    AllPaidKeysExhaustedError,
     ModelNoCandidatesError,
     ModelOverloadedError,
     ModelPromptBlockedError,
     ModelTimeoutError,
-    PaidKeyExhaustedError,
 } from "../../../src/domain/errors/AppError.ts";
 import { FinishReason } from "../../../src/domain/value-objects/FinishReason.ts";
 import { ResilientModelInvoker } from "../../../src/infrastructure/llm/ResilientModelInvoker.ts";
@@ -85,6 +85,15 @@ function make503Error() {
     });
 }
 
+/** Mirrors the `@langchain/google` RequestError for a response with the given HTTP status. */
+function makeKeyRejectedError(statusCode: number) {
+    return Object.assign(new Error("The caller does not have permission"), {
+        name: "RequestError",
+        statusCode,
+        data: { error: { code: statusCode } },
+    });
+}
+
 function makeTimeoutError() {
     return new DOMException("The operation timed out.", "TimeoutError");
 }
@@ -125,28 +134,62 @@ function makeErrorModel(err: unknown): IInvokableModel {
 }
 
 // ---------------------------------------------------------------------------
-// invokeWithPaidKey — lines 46-51
+// invokeWithPaidKeys — lines 46-51
 // ---------------------------------------------------------------------------
 
-describe("ResilientModelInvoker.invokeWithPaidKey", () => {
+describe("ResilientModelInvoker.invokeWithPaidKeys", () => {
     test("returns result on success", async () => {
         const model = makeSuccessModel(new AIMessageChunk("paid response"));
         const invoker = makeInvoker();
 
-        const result = await invoker.invokeWithPaidKey(() => model, undefined, []);
+        const result = await invoker.invokeWithPaidKeys(() => model, undefined, []);
 
         expect(extractContent(result.result.content)).toBe("paid response");
         expect(result.usedFallback).toBe(false);
     });
 
-    test("throws PaidKeyExhaustedError when paid key returns 429", async () => {
+    test("throws AllPaidKeysExhaustedError when the only paid key returns 429", async () => {
         const rateLimitErr = Object.assign(new Error("Too Many Requests"), { status: 429 });
         const model = makeErrorModel(rateLimitErr);
         const invoker = makeInvoker();
 
-        await expect(invoker.invokeWithPaidKey(() => model, undefined, [])).rejects.toBeInstanceOf(
-            PaidKeyExhaustedError,
+        await expect(invoker.invokeWithPaidKeys(() => model, undefined, [])).rejects.toBeInstanceOf(
+            AllPaidKeysExhaustedError,
         );
+    });
+
+    test("rotates to the next paid key on 429", async () => {
+        const provider = makeTwoKeyProvider();
+        const rateLimitErr = Object.assign(new Error("Too Many Requests"), { status: 429 });
+        const models: Record<string, IInvokableModel> = {
+            k1: makeErrorModel(rateLimitErr),
+            k2: makeSuccessModel(new AIMessageChunk("second paid key")),
+        };
+        const invoker = makeInvoker(makeSingleKeyProvider(), provider);
+
+        const result = await invoker.invokeWithPaidKeys((key) => models[key.id] as IInvokableModel, undefined, []);
+
+        expect(extractContent(result.result.content)).toBe("second paid key");
+        expect(provider.advanceCount).toBe(1);
+    });
+
+    test("throws AllPaidKeysExhaustedError with the last error as cause when every paid key is unusable", async () => {
+        const provider = makeTwoKeyProvider();
+        const lastErr = makeKeyRejectedError(403);
+        const models: Record<string, IInvokableModel> = {
+            k1: makeErrorModel(Object.assign(new Error("Too Many Requests"), { status: 429 })),
+            k2: makeErrorModel(lastErr),
+        };
+        const invoker = makeInvoker(makeSingleKeyProvider(), provider);
+
+        const thrown = await invoker
+            .invokeWithPaidKeys((key) => models[key.id] as IInvokableModel, undefined, [])
+            .catch((err: unknown) => err);
+
+        expect(thrown).toBeInstanceOf(AllPaidKeysExhaustedError);
+        expect((thrown as AllPaidKeysExhaustedError).cause).toBe(lastErr);
+        expect(models.k1?.invoke).toHaveBeenCalledTimes(1);
+        expect(models.k2?.invoke).toHaveBeenCalledTimes(1);
     });
 
     test("uses fallback model on 503 and returns usedFallback=true", async () => {
@@ -154,7 +197,7 @@ describe("ResilientModelInvoker.invokeWithPaidKey", () => {
         const fallbackModel = makeSuccessModel(new AIMessageChunk("fallback response"));
         const invoker = makeInvoker();
 
-        const result = await invoker.invokeWithPaidKey(
+        const result = await invoker.invokeWithPaidKeys(
             () => primaryModel,
             () => fallbackModel,
             [],
@@ -164,19 +207,19 @@ describe("ResilientModelInvoker.invokeWithPaidKey", () => {
         expect(result.usedFallback).toBe(true);
     });
 
-    test("throws PaidKeyExhaustedError when fallback also returns 429 on paid key", async () => {
+    test("throws AllPaidKeysExhaustedError when fallback also returns 429 on paid key", async () => {
         const rateLimitErr = Object.assign(new Error("Too Many Requests"), { status: 429 });
         const primaryModel = makeErrorModel(make503Error());
         const fallbackModel = makeErrorModel(rateLimitErr);
         const invoker = makeInvoker();
 
         await expect(
-            invoker.invokeWithPaidKey(
+            invoker.invokeWithPaidKeys(
                 () => primaryModel,
                 () => fallbackModel,
                 [],
             ),
-        ).rejects.toBeInstanceOf(PaidKeyExhaustedError);
+        ).rejects.toBeInstanceOf(AllPaidKeysExhaustedError);
     });
 
     test("propagates non-429 fallback errors immediately", async () => {
@@ -186,12 +229,128 @@ describe("ResilientModelInvoker.invokeWithPaidKey", () => {
         const invoker = makeInvoker();
 
         await expect(
-            invoker.invokeWithPaidKey(
+            invoker.invokeWithPaidKeys(
                 () => primaryModel,
                 () => fallbackModel,
                 [],
             ),
         ).rejects.toBe(unexpectedErr);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Key rejection (401, 402, 403) — rotates like a rate limit
+// ---------------------------------------------------------------------------
+
+describe("ResilientModelInvoker — rejected key rotation", () => {
+    test.each([401, 402, 403])("rotates to the next paid key when the main model returns %d", async (status) => {
+        const provider = makeTwoKeyProvider();
+        const models: Record<string, IInvokableModel> = {
+            k1: makeErrorModel(makeKeyRejectedError(status)),
+            k2: makeSuccessModel(new AIMessageChunk("second key")),
+        };
+        const invoker = makeInvoker(makeSingleKeyProvider(), provider);
+
+        const result = await invoker.invokeWithPaidKeys((key) => models[key.id] as IInvokableModel, undefined, []);
+
+        expect(extractContent(result.result.content)).toBe("second key");
+        expect(provider.advanceCount).toBe(1);
+    });
+
+    test("rotates free keys on a rejected key as well", async () => {
+        const provider = makeTwoKeyProvider();
+        const models: Record<string, IInvokableModel> = {
+            k1: makeErrorModel(makeKeyRejectedError(401)),
+            k2: makeSuccessModel(new AIMessageChunk("second key")),
+        };
+
+        const result = await makeInvoker(provider).invokeWithFreeKeys(
+            (key) => models[key.id] as IInvokableModel,
+            undefined,
+            [],
+        );
+
+        expect(extractContent(result.result.content)).toBe("second key");
+        expect(provider.advanceCount).toBe(1);
+    });
+
+    test("does not try the fallback model on a rejected key, since it shares the key", async () => {
+        const provider = makeTwoKeyProvider();
+        const fallback = makeSuccessModel(new AIMessageChunk("fallback"));
+        const models: Record<string, IInvokableModel> = {
+            k1: makeErrorModel(makeKeyRejectedError(403)),
+            k2: makeSuccessModel(new AIMessageChunk("second key")),
+        };
+        const invoker = makeInvoker(makeSingleKeyProvider(), provider);
+
+        const result = await invoker.invokeWithPaidKeys(
+            (key) => models[key.id] as IInvokableModel,
+            () => fallback,
+            [],
+        );
+
+        expect(extractContent(result.result.content)).toBe("second key");
+        expect(result.usedFallback).toBe(false);
+        expect(fallback.invoke).not.toHaveBeenCalled();
+    });
+
+    test("rotates when the fallback model is the one rejected", async () => {
+        const provider = makeTwoKeyProvider();
+        const mains: Record<string, IInvokableModel> = {
+            k1: makeErrorModel(make503Error()),
+            k2: makeSuccessModel(new AIMessageChunk("second key")),
+        };
+        const invoker = makeInvoker(makeSingleKeyProvider(), provider);
+
+        const result = await invoker.invokeWithPaidKeys(
+            (key) => mains[key.id] as IInvokableModel,
+            () => makeErrorModel(makeKeyRejectedError(402)),
+            [],
+        );
+
+        expect(extractContent(result.result.content)).toBe("second key");
+        expect(provider.advanceCount).toBe(1);
+    });
+
+    test("rotates when attachment preparation is rejected with a Files API error", async () => {
+        const provider = makeTwoKeyProvider();
+        const model = makeSuccessModel(new AIMessageChunk("answer"));
+        // Mirrors the `@google/genai` ApiError, which carries the HTTP status as `status`
+        const apiError = Object.assign(new Error('{"error":{"code":403}}'), { name: "ApiError", status: 403 });
+        const normalize = mock(async (messages: BaseMessage[], apiKeyId: string) => {
+            if (apiKeyId === "k1") throw apiError;
+            return messages;
+        });
+        const invoker = new ResilientModelInvoker(
+            makeSingleKeyProvider(),
+            provider,
+            {
+                attachmentMode: AttachmentMode.upload,
+                maxInlineBytes: 100 * 1024 * 1024,
+                globalTimeoutMs: 60_000,
+                fallbackExecutionMode: FallbackExecutionMode.sequential,
+            },
+            logger,
+            { normalize },
+        );
+
+        const result = await invoker.invokeWithPaidKeys(() => model, undefined, []);
+
+        expect(extractContent(result.result.content)).toBe("answer");
+        expect(normalize).toHaveBeenCalledTimes(2);
+        expect(model.invoke).toHaveBeenCalledTimes(1);
+        expect(provider.advanceCount).toBe(1);
+    });
+
+    test("does not rotate on other client errors", async () => {
+        const provider = makeTwoKeyProvider();
+        const badRequest = makeKeyRejectedError(400);
+        const invoker = makeInvoker(makeSingleKeyProvider(), provider);
+
+        await expect(invoker.invokeWithPaidKeys(() => makeErrorModel(badRequest), undefined, [])).rejects.toBe(
+            badRequest,
+        );
+        expect(provider.advanceCount).toBe(0);
     });
 });
 
@@ -235,7 +394,7 @@ describe("ResilientModelInvoker — non-streaming invocation", () => {
         const model = makeSuccessModel(new AIMessageChunk("answer"));
         const invoker = makeInvoker();
 
-        await invoker.invokeWithPaidKey(() => model, undefined, []);
+        await invoker.invokeWithPaidKeys(() => model, undefined, []);
 
         expect(model.invoke).toHaveBeenCalledTimes(1);
         expect(model.stream).not.toHaveBeenCalled();
@@ -245,7 +404,7 @@ describe("ResilientModelInvoker — non-streaming invocation", () => {
         const message = new AIMessage({ content: "answer", response_metadata: { finishReason: "STOP" } });
         const invoker = makeInvoker();
 
-        const result = await invoker.invokeWithPaidKey(() => makeSuccessModel(message), undefined, []);
+        const result = await invoker.invokeWithPaidKeys(() => makeSuccessModel(message), undefined, []);
 
         expect(result.result).toBe(message);
         expect(result.finishReason).toBe(FinishReason.STOP);
@@ -254,7 +413,7 @@ describe("ResilientModelInvoker — non-streaming invocation", () => {
     test("normalizes an AIMessageChunk response to a plain AIMessage", async () => {
         const invoker = makeInvoker();
 
-        const result = await invoker.invokeWithPaidKey(
+        const result = await invoker.invokeWithPaidKeys(
             () => makeSuccessModel(new AIMessageChunk("answer")),
             undefined,
             [],
@@ -269,8 +428,8 @@ describe("ResilientModelInvoker — non-streaming invocation", () => {
         const model = makeSuccessModel(new AIMessageChunk("answer"));
         const invoker = makeInvoker();
 
-        await invoker.invokeWithPaidKey(() => model, undefined, [], { timeoutMs: 5_000 });
-        await invoker.invokeWithPaidKey(() => model, undefined, []);
+        await invoker.invokeWithPaidKeys(() => model, undefined, [], { timeoutMs: 5_000 });
+        await invoker.invokeWithPaidKeys(() => model, undefined, []);
 
         expect(model.invoke).toHaveBeenNthCalledWith(1, [], { timeout: 5_000 });
         expect(model.invoke).toHaveBeenNthCalledWith(2, [], { timeout: 60_000 });
@@ -281,7 +440,7 @@ describe("ResilientModelInvoker — non-streaming invocation", () => {
         const fallbackModel = makeSuccessModel(new AIMessageChunk("fallback ok"));
         const invoker = makeInvoker();
 
-        const result = await invoker.invokeWithPaidKey(
+        const result = await invoker.invokeWithPaidKeys(
             () => primaryModel,
             () => fallbackModel,
             [],
@@ -307,7 +466,7 @@ describe("ResilientModelInvoker — finishReason", () => {
         const invoker = makeInvoker();
         const model = makeSuccessModel(makeChunkWithFinishReason("STOP"));
 
-        const result = await invoker.invokeWithPaidKey(() => model, undefined, []);
+        const result = await invoker.invokeWithPaidKeys(() => model, undefined, []);
 
         expect(result.finishReason).toBe(FinishReason.STOP);
         expect(result.wasInterrupted).toBe(false);
@@ -317,7 +476,7 @@ describe("ResilientModelInvoker — finishReason", () => {
         const invoker = makeInvoker();
         const model = makeSuccessModel(makeChunkWithFinishReason("SAFETY"));
 
-        const result = await invoker.invokeWithPaidKey(() => model, undefined, []);
+        const result = await invoker.invokeWithPaidKeys(() => model, undefined, []);
 
         expect(result.finishReason).toBe(FinishReason.SAFETY);
         // The two signals are mutually exclusive: an interruption is the absence of a reason
@@ -330,7 +489,7 @@ describe("ResilientModelInvoker — finishReason", () => {
             new AIMessageChunk({ content: "partial", additional_kwargs: { finishReason: "RECITATION" } }),
         );
 
-        const result = await invoker.invokeWithPaidKey(() => model, undefined, []);
+        const result = await invoker.invokeWithPaidKeys(() => model, undefined, []);
 
         expect(result.finishReason).toBe(FinishReason.RECITATION);
     });
@@ -339,7 +498,7 @@ describe("ResilientModelInvoker — finishReason", () => {
         const invoker = makeInvoker();
         const model = makeSuccessModel(new AIMessageChunk("truncated answer"));
 
-        const result = await invoker.invokeWithPaidKey(() => model, undefined, []);
+        const result = await invoker.invokeWithPaidKeys(() => model, undefined, []);
 
         expect(result.finishReason).toBeNull();
         expect(result.wasInterrupted).toBe(true);
@@ -350,7 +509,7 @@ describe("ResilientModelInvoker — finishReason", () => {
         const fallbackModel = makeSuccessModel(makeChunkWithFinishReason("MAX_TOKENS"));
         const invoker = makeInvoker();
 
-        const result = await invoker.invokeWithPaidKey(
+        const result = await invoker.invokeWithPaidKeys(
             () => primaryModel,
             () => fallbackModel,
             [],
@@ -409,7 +568,7 @@ describe("ResilientModelInvoker — parallel fallback execution", () => {
         const fallback = makeControlledModel();
         main.resolve(cleanAnswer("main"));
 
-        const result = await parallelInvoker().invokeWithPaidKey(
+        const result = await parallelInvoker().invokeWithPaidKeys(
             () => main.model,
             () => fallback.model,
             [],
@@ -427,7 +586,7 @@ describe("ResilientModelInvoker — parallel fallback execution", () => {
         const fallback = makeControlledModel();
         fallback.resolve(cleanAnswer("fallback"));
 
-        const pending = parallelInvoker().invokeWithPaidKey(
+        const pending = parallelInvoker().invokeWithPaidKeys(
             () => main.model,
             () => fallback.model,
             [],
@@ -446,7 +605,7 @@ describe("ResilientModelInvoker — parallel fallback execution", () => {
         const fallback = makeControlledModel();
         fallback.resolve(cleanAnswer("fallback"));
 
-        const result = await parallelInvoker().invokeWithPaidKey(
+        const result = await parallelInvoker().invokeWithPaidKeys(
             () => main.model,
             () => fallback.model,
             [],
@@ -464,7 +623,7 @@ describe("ResilientModelInvoker — parallel fallback execution", () => {
         const fallback = makeControlledModel();
         fallback.resolve(cleanAnswer("fallback"));
 
-        const pending = parallelInvoker().invokeWithPaidKey(
+        const pending = parallelInvoker().invokeWithPaidKeys(
             () => main.model,
             () => fallback.model,
             [],
@@ -483,7 +642,7 @@ describe("ResilientModelInvoker — parallel fallback execution", () => {
         const fallback = makeControlledModel();
         fallback.resolve(new AIMessage({ content: "cut off", response_metadata: { finishReason: "SAFETY" } }));
 
-        const pending = parallelInvoker().invokeWithPaidKey(
+        const pending = parallelInvoker().invokeWithPaidKeys(
             () => main.model,
             () => fallback.model,
             [],
@@ -504,7 +663,7 @@ describe("ResilientModelInvoker — parallel fallback execution", () => {
         const fallback = makeControlledModel();
         fallback.resolve(new AIMessage({ content: "cut off", response_metadata: { finishReason: "SAFETY" } }));
 
-        const pending = parallelInvoker().invokeWithPaidKey(
+        const pending = parallelInvoker().invokeWithPaidKeys(
             () => main.model,
             () => fallback.model,
             [],
@@ -524,7 +683,7 @@ describe("ResilientModelInvoker — parallel fallback execution", () => {
         const fallback = makeControlledModel();
         main.resolve(degradedAnswer("main cut off"));
 
-        const pending = parallelInvoker().invokeWithPaidKey(
+        const pending = parallelInvoker().invokeWithPaidKeys(
             () => main.model,
             () => fallback.model,
             [],
@@ -544,7 +703,7 @@ describe("ResilientModelInvoker — parallel fallback execution", () => {
         const fallback = makeControlledModel();
         main.resolve(degradedAnswer("main cut off"));
 
-        const pending = parallelInvoker().invokeWithPaidKey(
+        const pending = parallelInvoker().invokeWithPaidKeys(
             () => main.model,
             () => fallback.model,
             [],
@@ -567,7 +726,7 @@ describe("ResilientModelInvoker — parallel fallback execution", () => {
         const secondModel = firstModel === "main" ? "fallback" : "main";
         models[firstModel].resolve(degradedAnswer(`${firstModel} cut off`));
 
-        const pending = parallelInvoker().invokeWithPaidKey(
+        const pending = parallelInvoker().invokeWithPaidKeys(
             () => models.main.model,
             () => models.fallback.model,
             [],
@@ -586,7 +745,7 @@ describe("ResilientModelInvoker — parallel fallback execution", () => {
         const fallback = makeControlledModel();
         fallback.resolve(cleanAnswer("fallback"));
 
-        const pending = parallelInvoker().invokeWithPaidKey(
+        const pending = parallelInvoker().invokeWithPaidKeys(
             () => main.model,
             () => fallback.model,
             [],
@@ -606,7 +765,7 @@ describe("ResilientModelInvoker — parallel fallback execution", () => {
         // Not a 503/timeout: sequential mode would propagate this without trying the fallback
         main.reject(new Error("400 Bad Request"));
 
-        const pending = parallelInvoker().invokeWithPaidKey(
+        const pending = parallelInvoker().invokeWithPaidKeys(
             () => main.model,
             () => fallback.model,
             [],
@@ -625,7 +784,7 @@ describe("ResilientModelInvoker — parallel fallback execution", () => {
         const fallback = makeControlledModel();
         fallback.reject(make503Error());
 
-        const pending = parallelInvoker().invokeWithPaidKey(
+        const pending = parallelInvoker().invokeWithPaidKeys(
             () => main.model,
             () => fallback.model,
             [],
@@ -648,7 +807,7 @@ describe("ResilientModelInvoker — parallel fallback execution", () => {
         const lastErr = makeTimeoutError();
         models[firstModel].reject(make503Error());
 
-        const pending = parallelInvoker().invokeWithPaidKey(
+        const pending = parallelInvoker().invokeWithPaidKeys(
             () => models.main.model,
             () => models.fallback.model,
             [],
@@ -668,7 +827,7 @@ describe("ResilientModelInvoker — parallel fallback execution", () => {
         const lastErr = make503Error();
         fallback.reject(makeTimeoutError());
 
-        const pending = parallelInvoker().invokeWithPaidKey(
+        const pending = parallelInvoker().invokeWithPaidKeys(
             () => main.model,
             () => fallback.model,
             [],
@@ -688,7 +847,7 @@ describe("ResilientModelInvoker — parallel fallback execution", () => {
         const lastErr = new Error("400 Bad Request");
         main.reject(make503Error());
 
-        const pending = parallelInvoker().invokeWithPaidKey(
+        const pending = parallelInvoker().invokeWithPaidKeys(
             () => main.model,
             () => fallback.model,
             [],
@@ -721,27 +880,52 @@ describe("ResilientModelInvoker — parallel fallback execution", () => {
         expect(provider.advanceCount).toBe(1);
     });
 
-    test("throws PaidKeyExhaustedError when both fail on the paid key with a 429", async () => {
+    test("rotates to the next key when both fail and either was rejected", async () => {
+        const provider = makeTwoKeyProvider();
+        const models = {
+            k1: { main: makeControlledModel(), fallback: makeControlledModel() },
+            k2: { main: makeControlledModel(), fallback: makeControlledModel() },
+        };
+        models.k1.main.reject(makeKeyRejectedError(403));
+        models.k1.fallback.reject(make503Error());
+        models.k2.main.resolve(cleanAnswer("main on second key"));
+
+        const result = await makeInvoker(
+            makeSingleKeyProvider(),
+            provider,
+            FallbackExecutionMode.parallel,
+        ).invokeWithPaidKeys(
+            (key) => models[key.id as "k1" | "k2"].main.model,
+            (key) => models[key.id as "k1" | "k2"].fallback.model,
+            [],
+            { mainGracePeriodMs: 0 },
+        );
+
+        expect(extractContent(result.result.content)).toBe("main on second key");
+        expect(provider.advanceCount).toBe(1);
+    });
+
+    test("throws AllPaidKeysExhaustedError when both fail on the only paid key with a 429", async () => {
         const main = makeControlledModel();
         const fallback = makeControlledModel();
         main.reject(make429Error());
         fallback.reject(make429Error());
 
         await expect(
-            parallelInvoker().invokeWithPaidKey(
+            parallelInvoker().invokeWithPaidKeys(
                 () => main.model,
                 () => fallback.model,
                 [],
                 { mainGracePeriodMs: 0 },
             ),
-        ).rejects.toBeInstanceOf(PaidKeyExhaustedError);
+        ).rejects.toBeInstanceOf(AllPaidKeysExhaustedError);
     });
 
     test("invokes only the main model when the node has no fallback model", async () => {
         const main = makeControlledModel();
         main.resolve(cleanAnswer("main"));
 
-        const result = await parallelInvoker().invokeWithPaidKey(() => main.model, undefined, [], {
+        const result = await parallelInvoker().invokeWithPaidKeys(() => main.model, undefined, [], {
             mainGracePeriodMs: 1_000,
         });
 
@@ -755,7 +939,7 @@ describe("ResilientModelInvoker — sequential fallback execution", () => {
         const main = makeSuccessModel(cleanAnswer("main"));
         const fallback = makeSuccessModel(cleanAnswer("fallback"));
 
-        await makeInvoker().invokeWithPaidKey(
+        await makeInvoker().invokeWithPaidKeys(
             () => main,
             () => fallback,
             [],
@@ -770,7 +954,7 @@ describe("ResilientModelInvoker — sequential fallback execution", () => {
         const fallback = makeSuccessModel(cleanAnswer("fallback"));
 
         await expect(
-            makeInvoker().invokeWithPaidKey(
+            makeInvoker().invokeWithPaidKeys(
                 () => makeErrorModel(mainErr),
                 () => fallback,
                 [],
@@ -798,7 +982,7 @@ describe("ResilientModelInvoker — sequential fallback execution", () => {
         const fallbackErr = makeTimeoutError();
 
         const thrown = await makeInvoker()
-            .invokeWithPaidKey(
+            .invokeWithPaidKeys(
                 () => makeErrorModel(make503Error()),
                 () => makeErrorModel(fallbackErr),
                 [],
@@ -816,7 +1000,7 @@ describe("ResilientModelInvoker — sequential fallback execution", () => {
         const mainErr = makeErr();
 
         const thrown = await makeInvoker()
-            .invokeWithPaidKey(() => makeErrorModel(mainErr), undefined, [])
+            .invokeWithPaidKeys(() => makeErrorModel(mainErr), undefined, [])
             .catch((err: unknown) => err);
 
         expect(thrown).toBeInstanceOf(ErrorClass);
@@ -849,7 +1033,7 @@ describe("ResilientModelInvoker — provider rejections", () => {
     ])("falls back sequentially when the main model returns %s", async (_label, makeErr) => {
         const fallback = makeSuccessModel(cleanAnswer("fallback"));
 
-        const result = await makeInvoker().invokeWithPaidKey(
+        const result = await makeInvoker().invokeWithPaidKeys(
             () => makeErrorModel(makeErr()),
             () => fallback,
             [],
@@ -863,7 +1047,7 @@ describe("ResilientModelInvoker — provider rejections", () => {
         const fallbackErr = makeNoCandidatesError();
 
         const thrown = await makeInvoker()
-            .invokeWithPaidKey(
+            .invokeWithPaidKeys(
                 () => makeErrorModel(makeNoCandidatesError()),
                 () => makeErrorModel(fallbackErr),
                 [],
@@ -878,7 +1062,7 @@ describe("ResilientModelInvoker — provider rejections", () => {
         const fallback = makeErrorModel(makePromptBlockedError());
 
         const thrown = await makeInvoker()
-            .invokeWithPaidKey(
+            .invokeWithPaidKeys(
                 () => makeErrorModel(makePromptBlockedError()),
                 () => fallback,
                 [],
@@ -900,7 +1084,7 @@ describe("ResilientModelInvoker — provider rejections", () => {
             makeSingleKeyProvider("paid"),
             FallbackExecutionMode.parallel,
         )
-            .invokeWithPaidKey(
+            .invokeWithPaidKeys(
                 () => main.model,
                 () => fallback.model,
                 [],
@@ -911,7 +1095,7 @@ describe("ResilientModelInvoker — provider rejections", () => {
         expect(thrown).toBeInstanceOf(ModelPromptBlockedError);
     });
 
-    // The safety ratings JSON is embedded in the message, which the 429 check scans
+    // The safety ratings JSON is embedded in the message; rotation must only ever go by status code
     test("never mistakes a blocked prompt mentioning 429 for a rate limit", async () => {
         const provider = makeTwoKeyProvider();
         const blocked = () => makeErrorModel(makePromptBlockedError('[{"probabilityScore":0.1429}]'));

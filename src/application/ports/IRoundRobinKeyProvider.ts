@@ -1,18 +1,18 @@
 import type { GeminiApiKey } from "../../domain/entities/GeminiApiKey.ts";
 
 /**
- * Port for managing round-robin rotation of free-tier Google API keys.
+ * Port for managing round-robin rotation over a pool of Google API keys (free or paid).
  *
- * Maintains a cursor over the available free keys. The orchestrator uses this
- * to start with the current key on each invocation and advance to the next key
- * when a rate-limit error (HTTP 429) is encountered.
+ * Maintains a cursor over the pool's keys. The invoker uses this to start with the
+ * current key on each invocation and advance to the next key when the current one is
+ * rejected (HTTP 401, 402, 403) or rate-limited (HTTP 429).
  *
  * State is shared across concurrent requests — if one request advances the
  * cursor, subsequent requests start from the new current key, distributing load
  * across keys over time.
  */
 export interface IRoundRobinKeyProvider {
-    /** The currently active free API key. */
+    /** The currently active API key. */
     readonly currentKey: GeminiApiKey;
 
     /**
@@ -21,6 +21,6 @@ export interface IRoundRobinKeyProvider {
      */
     nextKey(): GeminiApiKey;
 
-    /** Total number of free API keys available. Used to bound retry loops. */
+    /** Total number of API keys in the pool. Used to bound retry loops. */
     readonly keyCount: number;
 }

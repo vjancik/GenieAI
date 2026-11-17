@@ -158,8 +158,13 @@ export const geminiApiKeys = pgTable("gemini_api_keys", {
     /**
      * Whether this key was the last one used before the previous shutdown.
      * Set to true on each key rotation; cleared from the previous key.
-     * Used by RoundRobinFreeKeyProvider to resume rotation position across restarts.
+     * Used by the free pool's RoundRobinKeyProvider to resume rotation position across restarts.
      * At most one row should have this true at any time (best-effort, not DB-enforced).
+     *
+     * NOTE: a single flag over the free keys means only ONE key provider instance's cursor can
+     * be tracked. The paid pool deliberately doesn't persist its cursor. Persisting a second
+     * cursor (e.g. the paid pool's, or any further pool) needs this to become per-pool first,
+     * along with the `setLastUsed` repository query, which is scoped to free keys.
      */
     lastUsed: boolean("last_used").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

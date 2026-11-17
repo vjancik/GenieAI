@@ -18,16 +18,15 @@ import type { IRoundRobinKeyProvider } from "../../application/ports/IRoundRobin
 import type { OnStatusUpdate } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import type { GeminiApiKey } from "../../domain/entities/GeminiApiKey.ts";
-import { AllFreeKeysExhaustedError, PaidKeyExhaustedError } from "../../domain/errors/AppError.ts";
+import { AllFreeKeysExhaustedError, AllPaidKeysExhaustedError } from "../../domain/errors/AppError.ts";
 import {
     type FinishReason,
     isDegradedFinishReason,
     parseFinishReason,
 } from "../../domain/value-objects/FinishReason.ts";
-import { is429Error } from "./errors/is429Error.ts";
+import { httpStatusOf } from "./errors/httpStatusOf.ts";
+import { isKeyRotationError } from "./errors/isKeyRotationError.ts";
 import { isModelFallbackError } from "./errors/isModelFallbackError.ts";
-import { isNoCandidatesError } from "./errors/isNoCandidatesError.ts";
-import { isPromptBlockedError } from "./errors/isPromptBlockedError.ts";
 import { toModelFailureError } from "./errors/toModelFailureError.ts";
 import { filterHistoryForInlineSize } from "./utils/inlineAttachmentFilter.ts";
 import { concatMessageChunks, normalizeContent } from "./utils/langchainUtils.ts";
@@ -117,15 +116,6 @@ function errorName(err: unknown): string {
 }
 
 /**
- * True when the error is a 429 that warrants rotating to the next key. Blocked prompts and
- * missing candidates are ruled out first by their exact shape, because `is429Error` scans the
- * error message, which for a blocked prompt embeds arbitrary safety rating JSON.
- */
-function isRateLimitError(err: unknown): boolean {
-    return !isPromptBlockedError(err) && !isNoCandidatesError(err) && is429Error(err);
-}
-
-/**
  * Streams a model, collecting all chunks into a single concatenated `AIMessage`.
  *
  * Currently unused in favor of {@link invokeModel}, kept for when the finer-grained
@@ -197,13 +187,13 @@ async function streamingInvoke(
 }
 
 /**
- * Outcome of running a node's models against a single API key. Rate limiting is returned
- * rather than thrown so that key rotation is handled in one place, regardless of how the
- * fallback model is executed.
+ * Outcome of running a node's models against a single API key. A key that is rejected or
+ * rate-limited (see {@link isKeyRotationError}) is returned rather than thrown so that key
+ * rotation is handled in one place, regardless of how the fallback model is executed.
  */
 type KeyAttemptOutcome =
     | { kind: "success"; invocation: ModelInvocationResult }
-    | { kind: "rateLimited"; error: unknown };
+    | { kind: "keyUnusable"; error: unknown };
 
 /** Per-key-attempt state shared by the fallback execution strategies. */
 interface KeyAttemptContext {
@@ -281,7 +271,7 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
         );
     }
 
-    invokeWithPaidKey(
+    invokeWithPaidKeys(
         getModel: (key: GeminiApiKey) => IInvokableModel,
         getFallbackModel: ((key: GeminiApiKey) => IInvokableModel | undefined) | undefined,
         messages: BaseMessage[],
@@ -305,19 +295,20 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
         options?: ModelInvocationOptions,
     ): Promise<ModelInvocationResult> {
         return keyType === ApiKeyType.paid
-            ? this.invokeWithPaidKey(getModel, getFallbackModel, messages, options)
+            ? this.invokeWithPaidKeys(getModel, getFallbackModel, messages, options)
             : this.invokeWithFreeKeys(getModel, getFallbackModel, messages, options);
     }
 
     /**
      * Shared invocation core: runs the node's models against `keyProvider` with file refresh,
-     * inline filtering, fallback (per the configured execution mode), and 429 rotation.
+     * inline filtering, fallback (per the configured execution mode), and rotation to the next
+     * key whenever the current one is rejected (401, 402, 403) or rate-limited (429).
      *
      * - Attempt 0 uses the current key (shared cursor, no mutation).
      * - Attempt 1+ calls nextKey(), advancing the shared cursor.
      *
-     * @throws {@link AllFreeKeysExhaustedError} if `isPaid` is false and all keys return 429
-     * @throws {@link PaidKeyExhaustedError} if `isPaid` is true and the key returns 429
+     * @throws {@link AllFreeKeysExhaustedError} if `isPaid` is false and every key is rejected or rate-limited
+     * @throws {@link AllPaidKeysExhaustedError} if `isPaid` is true and every key is rejected or rate-limited
      * @throws For failures that neither rotation nor fallback resolve, the last evaluated model
      *         error immediately, mapped to `ModelOverloadedError` / `ModelTimeoutError`
      *         where applicable (see {@link toModelFailureError})
@@ -361,7 +352,7 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
                         },
                     );
 
-                    if (outcome.kind === "rateLimited") {
+                    if (outcome.kind === "keyUnusable") {
                         lastErr = outcome.error;
                         // Only advance the cursor if no concurrent request has already
                         // done so. If currentKey has changed since we captured it, a
@@ -383,7 +374,7 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
                     return invocation;
                 }
 
-                throw isPaid ? new PaidKeyExhaustedError(lastErr) : new AllFreeKeysExhaustedError(lastErr);
+                throw isPaid ? new AllPaidKeysExhaustedError(lastErr) : new AllFreeKeysExhaustedError(lastErr);
             },
         );
     }
@@ -403,10 +394,10 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
         try {
             prepared = await this.prepareMessages(messages, context.key, options.onStatusUpdate);
         } catch (err) {
-            // A rate-limited attachment upload is resolved the same way as a rate-limited model call
-            if (isRateLimitError(err)) {
-                this.warnRateLimited(context, "attachment preparation");
-                return { kind: "rateLimited", error: err };
+            // A key that fails an attachment upload is rotated the same way as one failing a model call
+            if (isKeyRotationError(err)) {
+                this.warnKeyUnusable(context, "attachment preparation", err);
+                return { kind: "keyUnusable", error: err };
             }
             throw err;
         }
@@ -445,8 +436,9 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
      * Invokes the main model, substituting the fallback model (same key, same messages) only
      * when the main model fails with a fallback-eligible error (see {@link isModelFallbackError}).
      *
-     * @throws The main model's error when it isn't a 429 and no fallback applies,
-     *         or the fallback model's error when it isn't a 429, mapped by {@link toModelFailureError}
+     * @throws The main model's error when it doesn't warrant key rotation and no fallback applies,
+     *         or the fallback model's error when it doesn't warrant key rotation, mapped by
+     *         {@link toModelFailureError}
      */
     private async invokeWithFallbackSequentially(
         model: IInvokableModel,
@@ -459,9 +451,9 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
         try {
             return succeeded(await invokeModel(model, messages, { timeoutMs, span }), false);
         } catch (err) {
-            if (isRateLimitError(err)) {
-                this.warnRateLimited(context, "main model");
-                return { kind: "rateLimited", error: err };
+            if (isKeyRotationError(err)) {
+                this.warnKeyUnusable(context, "main model", err);
+                return { kind: "keyUnusable", error: err };
             }
             // Only a fallback-eligible error (503, timeout, no candidates, blocked prompt) warrants
             // the fallback; anything else propagates
@@ -475,9 +467,9 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
         try {
             return succeeded(await invokeModel(fallbackModel, messages, { timeoutMs, span }), true);
         } catch (fallbackErr) {
-            if (isRateLimitError(fallbackErr)) {
-                this.warnRateLimited(context, "fallback model");
-                return { kind: "rateLimited", error: fallbackErr };
+            if (isKeyRotationError(fallbackErr)) {
+                this.warnKeyUnusable(context, "fallback model", fallbackErr);
+                return { kind: "keyUnusable", error: fallbackErr };
             }
             throw toModelFailureError(fallbackErr);
         }
@@ -494,8 +486,9 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
      * - Either succeeds first with a degraded answer: it can't short-circuit, so the other model
      *   is awaited in full, and the degraded answer is used only if the other doesn't do better.
      * - One fails: the other one's answer is used if it succeeds.
-     * - Both fail: rate-limited if either got a 429 (so the next key is tried), otherwise the
-     *   error of the model that failed last is thrown, mapped by {@link toModelFailureError}.
+     * - Both fail: the key is reported unusable if either error warrants key rotation (so the
+     *   next key is tried), otherwise the error of the model that failed last is thrown, mapped
+     *   by {@link toModelFailureError}.
      */
     private async invokeWithFallbackParallel(
         model: IInvokableModel,
@@ -595,15 +588,15 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
     }
 
     /**
-     * Resolves a parallel attempt in which both models failed: a 429 from either means the next
-     * key may succeed, so the attempt is rate-limited; otherwise the error of the model that
-     * failed last is thrown, mapped by {@link toModelFailureError}.
+     * Resolves a parallel attempt in which both models failed: a rejected or rate-limited key
+     * from either means the next key may succeed, so the key is reported unusable; otherwise the
+     * error of the model that failed last is thrown, mapped by {@link toModelFailureError}.
      */
     private resolveParallelFailure(firstErr: unknown, lastErr: unknown, context: KeyAttemptContext): KeyAttemptOutcome {
-        const rateLimitErr = [lastErr, firstErr].find(isRateLimitError);
-        if (rateLimitErr === undefined) throw toModelFailureError(lastErr);
-        this.warnRateLimited(context, "main and fallback models");
-        return { kind: "rateLimited", error: rateLimitErr };
+        const rotationErr = [lastErr, firstErr].find(isKeyRotationError);
+        if (rotationErr === undefined) throw toModelFailureError(lastErr);
+        this.warnKeyUnusable(context, "main and fallback models", rotationErr);
+        return { kind: "keyUnusable", error: rotationErr };
     }
 
     private warnParallelFailure(context: KeyAttemptContext, failedModel: "main" | "fallback", err: unknown): void {
@@ -613,10 +606,17 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
         );
     }
 
-    private warnRateLimited(context: KeyAttemptContext, source: string): void {
+    private warnKeyUnusable(context: KeyAttemptContext, source: string, err: unknown): void {
         this.logger.warn(
-            { attempt: context.attempt, apiKeyId: context.key.id, source },
-            context.isPaid ? "Paid API key rate-limited (429)" : "Free API key rate-limited (429); trying next key",
+            {
+                attempt: context.attempt,
+                apiKeyId: context.key.id,
+                isPaid: context.isPaid,
+                source,
+                status: httpStatusOf(err),
+                errName: errorName(err),
+            },
+            "API key rejected or rate-limited; trying next key if one is left",
         );
     }
 }

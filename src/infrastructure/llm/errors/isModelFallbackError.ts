@@ -12,8 +12,8 @@ import { isTimeoutError } from "./isTimeoutError.ts";
  * - A blocked prompt — almost always a verdict on the input that the fallback model will share,
  *   but trying it gets around the unlikely case of a per-model block.
  *
- * 429 (rate limit) errors are intentionally excluded — those bubble up to the
- * free-key rotation middleware instead.
+ * Rate limit (429) and key rejection (401, 402, 403) errors are intentionally excluded — those
+ * are resolved by rotating to the next API key instead.
  */
 export function isModelFallbackError(err: unknown): boolean {
     return is503Error(err) || isTimeoutError(err) || isNoCandidatesError(err) || isPromptBlockedError(err);

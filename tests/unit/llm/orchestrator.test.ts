@@ -900,7 +900,7 @@ describe("Orchestrator.process — fallback retryability", () => {
                 finishReason: answer.wasInterrupted ? null : FinishReason.STOP,
             };
         });
-        return { invoke, invokeWithFreeKeys: invoke, invokeWithPaidKey: invoke } as unknown as IResilientModelInvoker;
+        return { invoke, invokeWithFreeKeys: invoke, invokeWithPaidKeys: invoke } as unknown as IResilientModelInvoker;
     }
 
     function makeOrchestratorWith(
@@ -1047,8 +1047,8 @@ describe("Orchestrator.process — fallback retryability", () => {
 });
 
 describe("invokeWithFreeKeyRotation — concurrent rotation", () => {
-    /** An error shape that is429Error() recognises as a rate-limit. */
-    const make429Error = () => new Error("HTTP 429 Too Many Requests");
+    /** An error shape that isKeyRotationError() recognizes as a rate limit. */
+    const make429Error = () => Object.assign(new Error("Too Many Requests"), { statusCode: 429 });
 
     /**
      * Creates an IRoundRobinKeyProvider with `n` distinct keys backed by a shared

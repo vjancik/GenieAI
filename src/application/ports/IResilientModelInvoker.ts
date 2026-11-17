@@ -59,11 +59,12 @@ export interface ModelInvocationOptions {
  */
 export interface IResilientModelInvoker {
     /**
-     * Invokes a model against the free-key pool with round-robin 429 rotation.
+     * Invokes a model against the free-key pool with round-robin key rotation.
      *
      * - Refreshes Gemini file uploads for each key before invoking.
      * - Filters oversized inline attachments from the message history.
-     * - On 429: advances the key cursor and retries up to keyProvider.keyCount times.
+     * - When the key is rejected (401, 402, 403) or rate-limited (429): advances the key cursor
+     *   and retries up to keyProvider.keyCount times.
      * - Fallback (same key, same messages), depending on the configured execution mode:
      *   - sequential: substituted when the main model fails with a 503, timeout, response without
      *     candidates, or blocked prompt.
@@ -76,7 +77,7 @@ export interface IResilientModelInvoker {
      * @param messages         - Conversation history to invoke the model against
      * @param options          - Per-call timeout, grace period, and status reporting
      *
-     * @throws {AllFreeKeysExhaustedError} if all free keys are rate-limited
+     * @throws {AllFreeKeysExhaustedError} if all free keys are rejected or rate-limited
      * @throws {ModelOverloadedError} if the last evaluated model call was rejected with a 503
      * @throws {ModelTimeoutError} if the last evaluated model call timed out or was aborted
      * @throws {ModelNoCandidatesError} if the last evaluated model call returned no candidates
@@ -90,15 +91,16 @@ export interface IResilientModelInvoker {
     ): Promise<ModelInvocationResult>;
 
     /**
-     * Invokes a model against the single paid API key.
+     * Invokes a model against the paid-key pool. Behaves like {@link invokeWithFreeKeys},
+     * including key rotation and fallback, but over the paid keys.
      *
-     * @throws {PaidKeyExhaustedError} if the paid key is rate-limited
+     * @throws {AllPaidKeysExhaustedError} if all paid keys are rejected or rate-limited
      * @throws {ModelOverloadedError} if the last evaluated model call was rejected with a 503
      * @throws {ModelTimeoutError} if the last evaluated model call timed out or was aborted
      * @throws {ModelNoCandidatesError} if the last evaluated model call returned no candidates
      * @throws {ModelPromptBlockedError} if the last evaluated model call had its prompt blocked
      */
-    invokeWithPaidKey(
+    invokeWithPaidKeys(
         getModel: (key: GeminiApiKey) => IInvokableModel,
         getFallbackModel: ((key: GeminiApiKey) => IInvokableModel | undefined) | undefined,
         messages: BaseMessage[],
@@ -106,7 +108,7 @@ export interface IResilientModelInvoker {
     ): Promise<ModelInvocationResult>;
 
     /**
-     * Dispatches to {@link invokeWithFreeKeys} or {@link invokeWithPaidKey} based on `keyType`.
+     * Dispatches to {@link invokeWithFreeKeys} or {@link invokeWithPaidKeys} based on `keyType`.
      * Prefer this over the individual methods when the key type is a runtime value.
      */
     invoke(

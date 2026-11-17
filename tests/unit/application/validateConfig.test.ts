@@ -25,7 +25,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
         discordToken: "token",
         databaseUrl: "postgres://localhost/test",
         googleFreeApiKeys: ["free-key"],
-        googlePaidApiKey: null,
+        googlePaidApiKeys: null,
         tavilyApiKey: null,
         file: {
             attachmentDownloader: {
@@ -94,7 +94,7 @@ describe("validateConfig", () => {
     it("passes for a valid paid-only config", () => {
         const config = makeConfig({
             googleFreeApiKeys: null,
-            googlePaidApiKey: "paid-key",
+            googlePaidApiKeys: ["paid-key"],
         });
         // TYPE COERCION: deep-merging nodes into a readonly nested object requires a cast
         (config.file.agent.nodes as Record<string, unknown>).triage = {
@@ -121,8 +121,8 @@ describe("validateConfig", () => {
         expect(() => validateConfig(config)).toThrow(/GOOGLE_FREE_API_KEYS is required/);
     });
 
-    it("throws ConfigError when a paid node is configured but GOOGLE_PAID_API_KEY is absent", () => {
-        const config = makeConfig({ googleFreeApiKeys: null, googlePaidApiKey: null });
+    it("throws ConfigError when a paid node is configured but GOOGLE_PAID_API_KEYS is absent", () => {
+        const config = makeConfig({ googleFreeApiKeys: null, googlePaidApiKeys: null });
         // TYPE COERCION: deep-merging nodes into a readonly nested object requires a cast
         (config.file.agent.nodes as Record<string, unknown>).triage = {
             ...config.file.agent.nodes.triage,
@@ -140,7 +140,7 @@ describe("validateConfig", () => {
             ...config.file.agent.nodes.search,
             apiKeyType: "paid",
         };
-        expect(() => validateConfig(config)).toThrow(/GOOGLE_PAID_API_KEY is required/);
+        expect(() => validateConfig(config)).toThrow(/GOOGLE_PAID_API_KEYS is required/);
     });
 
     describe("parallel fallback execution mode", () => {
@@ -224,7 +224,7 @@ describe("validateConfig", () => {
         const { logger, warnMock } = makeLogger();
         const config = makeConfig({
             googleFreeApiKeys: ["free-key"],
-            googlePaidApiKey: "paid-key",
+            googlePaidApiKeys: ["paid-key"],
         });
         // TYPE COERCION: deep-merging nodes into a readonly nested object requires a cast
         (config.file.agent.nodes as Record<string, unknown>).search = {

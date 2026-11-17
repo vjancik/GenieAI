@@ -17,7 +17,8 @@ export interface GeminiApiKey {
     isPaid: boolean;
     /**
      * Whether this key was the last one used before the previous shutdown.
-     * Used by {@link RoundRobinFreeKeyProvider} to resume rotation across restarts.
+     * Used by the free pool's {@link RoundRobinKeyProvider} to resume rotation across restarts;
+     * never set for paid keys, whose rotation always starts from the first configured key.
      * At most one key should have this set to true at any time (best-effort, not enforced).
      */
     lastUsed: boolean;

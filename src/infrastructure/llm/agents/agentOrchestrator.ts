@@ -327,9 +327,9 @@ type NodeFallbackRetryable = {
  * If all tool calls fail, fetchContent short-circuits to END with a programmatic
  * error AIMessage, bypassing the general node to prevent hallucination.
  *
- * Free-key rotation: triage and general nodes iterate over free API keys on HTTP 429,
- * refreshing Gemini file upload state per key before each model invocation. The search
- * node always uses the paid key with no rotation.
+ * Key rotation: each node iterates over the keys of its configured pool (free or paid) when
+ * a key is rejected (HTTP 401, 402, 403) or rate-limited (HTTP 429), refreshing Gemini file
+ * upload state per key before each model invocation.
  */
 export class AgentOrchestrator implements IAgentOrchestrator {
     private readonly graph: ReturnType<AgentOrchestrator["buildGraph"]>;

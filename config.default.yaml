@@ -122,7 +122,7 @@ agent:
       # preferred, otherwise the fallback answer is used. Required in parallel mode with a fallbackModel.
       # mainGracePeriodMs: 30000
       # Search backend to use. Options: "google" | "tavily"   <optional, default: "google">
-      #   google: Google Search grounding via Gemini API. Requires GOOGLE_PAID_API_KEY.
+      #   google: Google Search grounding via Gemini API. Requires GOOGLE_PAID_API_KEYS.
       #           Free only for gemini-2.5 models — gemini-3+ requires a paid plan.
       #   tavily: Tavily Search API. Requires TAVILY_API_KEY env var.
       mode: "tavily"

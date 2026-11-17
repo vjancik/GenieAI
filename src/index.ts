@@ -52,8 +52,7 @@ import { GeneralModelProvider } from "./infrastructure/llm/models/generalModel.t
 import { SearchModelProvider } from "./infrastructure/llm/models/searchModel.ts";
 import { TavilyOnlyTriageModelProvider, TriageModelProvider } from "./infrastructure/llm/models/triageModel.ts";
 import { ResilientModelInvoker } from "./infrastructure/llm/ResilientModelInvoker.ts";
-import { RoundRobinFreeKeyProvider } from "./infrastructure/llm/RoundRobinFreeKeyProvider.ts";
-import { SinglePaidKeyProvider } from "./infrastructure/llm/SinglePaidKeyProvider.ts";
+import { RoundRobinKeyProvider } from "./infrastructure/llm/RoundRobinKeyProvider.ts";
 import { createGetVideoCaptionsTool } from "./infrastructure/llm/tools/getVideoCaptionsTool.ts";
 import { createGetWebsiteTool } from "./infrastructure/llm/tools/getWebsiteTool.ts";
 import { createTavilyTool } from "./infrastructure/llm/tools/tavilySearchTool.ts";
@@ -85,7 +84,7 @@ const apiKeySyncService = new GeminiApiKeySyncService(
     geminiApiKeyRepository,
     logger.child({ module: "service:api-key-sync" }),
 );
-const { freeKeys, paidKey } = await apiKeySyncService.sync(config.googleFreeApiKeys, config.googlePaidApiKey);
+const { freeKeys, paidKeys } = await apiKeySyncService.sync(config.googleFreeApiKeys, config.googlePaidApiKeys);
 
 // Attachment infrastructure
 const attachmentDownloader = new FetchAttachmentDownloader(
@@ -99,7 +98,7 @@ const streamingDownloader = new FetchStreamingAttachmentDownloader(
 
 // Lazy uploader registry — one GenaiFileUploader per API key, constructed on first use
 const uploaderRegistry = new GenaiFileUploaderRegistry(
-    [...freeKeys, ...(paidKey !== null ? [paidKey] : [])],
+    [...freeKeys, ...paidKeys],
     logger.child({ module: "attachments:uploader-registry" }),
     config.file,
 );
@@ -119,10 +118,11 @@ const getVideoCaptionsTool = await createGetVideoCaptionsTool(
 const tavilyTool = config.file.agent.nodes.search.mode === "tavily" ? createTavilyTool() : undefined;
 
 // Lazy model providers — one ChatGoogle client per (provider, apiKey) pair
-const freeKeyProvider = new RoundRobinFreeKeyProvider(freeKeys, geminiApiKeyRepository);
-// TYPE COERCION: validateConfig throws before this point if any node uses apiKeyType "paid" without GOOGLE_PAID_API_KEY set
-// biome-ignore lint/style/noNonNullAssertion: guaranteed non-null by validateConfig above
-const paidKeyProvider = new SinglePaidKeyProvider(paidKey!);
+// Key pools — validateConfig has already ensured that every pool an agent node uses is non-empty.
+// Only the free pool resumes its rotation cursor across restarts (the DB can track a single
+// cursor); the paid pool always starts from the first key, respecting the configured order.
+const freeKeyProvider = new RoundRobinKeyProvider(freeKeys, geminiApiKeyRepository);
+const paidKeyProvider = new RoundRobinKeyProvider(paidKeys);
 const triageProvider = new TriageModelProvider({
     modelName: config.file.agent.nodes.triage.model,
     fallbackModelName: config.file.agent.nodes.triage.fallbackModel,

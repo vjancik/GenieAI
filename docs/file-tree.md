@@ -130,7 +130,8 @@ GenieAIV2/
 │       │   ├── agents/
 │       │   │   └── agentOrchestrator.ts                # LangGraph StateGraph definition and execution: triage → fetch/tool → general/search
 │       │   ├── errors/
-│       │   │   ├── is429Error.ts                       # Detects HTTP 429 (rate limit) errors
+│       │   │   ├── httpStatusOf.ts                     # Reads the structured HTTP status code off an error
+│       │   │   ├── isKeyRotationError.ts               # Detects errors warranting API key rotation (HTTP 401, 402, 403, 429)
 │       │   │   ├── is503Error.ts                       # Detects HTTP 503 (service unavailable) errors
 │       │   │   ├── isModelFallbackError.ts             # Detects errors that should trigger fallback model use
 │       │   │   └── isTimeoutError.ts                   # Detects invocation timeout errors
@@ -148,8 +149,7 @@ GenieAIV2/
 │       │   │   └── inlineAttachmentFilter.ts           # Strips inline attachment blocks from messages before tool calls
 │       │   ├── ModelProvider.ts                        # Abstract base class: lazy-caching model provider keyed by API key and model name (primary + fallback)
 │       │   ├── ResilientModelInvoker.ts                # Invokes a model with per-key retry, fallback model, and timeout
-│       │   ├── RoundRobinFreeKeyProvider.ts            # Rotates through free-tier API keys round-robin
-│       │   └── SinglePaidKeyProvider.ts               # Wraps a single paid API key
+│       │   └── RoundRobinKeyProvider.ts                # Rotates through a pool of API keys (free or paid) round-robin
 │       └── logging/
 │           ├── logger.ts                               # Pino logger singleton factory
 │           └── withSentryLogging.ts                    # Logger wrapper that also reports errors to Sentry

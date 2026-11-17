@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { GeminiUploadHttpError } from "../../../src/domain/errors/AppError.ts";
 import type { UploadStreamConfig } from "../../../src/infrastructure/attachments/GoogleGenAI.ts";
 import {
     initiateResumableUpload,
@@ -132,6 +133,16 @@ describe("initiateResumableUpload", () => {
         );
     });
 
+    test("throws a GeminiUploadHttpError carrying the response status", async () => {
+        mockFetch([new Response("Forbidden", { status: 403 })]);
+
+        const thrown = await initiateResumableUpload("key", BASE_CONFIG).catch((err: unknown) => err);
+
+        expect(thrown).toBeInstanceOf(GeminiUploadHttpError);
+        expect((thrown as GeminiUploadHttpError).status).toBe(403);
+        expect((thrown as GeminiUploadHttpError).body).toBe("Forbidden");
+    });
+
     test("throws when x-goog-upload-url header is missing", async () => {
         mockFetch([makeResponse({})]);
 
@@ -245,6 +256,20 @@ describe("uploadStreamChunked", () => {
         });
     });
 
+    describe("non-retryable responses", () => {
+        test.each([401, 403, 429])("throws a GeminiUploadHttpError for %d without retrying", async (status) => {
+            const calls = mockFetch([new Response("Denied", { status }), finalChunkResponse()]);
+
+            const thrown = await uploadStreamChunked(makeStream(bytes(100)), UPLOAD_SESSION_URL).catch(
+                (err: unknown) => err,
+            );
+
+            expect(thrown).toBeInstanceOf(GeminiUploadHttpError);
+            expect((thrown as GeminiUploadHttpError).status).toBe(status);
+            expect(calls).toHaveLength(1);
+        });
+    });
+
     describe("edge cases", () => {
         test("skips zero-length chunks without treating them as EOF", async () => {
             const calls = mockFetch([finalChunkResponse()]);
@@ -266,9 +291,13 @@ describe("uploadStreamChunked", () => {
                 }),
             ]);
 
-            await expect(uploadStreamChunked(makeStream(bytes(100)), UPLOAD_SESSION_URL)).rejects.toThrow(
-                "Gemini stream upload failed (400)",
+            const thrown = await uploadStreamChunked(makeStream(bytes(100)), UPLOAD_SESSION_URL).catch(
+                (err: unknown) => err,
             );
+
+            expect(thrown).toBeInstanceOf(GeminiUploadHttpError);
+            expect((thrown as GeminiUploadHttpError).message).toContain("Gemini stream upload failed (400)");
+            expect((thrown as GeminiUploadHttpError).status).toBe(400);
         });
     });
 });
@@ -360,5 +389,37 @@ describe("uploadStreamSingleRequest", () => {
         await expect(
             uploadStreamSingleRequest("key", makeStream(bytes(64)), { ...BASE_CONFIG, byteLength: 64 }),
         ).rejects.toThrow("Gemini File API single request upload failed (500) after 3 retries");
+    });
+
+    test("carries the response status once the retries are used up", async () => {
+        mockFetch([
+            new Response("Error", { status: 503 }),
+            new Response("Error", { status: 503 }),
+            new Response("Error", { status: 503 }),
+            new Response("Error", { status: 503 }),
+        ]);
+
+        const thrown = await uploadStreamSingleRequest("key", makeStream(bytes(64)), {
+            ...BASE_CONFIG,
+            byteLength: 64,
+        }).catch((err: unknown) => err);
+
+        expect(thrown).toBeInstanceOf(GeminiUploadHttpError);
+        expect((thrown as GeminiUploadHttpError).status).toBe(503);
+    });
+
+    // A rejected or rate-limited key must surface at once so the invoker can rotate keys
+    test.each([401, 402, 403, 429])("throws a GeminiUploadHttpError for %d without retrying", async (status) => {
+        const calls = mockFetch([new Response("Denied", { status }), makeResponse({}, { file: FILE_RESOURCE })]);
+
+        const thrown = await uploadStreamSingleRequest("key", makeStream(bytes(64)), {
+            ...BASE_CONFIG,
+            byteLength: 64,
+        }).catch((err: unknown) => err);
+
+        expect(thrown).toBeInstanceOf(GeminiUploadHttpError);
+        expect((thrown as GeminiUploadHttpError).status).toBe(status);
+        expect((thrown as GeminiUploadHttpError).body).toBe("Denied");
+        expect(calls).toHaveLength(1);
     });
 });

@@ -7,7 +7,7 @@ import { THINKING_LEVELS } from "../types/ThinkingLevel.ts";
 /**
  * Controls which API key pool is used when invoking an agent node.
  * - "free": round-robin rotation over the free key pool (GOOGLE_FREE_API_KEYS)
- * - "paid": single paid key (GOOGLE_PAID_API_KEY)
+ * - "paid": round-robin rotation over the paid key pool (GOOGLE_PAID_API_KEYS)
  */
 export const ApiKeyType = {
     free: "free",
@@ -316,6 +316,17 @@ export type FileConfig = z.infer<typeof fileConfigSchema>;
 // Env config schema
 // ---------------------------------------------------------------------------
 
+/** Parses a comma-separated list of API keys, trimming whitespace and dropping empty entries. */
+const commaSeparatedKeysSchema = z
+    .string()
+    .transform((raw) =>
+        raw
+            .split(",")
+            .map((k) => k.trim())
+            .filter((k) => k.length > 0),
+    )
+    .pipe(z.string().array());
+
 const envConfigSchema = z
     .object({
         DISCORD_CLIENT_ID: z.string().min(1, "DISCORD_CLIENT_ID is required"),
@@ -324,30 +335,16 @@ const envConfigSchema = z
         /**
          * Free-tier Google API keys for triage and general model rotation.
          * Comma-separated. Required when any agent node uses apiKeyType "free".
-         * Keys rotate round-robin on HTTP 429.
+         * Keys rotate round-robin when a key is rejected (HTTP 401, 402, 403) or rate-limited (HTTP 429).
          */
-        GOOGLE_FREE_API_KEYS: z
-            .string()
-            .transform((raw) =>
-                raw
-                    .split(",")
-                    .map((k) => k.trim())
-                    .filter((k) => k.length > 0),
-            )
-            .pipe(z.string().array())
-            .optional(),
+        GOOGLE_FREE_API_KEYS: commaSeparatedKeysSchema.optional(),
         /**
-         * Paid Google API key. Required when any agent node uses apiKeyType "paid".
-         * Google Search grounding is a paid-only feature; comma-separated values are rejected.
+         * Paid Google API keys. Comma-separated. Required when any agent node uses apiKeyType "paid".
+         * Google Search grounding is a paid-only feature.
+         * Keys are used in the listed order, rotating to the next one when a key is rejected
+         * (HTTP 401, 402, 403) or rate-limited (HTTP 429).
          */
-        GOOGLE_PAID_API_KEY: z
-            .string()
-            .refine(
-                (v) => !v.includes(","),
-                "GOOGLE_PAID_API_KEY must be a single key. For multiple keys use GOOGLE_FREE_API_KEYS.",
-            )
-            .transform((v) => v.trim())
-            .optional(),
+        GOOGLE_PAID_API_KEYS: commaSeparatedKeysSchema.optional(),
         /**
          * Tavily Search API key — required when agent.nodes.search.mode is "tavily".
          * Obtain a key at https://tavily.com.
@@ -363,7 +360,7 @@ const envConfigSchema = z
         discordToken: env.DISCORD_TOKEN,
         databaseUrl: env.DATABASE_URL,
         googleFreeApiKeys: env.GOOGLE_FREE_API_KEYS ?? null,
-        googlePaidApiKey: env.GOOGLE_PAID_API_KEY ?? null,
+        googlePaidApiKeys: env.GOOGLE_PAID_API_KEYS ?? null,
         tavilyApiKey: env.TAVILY_API_KEY ?? null,
     }));
 
@@ -584,13 +581,15 @@ export function validateConfig(config: AppConfig, logger?: Logger): void {
     const needsPaid = [nodes.triage, nodes.general, nodes.computation, nodes.search].some(
         (n) => n.apiKeyType === ApiKeyType.paid,
     );
-    if (needsFree && config.googleFreeApiKeys === null) {
+    if (needsFree && !config.googleFreeApiKeys?.length) {
         throw new ConfigError(
             'GOOGLE_FREE_API_KEYS is required because one or more agent nodes use apiKeyType: "free"',
         );
     }
-    if (needsPaid && config.googlePaidApiKey === null) {
-        throw new ConfigError('GOOGLE_PAID_API_KEY is required because one or more agent nodes use apiKeyType: "paid"');
+    if (needsPaid && !config.googlePaidApiKeys?.length) {
+        throw new ConfigError(
+            'GOOGLE_PAID_API_KEYS is required because one or more agent nodes use apiKeyType: "paid"',
+        );
     }
 
     // In parallel mode the grace period decides when a fallback answer wins, and suitable values

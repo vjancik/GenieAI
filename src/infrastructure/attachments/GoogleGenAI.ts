@@ -1,5 +1,6 @@
 import type { File as GenaiFile, GoogleGenAIOptions, UploadFileConfig } from "@google/genai";
 import { GoogleGenAI } from "@google/genai";
+import { AppError, GeminiUploadHttpError } from "../../domain/errors/AppError.ts";
 
 const GEMINI_UPLOAD_BASE = "https://generativelanguage.googleapis.com";
 const UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024; // 8 MB — matches SDK default
@@ -10,6 +11,16 @@ const DELAY_MULTIPLIER = 2;
 export interface UploadStreamConfig extends Pick<UploadFileConfig, "name" | "mimeType" | "displayName"> {
     /** Total byte length of the stream — required by the resumable upload protocol. */
     byteLength: number;
+}
+
+/**
+ * True when a failed upload response may succeed if the same request is sent again: request
+ * timeout (408) and server errors (5xx). Other client errors are final for the request, and a
+ * rejected or rate-limited API key (401, 402, 403, 429) in particular must surface immediately
+ * so that the caller can rotate to another key instead of waiting out the backoff.
+ */
+function isRetryableUploadStatus(status: number): boolean {
+    return status === 408 || status >= 500;
 }
 
 // Implementation methods were hoisted to module level for easier testing
@@ -45,12 +56,19 @@ export async function initiateResumableUpload(apiKey: string, config: UploadStre
 
     if (!response.ok) {
         const body = await response.text();
-        throw new Error(`Gemini resumable upload initiation failed (${response.status}): ${body}`);
+        throw new GeminiUploadHttpError(
+            `Gemini resumable upload initiation failed (${response.status}): ${body}`,
+            response.status,
+            body,
+        );
     }
 
     const uploadUrl = response.headers.get("x-goog-upload-url");
     if (!uploadUrl) {
-        throw new Error("Gemini did not return x-goog-upload-url in resumable upload initiation response");
+        throw new AppError(
+            "GEMINI_UPLOAD_FAILED",
+            "Gemini did not return x-goog-upload-url in resumable upload initiation response",
+        );
     }
 
     return uploadUrl;
@@ -61,7 +79,10 @@ export async function initiateResumableUpload(apiKey: string, config: UploadStre
  *
  * Skips the resumable protocol entirely. Buffers the stream into a `Uint8Array`
  * first (safe under 8 MB) so the body can be retried with exponential backoff
- * on transient failures.
+ * on transient failures (see {@link isRetryableUploadStatus}).
+ *
+ * @throws {GeminiUploadHttpError} immediately on a non-retryable response, or once the retries
+ *         for a retryable one are used up
  */
 export async function uploadStreamSingleRequest(
     apiKey: string,
@@ -127,11 +148,22 @@ export async function uploadStreamSingleRequest(
             return fileResource.file;
         }
 
+        if (!isRetryableUploadStatus(response.status)) {
+            const text = await response.text();
+            throw new GeminiUploadHttpError(
+                `Gemini File API single request upload failed (${response.status}): ${text}`,
+                response.status,
+                text,
+            );
+        }
+
         retryCount++;
         if (retryCount > MAX_RETRY_COUNT) {
             const text = await response.text();
-            throw new Error(
+            throw new GeminiUploadHttpError(
                 `Gemini File API single request upload failed (${response.status}) after ${MAX_RETRY_COUNT} retries: ${text}`,
+                response.status,
+                text,
             );
         }
         await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
@@ -142,6 +174,9 @@ export async function uploadStreamSingleRequest(
 /**
  * Step 2 of the resumable upload protocol: read the stream in 8 MB chunks and
  * POST each to the upload session URL with exponential-backoff retry.
+ *
+ * @throws {GeminiUploadHttpError} when a chunk is answered with a non-OK response that is not
+ *         worth retrying (see {@link isRetryableUploadStatus}) or that outlasts the retries
  */
 export async function uploadStreamChunked(stream: ReadableStream<Uint8Array>, uploadUrl: string): Promise<GenaiFile> {
     const reader = stream.getReader();
@@ -213,9 +248,22 @@ export async function uploadStreamChunked(stream: ReadableStream<Uint8Array>, up
             // x-goog-upload-status presence signals the server acknowledged the chunk
             if (chunkResponse.headers.get("x-goog-upload-status")) break;
 
+            if (!chunkResponse.ok && !isRetryableUploadStatus(chunkResponse.status)) {
+                const body = await chunkResponse.text();
+                throw new GeminiUploadHttpError(
+                    `Gemini chunk upload failed (${chunkResponse.status}) at offset ${offset}: ${body}`,
+                    chunkResponse.status,
+                    body,
+                );
+            }
+
             retryCount++;
             if (retryCount > MAX_RETRY_COUNT) {
-                throw new Error(`Gemini chunk upload failed after ${MAX_RETRY_COUNT} retries at offset ${offset}`);
+                const message = `Gemini chunk upload failed after ${MAX_RETRY_COUNT} retries at offset ${offset}`;
+                // An OK response that merely lacks the upload status header has no failure status to report
+                throw chunkResponse.ok
+                    ? new AppError("GEMINI_UPLOAD_FAILED", message)
+                    : new GeminiUploadHttpError(message, chunkResponse.status, await chunkResponse.text());
             }
             await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
             delayMs *= DELAY_MULTIPLIER;
@@ -227,9 +275,16 @@ export async function uploadStreamChunked(stream: ReadableStream<Uint8Array>, up
         if (chunkResponse?.headers.get("x-goog-upload-status") !== "active") break;
     }
 
-    if (!lastResponse?.ok) {
-        const body = await lastResponse?.text();
-        throw new Error(`Gemini stream upload failed (${lastResponse?.status}): ${body}`);
+    if (!lastResponse) {
+        throw new AppError("GEMINI_UPLOAD_FAILED", "Gemini stream upload failed: the stream had no content to upload");
+    }
+    if (!lastResponse.ok) {
+        const body = await lastResponse.text();
+        throw new GeminiUploadHttpError(
+            `Gemini stream upload failed (${lastResponse.status}): ${body}`,
+            lastResponse.status,
+            body,
+        );
     }
 
     // The final response body contains the completed File resource JSON
