@@ -1,10 +1,9 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
-import type { ToolCall } from "@langchain/core/messages/tool";
 import { Command, END, MessagesValue, ReducedValue, START, StateGraph, StateSchema } from "@langchain/langgraph";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod";
-import { type ApiKeyType, type AppConfig, SearchMode } from "../../../application/config/AppConfig.ts";
+import { type AppConfig, SearchMode } from "../../../application/config/AppConfig.ts";
 import { dbMessagesToLangchain, extractContent } from "../../../application/helpers/langchainMessageTransformers.ts";
 import type { IAgentOrchestrator } from "../../../application/ports/IAgentOrchestrator.ts";
 import type { IModelProvider } from "../../../application/ports/IModelProvider.ts";
@@ -16,97 +15,77 @@ import type {
 import type { OnStatusUpdate } from "../../../application/types/AgentStatus.ts";
 import { AgentStatusType } from "../../../application/types/AgentStatus.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
-import { CONTENT_TOOLS, ToolName } from "../../../application/types/ToolName.ts";
+import { CONTENT_TOOLS, RoutingSentinel, ToolName } from "../../../application/types/ToolName.ts";
 import type { PersistedChatMessage } from "../../../domain/entities/Message.ts";
 import { AppError, LlmError } from "../../../domain/errors/AppError.ts";
 import { type FinishReason, isDegradedFinishReason } from "../../../domain/value-objects/FinishReason.ts";
 import { MessageIntent } from "../../../domain/value-objects/MessageIntent.ts";
 import { buildComputationSystemPrompt } from "../models/computationModel.ts";
 import { buildGeneralSystemPrompt } from "../models/generalModel.ts";
-import { buildSearchSystemPrompt } from "../models/searchModel.ts";
+import { buildGoogleSearchSystemPrompt } from "../models/googleSearchModel.ts";
 import { buildTriageSystemPrompt } from "../models/triageModel.ts";
-import {
-    dedupeGroundingChunks,
-    safeParseTavilyResponse,
-    tavilyResultsToGroundingChunks,
-} from "../tools/tavilySearchTool.ts";
+import { searchResultsToGroundingChunks } from "../tools/tavilySearchTool.ts";
 import { flattenToolExchanges } from "./flattenToolExchanges.ts";
+import { type AnsweringNode, OrchestratorNode } from "./orchestratorNode.ts";
 import { pruneToolCalls } from "./pruneToolCalls.ts";
+import { collectFetchedUrls, planTriageRoute, TriageOutcome } from "./triageRoutePlanner.ts";
 
 /**
- * Runs one `web_search` tool call and pairs its result with a ToolMessage answering that call.
+ * Returns the messages triage needs to classify the request: the last full turn rather than
+ * the full history.
  *
- * @param tavilyTool - The configured Tavily tool
- * @param toolCall - The triage `web_search` call to run
- * @param logger - Used to report responses that don't match the expected schema
- * @returns The ToolMessage, and the result's grounding chunks, or null if the response didn't
- *   match the expected schema
+ * "Last full turn" = the HumanMessage immediately before the last AIMessage, through to the
+ * end of the history (i.e. the prior exchange + all new human messages since).
+ * Falls back to the full history when there is no prior AIMessage.
  */
-async function runWebSearch(tavilyTool: IModelTool<{ query: string }>, toolCall: ToolCall, logger: Logger) {
-    // TYPE COERCION: tool_call args typed as Record<string, unknown>; schema guarantees query: string
-    const searchQuery = (toolCall.args as { query: string }).query;
+function selectTriageWindow(messages: BaseMessage[]): BaseMessage[] {
+    const lastAiIdx = messages.findLastIndex((msg) => msg instanceof AIMessage);
+    if (lastAiIdx === -1) return messages;
 
-    logger.debug({ searchQuery }, "Tavily search node invoking tool");
-
-    const rawResult = await tavilyTool.invoke({ query: searchQuery });
-    const { objResponse, parsed } = safeParseTavilyResponse(rawResult);
-
-    if (!parsed.success) {
-        logger.warn(
-            { error: parsed.error.message },
-            "Tavily response did not match expected schema — grounding sources will be omitted",
-        );
-    }
-
-    return {
-        toolMessage: new ToolMessage({
-            content: JSON.stringify(objResponse.results),
-            name: ToolName.WEB_SEARCH,
-            tool_call_id: toolCall.id ?? "",
-        }),
-        // Results whose URL is not an absolute http(s) URL are dropped by the mapper
-        groundingChunks: parsed.success ? tavilyResultsToGroundingChunks(parsed.data.results, logger) : null,
-    };
+    // Last HumanMessage strictly before the last AIMessage — the start of the prior turn.
+    const turnStartIdx = messages.findLastIndex((msg, i) => i < lastAiIdx && msg instanceof HumanMessage);
+    return turnStartIdx === -1 ? messages : messages.slice(turnStartIdx);
 }
 
 /**
- * Scans the message history for ToolMessages from content-fetching tools and
- * collects all URLs that were successfully fetched (i.e. the result entry has
- * no `error` field).
- *
- * Returns a Set of keys in the format `"tool_name:url"` so that a new triage
- * tool call can be checked against already-fetched content, preventing the LLM
- * from re-fetching URLs whose results are already in context.
+ * Returns the ToolMessages at the very end of the history: the results of the tools that ran
+ * in the current turn, which no answering node has responded to yet.
  */
-function collectFetchedUrls(messages: BaseMessage[]): Set<string> {
-    const fetched = new Set<string>();
+function trailingToolMessages(messages: BaseMessage[]): ToolMessage[] {
+    const firstIdx = messages.findLastIndex((msg) => !(msg instanceof ToolMessage)) + 1;
+    return messages.slice(firstIdx).filter((msg) => msg instanceof ToolMessage);
+}
 
-    for (const msg of messages) {
-        if (!(msg instanceof ToolMessage) || !msg.name || !CONTENT_TOOLS.has(msg.name)) continue;
-
-        let entries: unknown;
-        try {
-            entries = typeof msg.content === "string" ? JSON.parse(msg.content) : msg.content;
-        } catch {
-            continue;
-        }
-
-        if (!Array.isArray(entries)) {
-            throw new AppError(
-                "ORCHESTRATOR_INVALID_TOOL_MESSAGE",
-                `ToolMessage content for ${msg.name} is not an array`,
-            );
-        }
-
-        for (const entry of entries) {
-            // Only collect successful results — entries with an `error` field are failures
-            if (entry !== null && typeof entry === "object" && "url" in entry && !("error" in entry)) {
-                fetched.add(`${msg.name}:${(entry as { url: string }).url}`);
-            }
-        }
+/** Parses a ToolMessage's JSON string content, returning null when it is not valid JSON. */
+function parseToolResult(message: ToolMessage): unknown {
+    if (typeof message.content !== "string") return message.content;
+    try {
+        return JSON.parse(message.content);
+    } catch {
+        return null;
     }
+}
 
-    return fetched;
+/** Returns the results of the web searches that ran in the current turn. */
+function currentSearchResults(messages: BaseMessage[]): ToolMessage[] {
+    return trailingToolMessages(messages).filter((msg) => msg.name === ToolName.WEB_SEARCH);
+}
+
+/**
+ * Derives the prompt hints for answering a turn from the tool results in its history.
+ *
+ * @returns `hasVideoCaptions` when video captions were fetched at any point in the history, and
+ *   `hasFetchedContent` / `hasSearchResults` when the current turn ran a content tool / web search
+ */
+function retrievedContextHints(messages: BaseMessage[]) {
+    const turnResults = trailingToolMessages(messages);
+    return {
+        hasVideoCaptions: messages.some(
+            (msg) => msg instanceof ToolMessage && msg.name === ToolName.GET_VIDEO_CAPTIONS,
+        ),
+        hasFetchedContent: turnResults.some((msg) => msg.name !== undefined && CONTENT_TOOLS.has(msg.name)),
+        hasSearchResults: turnResults.some((msg) => msg.name === ToolName.WEB_SEARCH),
+    };
 }
 
 // ⚠️  TEMPORARY WORKAROUND — remove once fixed upstream in @langchain/google
@@ -132,14 +111,6 @@ function stripCodeExecutionTypeFields(messages: BaseMessage[]): BaseMessage[] {
 }
 // ⚠️  END TEMPORARY WORKAROUND
 
-/**
- * Graph state schema: extends the prebuilt messages reducer with an `intent` field.
- * Intent is seeded once at invocation and never mutated by nodes — the plain Zod
- * schema produces a LastValue channel (replace semantics).
- *
- * Storing intent in state (rather than context) makes it available to the
- * conditional edge function and any node without threading it through context.
- */
 /** Boolean OR reducer: once true, never reverts to false across node updates. */
 const booleanOrReducer = {
     inputSchema: z.boolean(),
@@ -156,11 +127,28 @@ const firstDegradedReasonReducer = {
     reducer: (current: FinishReason | null, next: FinishReason | null) => current ?? next,
 };
 
+/**
+ * Graph state schema: extends the prebuilt messages reducer with an `intent` field and the
+ * response-degradation flags reported back to the caller.
+ * Intent is seeded once at invocation and never mutated by nodes — the plain Zod
+ * schema produces a LastValue channel (replace semantics).
+ *
+ * Storing intent in state (rather than context) makes it available to the
+ * conditional edge function and any node without threading it through context.
+ */
 const OrchestratorStateSchema = new StateSchema({
     messages: MessagesValue,
     intent: z.custom<MessageIntent>(),
     /**
-     * Set to true by an answering node (general, computation, search) when the response is
+     * The node that answers once the tools node is done. Set by triageNode whenever it routes
+     * to the tools node, and only read there: routes that skip the tools node don't need it.
+     *
+     * Kept out of `messages` on purpose, as the routing sentinel it stems from must not reach
+     * the conversation history.
+     */
+    answerNode: z.custom<AnsweringNode>().optional(),
+    /**
+     * Set to true by an answering node (general, computation, googleSearch) when the response is
      * degraded and a retry is worthwhile: the stream was interrupted, generation stopped
      * abnormally, or a fallback model answered and that node's `isFallbackRetryable` is enabled.
      * Defaults to false; never set to true by triageNode (routing quality is unaffected).
@@ -187,13 +175,13 @@ const OrchestratorStateSchema = new StateSchema({
      */
     usedRetryableFallback: new ReducedValue(z.boolean().default(false), booleanOrReducer),
     /**
-     * Set to true by generalNode, searchNode, or computationNode when the model stream
+     * Set to true by an answering node when the model stream
      * terminated without a finishReason, indicating a premature upstream termination.
      * The response content may be incomplete. Implies isRetryable.
      */
     wasInterrupted: new ReducedValue(z.boolean().default(false), booleanOrReducer),
     /**
-     * Set by generalNode, searchNode, or computationNode when the model reported a finish
+     * Set by an answering node when the model reported a finish
      * reason other than STOP (e.g. SAFETY), meaning generation ended abnormally and the
      * response is visibly truncated. Implies isRetryable.
      *
@@ -211,7 +199,6 @@ const OrchestratorStateSchema = new StateSchema({
  * Zod schema for the LangGraph runtime context passed to each node.
  * Lives in context (not state) so it is never serialized by a checkpointer.
  * Intent was moved to state; only ephemeral per-invocation callbacks remain here.
-
  */
 const OrchestratorContextSchema = z.object({
     onStatusUpdate: z.custom<OnStatusUpdate>().optional(),
@@ -226,9 +213,9 @@ type OrchestratorContext = z.infer<typeof OrchestratorContextSchema>;
  */
 type NodeConfig = { context?: OrchestratorContext };
 
-/** State update returned by the user-facing agent nodes (general, computation, search). */
+/** State update returned by the user-facing agent nodes (general, computation, googleSearch). */
 type NodeResult = {
-    messages: BaseMessage[];
+    messages: [AIMessage];
     isRetryable: boolean;
     usedFallback: boolean;
     usedRetryableFallback: boolean;
@@ -266,66 +253,49 @@ function degradationUpdate(
 /** Graph state type — messages + intent seeded at invocation. */
 type GraphState = typeof OrchestratorStateSchema.State;
 
-/**
- * Maps each LangGraph node to its string identifier.
- * Centralizes node names to prevent typos across addNode, addEdge, Command.goto, and return types.
- */
-export const OrchestratorNode = {
-    TRIAGE: "triage",
-    FETCH_CONTENT: "fetchContent",
-    GENERAL: "general",
-    COMPUTATION: "computation",
-    SEARCH: "search",
-} as const;
-
-export type OrchestratorNode = (typeof OrchestratorNode)[keyof typeof OrchestratorNode];
-
 /** Per-node model settings as parsed from the config file. */
-type NodeConfigs = AppConfig["file"]["agent"]["nodes"];
+type NodeSettings = AppConfig["file"]["agent"]["nodes"];
 
-/**
- * Names of the nodes that invoke a model. Derived from the config schema, so the per-node
- * settings below must cover exactly the configured nodes (no fetchContent, which has no model).
- */
-type NodeName = keyof NodeConfigs;
+/** Names of the nodes that invoke a model (so not the tools node). */
+type ModelNodeName = keyof NodeSettings;
 
-/** Per-node maximum ms to wait for a model response before aborting. */
-interface ModelTimeouts extends Record<NodeName, number> {}
-
-/**
- * Per-node ms the main model is given to finish after the fallback model answered, in parallel
- * fallback mode. Treated as 0 when not configured (validation requires it where it matters).
- */
-interface ModelGracePeriods extends Record<NodeName, number> {}
-
-/** Per-node API key type configuration. */
-interface NodeApiKeyTypes extends Record<NodeName, ApiKeyType> {}
-
-/**
- * Per-node policy for whether a fallback model response is retryable.
- * Keyed by the nodes whose config defines `isFallbackRetryable`, i.e. the answering nodes —
- * triage routing is never surfaced as retryable.
- */
-type NodeFallbackRetryable = {
-    [K in NodeName as NodeConfigs[K] extends { isFallbackRetryable: boolean } ? K : never]: boolean;
-};
+/** What distinguishes one answering node's model call from another's. */
+interface AnswerSpec {
+    node: AnsweringNode;
+    /** Sentry span name of the node. */
+    spanName: string;
+    provider: IModelProvider;
+    systemPrompt: string;
+    /** Status emitted right before the model call. */
+    status: AgentStatusType;
+    /** Node-specific facts about the prompt, recorded on the span and in the debug log. */
+    attributes?: Record<string, string | number | boolean>;
+}
 
 /**
  * Orchestrates the multi-agent triage routing pipeline as a LangGraph StateGraph.
  *
  * Graph topology:
- *   START → triage → fetchContent → general → END
- *                  ↘ general      → END
- *                  ↘ computation  → END
- *                  ↘ search       → END
+ *   START → triage → tools → general      → END
+ *                          ↘ computation  → END
+ *                          ↘ googleSearch → END
+ *                  ↘ general              → END
+ *                  ↘ computation          → END
+ *                  ↘ googleSearch         → END
  *
- * Routing decisions are made in the triage node via Command.goto.
- * Routing-only tool calls (route_to_search, route_to_general) are NOT added
- * to the messages state, preventing context bloat in subsequent turns.
- * Real tool calls (get_website, get_video_captions) DO add their triage
- * AIMessage to state because it is required for the ToolMessage to be valid context.
- * If all tool calls fail, fetchContent short-circuits to END with a programmatic
- * error AIMessage, bypassing the general node to prevent hallucination.
+ * Triage makes two kinds of tool calls, which can be combined:
+ * - Real tool calls (get_website, get_video_captions, and web_search in Tavily mode) retrieve
+ *   data and are all executed by the tools node. Their triage AIMessage IS added to state,
+ *   because it is required for the resulting ToolMessages to be valid context.
+ * - Routing sentinels (route_to_search, route_to_python, route_to_general) pick the node that
+ *   answers, after the tools node when there are real tool calls. They are NOT added to the
+ *   messages state, preventing context bloat in subsequent turns. Without one, the general node
+ *   answers.
+ *
+ * Web search works differently per search mode. In Google mode it is an answering node of its
+ * own (googleSearch), whose model searches by itself through native grounding. In Tavily mode it
+ * is a tool like any other: its results are answered from by whichever node triage picked,
+ * the general node by default, and the googleSearch node is never reached.
  *
  * Key rotation: each node iterates over the keys of its configured pool (free or paid) when
  * a key is rejected (HTTP 401, 402, 403) or rate-limited (HTTP 429), refreshing Gemini file
@@ -333,52 +303,65 @@ type NodeFallbackRetryable = {
  */
 export class AgentOrchestrator implements IAgentOrchestrator {
     private readonly graph: ReturnType<AgentOrchestrator["buildGraph"]>;
-    private readonly nodeTimeoutsMs: ModelTimeouts;
-    private readonly nodeGracePeriodsMs: ModelGracePeriods;
-    private readonly nodeApiKeyTypes: NodeApiKeyTypes;
-    private readonly nodeFallbackRetryable: NodeFallbackRetryable;
+    private readonly nodes: NodeSettings;
     private readonly searchMode: SearchMode;
     private readonly basePrompt: string;
+    /** The tools the tools node can execute, by the name triage calls them with. */
+    private readonly tools: ReadonlyMap<string, IModelTool<Record<string, unknown>>>;
+    private readonly toolNames: ReadonlySet<string>;
+    /** The answering node of each routing sentinel triage can follow in the active search mode. */
+    private readonly sentinelRoutes: ReadonlyMap<string, AnsweringNode>;
 
+    /**
+     * @param googleSearchProvider - The Google Search grounding model, only invoked in Google mode
+     * @param tavilyTool - The web search tool, required when the search mode is Tavily
+     * @param searchIntentTriageProvider - Used in Tavily mode when the intent is SEARCH: a triage
+     *   model whose main job is to write the search query
+     * @throws AppError (`ORCHESTRATOR_MISSING_TAVILY_TOOL`) when the search mode is Tavily but
+     *   no Tavily tool was provided
+     */
     constructor(
         private readonly triageProvider: IModelProvider,
         private readonly generalProvider: IModelProvider,
         private readonly computationProvider: IModelProvider,
-        private readonly searchProvider: IModelProvider,
+        private readonly googleSearchProvider: IModelProvider,
         private readonly invoker: IResilientModelInvoker,
-        private readonly getWebsiteTool: IModelTool<{ urls: string[] }>,
-        private readonly getVideoCaptionsTool: IModelTool<{ urls: string[] }>,
+        getWebsiteTool: IModelTool<{ urls: string[] }>,
+        getVideoCaptionsTool: IModelTool<{ urls: string[] }>,
         private readonly logger: Logger,
         config: Pick<AppConfig, "file">,
-        private readonly tavilyTool?: IModelTool<{ query: string }>,
-        /** Used in Tavily mode when intent is SEARCH — skips content tools and routing sentinels. */
-        private readonly tavilyOnlyTriageProvider?: IModelProvider,
+        tavilyTool?: IModelTool<{ query: string }>,
+        private readonly searchIntentTriageProvider?: IModelProvider,
     ) {
-        this.searchMode = config.file.agent.nodes.search.mode;
+        this.nodes = config.file.agent.nodes;
+        this.searchMode = config.file.agent.searchMode;
         this.basePrompt = config.file.prompts.basePrompt;
-        this.nodeTimeoutsMs = {
-            triage: config.file.agent.nodes.triage.timeoutMs,
-            general: config.file.agent.nodes.general.timeoutMs,
-            computation: config.file.agent.nodes.computation.timeoutMs,
-            search: config.file.agent.nodes.search.timeoutMs,
-        };
-        this.nodeGracePeriodsMs = {
-            triage: config.file.agent.nodes.triage.mainGracePeriodMs ?? 0,
-            general: config.file.agent.nodes.general.mainGracePeriodMs ?? 0,
-            computation: config.file.agent.nodes.computation.mainGracePeriodMs ?? 0,
-            search: config.file.agent.nodes.search.mainGracePeriodMs ?? 0,
-        };
-        this.nodeApiKeyTypes = {
-            triage: config.file.agent.nodes.triage.apiKeyType,
-            general: config.file.agent.nodes.general.apiKeyType,
-            computation: config.file.agent.nodes.computation.apiKeyType,
-            search: config.file.agent.nodes.search.apiKeyType,
-        };
-        this.nodeFallbackRetryable = {
-            general: config.file.agent.nodes.general.isFallbackRetryable,
-            computation: config.file.agent.nodes.computation.isFallbackRetryable,
-            search: config.file.agent.nodes.search.isFallbackRetryable,
-        };
+
+        if (this.searchMode === SearchMode.tavily && !tavilyTool) {
+            throw new AppError(
+                "ORCHESTRATOR_MISSING_TAVILY_TOOL",
+                "Search mode is tavily but no tavilyTool was provided to the orchestrator",
+            );
+        }
+
+        const tools = new Map<string, IModelTool<Record<string, unknown>>>([
+            [ToolName.GET_WEBSITE, getWebsiteTool],
+            [ToolName.GET_VIDEO_CAPTIONS, getVideoCaptionsTool],
+        ]);
+        if (tavilyTool) tools.set(ToolName.WEB_SEARCH, tavilyTool);
+        this.tools = tools;
+        this.toolNames = new Set(tools.keys());
+
+        const sentinelRoutes = new Map<string, AnsweringNode>([
+            [RoutingSentinel.GENERAL, OrchestratorNode.GENERAL],
+            [RoutingSentinel.PYTHON, OrchestratorNode.COMPUTATION],
+        ]);
+        // The Google Search node only exists as a destination in Google mode
+        if (this.searchMode === SearchMode.google) {
+            sentinelRoutes.set(RoutingSentinel.SEARCH, OrchestratorNode.GOOGLE_SEARCH);
+        }
+        this.sentinelRoutes = sentinelRoutes;
+
         this.graph = this.buildGraph();
     }
 
@@ -400,10 +383,10 @@ export class AgentOrchestrator implements IAgentOrchestrator {
      * during processing (for persistence). The newMessages array includes intermediate
      * messages (triage response, tool messages) so history has no gaps.
      *
-     * @param history - Prior messages in the reply chain, chronologically ordered
-     * @param userMessage - The current user's HumanMessage (may contain multimodal content blocks)
+     * @param messages - The reply chain in chronological order, ending with the current user's
+     *   HumanMessage (which may contain multimodal content blocks)
+     * @param intent - The user's declared intent, used to bypass triage for explicit commands
      * @param onStatusUpdate - Optional callback invoked as the agent transitions between processing phases
-     * @param attachmentFetcher - Optional Discord attachment fetcher for refreshing Gemini file uploads
      */
     async process(
         messages: BaseMessage[],
@@ -460,24 +443,23 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     }
 
     /**
-     * Routes from START based on the declared {@link MessageIntent} in context.
+     * Routes from START based on the declared {@link MessageIntent} in state.
      *
      * - GENERAL → general node directly (skip triage)
-     * - SEARCH  → search node directly (skip triage)
+     * - SEARCH  → googleSearch node directly in Google mode; triage in Tavily mode
      * - SUMMARY / UNKNOWN → triage (let the model decide)
      *
-     * This is called as a conditional edge function; LangGraph passes the state and
-     * config so the intent can be read from context without being stored in state.
+     * This is called as a conditional edge function.
      */
-    private routeFromIntent(state: GraphState, _config: NodeConfig): OrchestratorNode {
+    private routeFromIntent(state: GraphState): OrchestratorNode {
         switch (state.intent) {
             case MessageIntent.GENERAL:
                 return OrchestratorNode.GENERAL;
             case MessageIntent.SEARCH:
-                // In Tavily mode the search node expects a triage AIMessage with a web_search
-                // tool call already in state — triage must run first to produce it.
-                // In Google mode there is no tool call dependency, so we can skip triage.
-                return this.searchMode === SearchMode.tavily ? OrchestratorNode.TRIAGE : OrchestratorNode.SEARCH;
+                // In Google mode the search model does its own searching, so triage can be
+                // skipped. In Tavily mode a search is a tool call, and it takes triage to write
+                // its query.
+                return this.searchMode === SearchMode.google ? OrchestratorNode.GOOGLE_SEARCH : OrchestratorNode.TRIAGE;
             default:
                 return OrchestratorNode.TRIAGE;
         }
@@ -486,39 +468,29 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     /**
      * Compiles the LangGraph StateGraph. Called once in the constructor.
      *
-     * START routes via a conditional edge based on the declared intent:
-     * - GENERAL → general node directly
-     * - SEARCH  → search node directly
-     * - SUMMARY / UNKNOWN → triage (model decides)
-     *
-     * The triage node uses Command.goto for dynamic routing without conditional edges.
-     * Routing sentinel calls (route_to_search / route_to_general) are consumed here
-     * without being added to graph state — they are invisible in persisted history.
+     * START routes via a conditional edge based on the declared intent, see
+     * {@link routeFromIntent}. The triage and tools nodes use Command.goto for dynamic routing
+     * without conditional edges.
      */
     private buildGraph() {
+        const answeringNodes = [OrchestratorNode.GENERAL, OrchestratorNode.COMPUTATION, OrchestratorNode.GOOGLE_SEARCH];
+
         let graph = new StateGraph(OrchestratorStateSchema, OrchestratorContextSchema)
             .addNode(OrchestratorNode.TRIAGE, this.triageNode.bind(this), {
-                ends: [
-                    OrchestratorNode.FETCH_CONTENT,
-                    OrchestratorNode.GENERAL,
-                    OrchestratorNode.COMPUTATION,
-                    OrchestratorNode.SEARCH,
-                ],
+                ends: [OrchestratorNode.TOOLS, ...answeringNodes],
             })
-            .addNode(OrchestratorNode.FETCH_CONTENT, this.fetchContentNode.bind(this), {
-                ends: [OrchestratorNode.GENERAL, END],
-            })
+            .addNode(OrchestratorNode.TOOLS, this.toolsNode.bind(this), { ends: answeringNodes })
             .addNode(OrchestratorNode.GENERAL, this.generalNode.bind(this))
             .addNode(OrchestratorNode.COMPUTATION, this.computationNode.bind(this))
-            .addNode(OrchestratorNode.SEARCH, this.searchNode.bind(this))
+            .addNode(OrchestratorNode.GOOGLE_SEARCH, this.googleSearchNode.bind(this))
             .addConditionalEdges(START, this.routeFromIntent.bind(this), [
                 OrchestratorNode.TRIAGE,
                 OrchestratorNode.GENERAL,
-                OrchestratorNode.SEARCH,
+                OrchestratorNode.GOOGLE_SEARCH,
             ])
             .addEdge(OrchestratorNode.GENERAL, END)
             .addEdge(OrchestratorNode.COMPUTATION, END)
-            .addEdge(OrchestratorNode.SEARCH, END);
+            .addEdge(OrchestratorNode.GOOGLE_SEARCH, END);
 
         // automatic Sentry instrumentation doesn't work in Bun
         if (process.versions.bun && process.env.SENTRY_INITIALIZED) {
@@ -529,512 +501,307 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     }
 
     /**
-     * Triage node: classifies the request via a single model call and routes accordingly.
+     * Invokes a node's model through the resilient invoker, with that node's configured key
+     * pool, timeout and grace period.
      *
-     * Returns a Command that both updates state (adding the triage AIMessage only for
-     * real tool calls) and routes to the correct next node.
+     * @param node - The node whose settings apply
+     * @param provider - Supplies the node's primary and fallback models
+     * @param messages - The full prompt, system message included
+     * @param status - Status emitted right before the model call
+     */
+    private invokeModel(
+        node: ModelNodeName,
+        provider: IModelProvider,
+        messages: BaseMessage[],
+        status: AgentStatusType,
+        config: NodeConfig,
+    ) {
+        const settings = this.nodes[node];
+        return this.invoker.invoke(
+            settings.apiKeyType,
+            provider.get.bind(provider),
+            provider.getFallback.bind(provider),
+            messages,
+            {
+                timeoutMs: settings.timeoutMs,
+                // Validation requires the grace period wherever it matters
+                mainGracePeriodMs: settings.mainGracePeriodMs ?? 0,
+                onStatusUpdate: config.context?.onStatusUpdate,
+                beforeInvokeStatus: status,
+            },
+        );
+    }
+
+    /**
+     * Triage node: classifies the request via a single model call and routes accordingly,
+     * see {@link planTriageRoute} for the routing rules.
      *
-     * Routing sentinels (route_to_search / route_to_general) are intentionally NOT added
-     * to messages state to prevent context bloat in future turns.
+     * Returns a Command that routes to the answering node, or first to the tools node when
+     * real tool calls are to be executed. Only in the latter case is the triage AIMessage added
+     * to state; routing sentinels are intentionally NOT added to prevent context bloat in
+     * future turns.
      */
     private async triageNode(state: GraphState, config: NodeConfig): Promise<Command> {
         return Sentry.startSpan({ name: "Triage node", op: "agent.node.triage" }, async (span) => {
-            // Triage only needs the last full turn to classify, not the full history.
-            // "Last full turn" = the HumanMessage immediately before the last AIMessage, through
-            // to the end of state (i.e. the prior exchange + all new human messages since).
-            // Walking newest→oldest: find the last AIMessage, then find the last HumanMessage
-            // before it — that is the turn boundary.
-            // Falls back to full history when there is no prior AIMessage in state.
-            const lastAiIdx = state.messages.reduceRight(
-                (found, msg, i) => (found === -1 && msg instanceof AIMessage ? i : found),
-                -1,
-            );
-            // Last HumanMessage strictly before the last AIMessage — the start of the prior turn.
-            const turnStartIdx =
-                lastAiIdx === -1
-                    ? -1
-                    : state.messages.reduceRight(
-                          (found, msg, i) => (found === -1 && i < lastAiIdx && msg instanceof HumanMessage ? i : found),
-                          -1,
-                      );
-            const triageWindow = turnStartIdx === -1 ? state.messages : state.messages.slice(turnStartIdx);
-            const messages: BaseMessage[] = [
-                new SystemMessage(buildTriageSystemPrompt(this.searchMode)),
-                ...triageWindow,
-            ];
-
-            // In Tavily mode with a known SEARCH intent, use the Tavily-only triage provider
-            // which only has web_search + route_to_general bound — content tools are irrelevant.
-            const activeTriageProvider =
+            // In Tavily mode a declared SEARCH intent gets its own triage model and prompt,
+            // geared towards writing the search query
+            const isSearchRequested =
                 this.searchMode === SearchMode.tavily &&
                 state.intent === MessageIntent.SEARCH &&
-                this.tavilyOnlyTriageProvider
-                    ? this.tavilyOnlyTriageProvider
+                this.searchIntentTriageProvider !== undefined;
+            const provider =
+                isSearchRequested && this.searchIntentTriageProvider
+                    ? this.searchIntentTriageProvider
                     : this.triageProvider;
 
-            const { result: triageResponse } = await this.invoker.invoke(
-                this.nodeApiKeyTypes.triage,
-                activeTriageProvider.get.bind(activeTriageProvider),
-                activeTriageProvider.getFallback.bind(activeTriageProvider),
+            const messages: BaseMessage[] = [
+                new SystemMessage(buildTriageSystemPrompt(this.searchMode, isSearchRequested)),
+                ...selectTriageWindow(state.messages),
+            ];
+
+            const { result: triageResponse } = await this.invokeModel(
+                "triage",
+                provider,
                 messages,
-                {
-                    timeoutMs: this.nodeTimeoutsMs.triage,
-                    mainGracePeriodMs: this.nodeGracePeriodsMs.triage,
-                    onStatusUpdate: config.context?.onStatusUpdate,
-                    beforeInvokeStatus: AgentStatusType.TRIAGE,
-                },
+                AgentStatusType.TRIAGE,
+                config,
             );
 
             const toolCalls = triageResponse.tool_calls ?? [];
-
-            if (toolCalls.length === 0) {
-                this.logger.warn("Triage made no tool call, routing to general agent");
-                span.setAttribute("agent.triage_route", "general");
-                return new Command({ goto: OrchestratorNode.GENERAL });
-            }
-
-            // Partition tool calls into content fetchers and routing sentinels.
-            // A single triage response may request multiple content tools (e.g. two URLs
-            // of different types), all of which must be executed before the general node runs.
-            // TODO: populate dynamically instead of hard coding
-            const contentCalls = toolCalls.filter((tc) => CONTENT_TOOLS.has(tc.name));
-            const routingCalls = toolCalls.filter((tc) => !CONTENT_TOOLS.has(tc.name));
-
-            this.logger.info(
-                { contentTools: contentCalls.map((tc) => tc.name), routingTools: routingCalls.map((tc) => tc.name) },
-                "Triage tool calls",
+            const plan = planTriageRoute(
+                toolCalls,
+                this.toolNames,
+                this.sentinelRoutes,
+                collectFetchedUrls(state.messages),
             );
-            span.setAttribute("agent.triage_route", toolCalls.map((tc) => tc.name).join(","));
 
-            // web_search only runs when it decides the route: content tools take precedence over
-            // all routing calls, and otherwise the first routing call wins.
-            const isSearchRouted = contentCalls.length === 0 && routingCalls[0]?.name === ToolName.WEB_SEARCH;
-            const droppedSearchCalls = isSearchRouted
-                ? []
-                : routingCalls.filter((tc) => tc.name === ToolName.WEB_SEARCH);
-            if (droppedSearchCalls.length > 0) {
-                this.logger.warn(
-                    {
-                        toolNames: toolCalls.map((tc) => tc.name),
-                        droppedSearches: droppedSearchCalls.map((tc) => tc.args),
-                    },
-                    "Triage web_search calls dropped in favor of other tool calls",
-                );
-            }
+            const toolNames = toolCalls.map((tc) => tc.name);
+            span.setAttributes({
+                "agent.triage_route": toolNames.length > 0 ? toolNames.join(",") : plan.answerNode,
+                "agent.triage_outcome": plan.outcome,
+                "agent.triage_answer_node": plan.answerNode,
+            });
 
-            if (contentCalls.length > 0) {
-                // Filter out URLs already fetched in this history chain to avoid
-                // re-fetching content whose results are already in context.
-                const alreadyFetched = collectFetchedUrls(state.messages);
-                // Filter each call's URLs in-place, then drop calls with no remaining URLs.
-                // TYPE COERCION: tool_call args typed as Record<string, unknown>; Zod schema guarantees urls: string[]
-                const deduplicatedCalls = contentCalls.filter((tc) => {
-                    const args = tc.args as { urls: string[] };
-                    args.urls = args.urls.filter((url) => !alreadyFetched.has(`${tc.name}:${url}`));
-                    return args.urls.length > 0;
-                });
-
-                if (deduplicatedCalls.length === 0) {
-                    // All requested URLs are already in history — skip fetch, go straight to general
-                    this.logger.info(
-                        { skipped: contentCalls.map((tc) => tc.name) },
-                        "All content tool URLs already in history, routing directly to general",
-                    );
-                    return new Command({ goto: OrchestratorNode.GENERAL });
-                }
-
-                // Rebuild the triage AIMessage with the pruned tool calls so that
-                // fetchContentNode and the persisted history reflect only the new URLs.
-                // Routing sentinels and web_search calls that accompanied them are dropped too.
-                const prunedTriageResponse = pruneToolCalls(triageResponse, deduplicatedCalls);
-
-                // Real tool calls: add triage AIMessage to state so each ToolMessage
-                // created in fetchContentNode has a valid tool_call_id in history.
-                return new Command({
-                    goto: OrchestratorNode.FETCH_CONTENT,
-                    update: { messages: [prunedTriageResponse] },
-                });
-            }
-
-            // Only routing sentinels — inspect the first one (mixed routing is undefined behavior)
-            const routingCall = routingCalls[0];
-            if (!routingCall) {
-                this.logger.warn(
-                    { toolNames: toolCalls.map((tc) => tc.name) },
-                    "Triage emitted only unknown tools, falling back to general",
-                );
-                return new Command({ goto: OrchestratorNode.GENERAL });
-            }
-            switch (routingCall.name) {
-                case "route_to_search":
-                    // Routing sentinel (Google mode): do NOT add triage message to state.
-                    return new Command({ goto: OrchestratorNode.SEARCH });
-
-                case ToolName.WEB_SEARCH:
-                    // Real Tavily tool call (Tavily mode): add triage AIMessage to state so each
-                    // ToolMessage created in searchNode has a valid tool_call_id in history.
-                    // Only web_search calls are kept, as an accompanying routing sentinel
-                    // would never receive the response the tool call pairing requires.
-                    return new Command({
-                        goto: OrchestratorNode.SEARCH,
-                        update: {
-                            messages: [
-                                pruneToolCalls(
-                                    triageResponse,
-                                    routingCalls.filter((tc) => tc.name === ToolName.WEB_SEARCH),
-                                ),
-                            ],
-                        },
-                    });
-
-                case "route_to_python":
-                    // Routing sentinel: do NOT add triage message to state
-                    return new Command({ goto: OrchestratorNode.COMPUTATION });
-
-                case "route_to_general":
-                    // Routing sentinel: do NOT add triage message to state
-                    return new Command({ goto: OrchestratorNode.GENERAL });
-
+            const decision = { toolNames, outcome: plan.outcome, answerNode: plan.answerNode };
+            switch (plan.outcome) {
+                case TriageOutcome.NO_TOOL_CALL:
+                    this.logger.warn(decision, "Triage made no tool call, routing to general agent");
+                    break;
+                case TriageOutcome.UNKNOWN_TOOL:
+                    this.logger.warn(decision, "Triage emitted only unknown tools, falling back to general");
+                    break;
+                case TriageOutcome.ALREADY_FETCHED:
+                    this.logger.info(decision, "All content tool URLs already in history, skipping the fetch");
+                    break;
                 default:
-                    this.logger.warn({ toolName: routingCall.name }, "Unknown triage tool, falling back to general");
-                    return new Command({ goto: OrchestratorNode.GENERAL });
+                    this.logger.info(decision, "Triage tool calls");
             }
+
+            if (plan.toolCalls.size === 0) return new Command({ goto: plan.answerNode });
+
+            // Real tool calls: add the triage AIMessage to state so each ToolMessage created by
+            // the tools node has a valid tool_call_id in history. It is reduced to the calls
+            // that will actually run, as every call left on it needs a response.
+            return new Command({
+                goto: OrchestratorNode.TOOLS,
+                update: {
+                    messages: [pruneToolCalls(triageResponse, plan.toolCalls)],
+                    answerNode: plan.answerNode,
+                },
+            });
         });
     }
 
     /**
-     * Execute tool node: runs all content tool calls placed in state by triageNode.
+     * Tools node: runs all tool calls placed in state by triageNode.
      *
-     * Reads the last message (the triage AIMessage with tool_calls) and invokes each
-     * content tool in parallel, producing one ToolMessage per call.
+     * Reads the last message (the triage AIMessage with tool_calls) and invokes each tool in
+     * parallel, producing one ToolMessage per call. A failed fetch is not an error here: content
+     * tools report failures per URL in their result, which the answering node relays.
      *
-     * If every result entry across all tool calls is an error, the node short-circuits
-     * to END by appending both the ToolMessages (required to satisfy LangChain's
-     * tool_call_id pairing invariant) and a programmatic AIMessage so the general
-     * node is never invoked with content-less context, preventing hallucination.
-     * Otherwise routes to the general node.
+     * Routes to the answering node triage picked, the general node by default.
+     *
+     * @throws AppError (`ORCHESTRATOR_MISSING_TOOL_CALL`) when state holds no tool call to run
+     * @throws AppError (`ORCHESTRATOR_UNKNOWN_TOOL`) when a tool call names a tool that isn't registered
      */
-    private async fetchContentNode(state: GraphState, config: NodeConfig): Promise<Command> {
-        return Sentry.startSpan({ name: "Fetch content node", op: "agent.node.fetch_content" }, async (span) => {
-            config.context?.onStatusUpdate?.({
-                type: AgentStatusType.FETCHING_CONTENT,
-            });
+    private async toolsNode(state: GraphState, config: NodeConfig): Promise<Command> {
+        return Sentry.startSpan({ name: "Tools node", op: "agent.node.tools" }, async (span) => {
             const lastMsg = state.messages.at(-1);
             const toolCalls = lastMsg instanceof AIMessage ? (lastMsg.tool_calls ?? []) : [];
 
             if (toolCalls.length === 0) {
-                throw new AppError(
-                    "ORCHESTRATOR_MISSING_TOOL_CALL",
-                    "fetchContentNode reached without a tool call in state",
-                );
+                throw new AppError("ORCHESTRATOR_MISSING_TOOL_CALL", "toolsNode reached without a tool call in state");
             }
 
-            span.setAttribute("agent.tool_names", toolCalls.map((tc) => tc.name).join(","));
+            const answerNode = state.answerNode ?? OrchestratorNode.GENERAL;
+            span.setAttributes({
+                "agent.tool_names": toolCalls.map((tc) => tc.name).join(","),
+                "agent.web_search_count": toolCalls.filter((tc) => tc.name === ToolName.WEB_SEARCH).length,
+                "agent.answer_node": answerNode,
+            });
 
-            // TYPE COERCION: LangChain tool_calls args are typed as Record<string, unknown>;
-            // the Zod schema on each tool guarantees the urls: string[] shape at parse time.
-            const toolResults = await Promise.all(
+            // A turn that both searches and fetches content is reported as a search
+            config.context?.onStatusUpdate?.({
+                type: toolCalls.some((tc) => tc.name === ToolName.WEB_SEARCH)
+                    ? AgentStatusType.SEARCHING
+                    : AgentStatusType.FETCHING_CONTENT,
+            });
+
+            const toolMessages = await Promise.all(
                 toolCalls.map(async (toolCall) => {
-                    const result =
-                        toolCall.name === ToolName.GET_WEBSITE
-                            ? await this.getWebsiteTool.invoke(toolCall.args as { urls: string[] })
-                            : await this.getVideoCaptionsTool.invoke(toolCall.args as { urls: string[] });
-                    return { toolCall, result };
+                    const tool = this.tools.get(toolCall.name);
+                    if (!tool) {
+                        throw new AppError("ORCHESTRATOR_UNKNOWN_TOOL", `No tool registered for ${toolCall.name}`);
+                    }
+
+                    this.logger.debug({ toolName: toolCall.name, args: toolCall.args }, "Tools node invoking tool");
+                    const result = await tool.invoke(toolCall.args);
+                    return new ToolMessage({
+                        // A tool without a result still has to answer its call
+                        content: JSON.stringify(result ?? null),
+                        name: toolCall.name,
+                        tool_call_id: toolCall.id ?? "",
+                    });
                 }),
             );
 
-            const toolMessages = toolResults.map(
-                ({ toolCall, result }) =>
-                    new ToolMessage({
-                        // TYPE COERCION: ToolMessage.content types don't include object arrays,
-                        // but LangChain and Gemini both accept structured JSON arrays at runtime.
-                        content: JSON.stringify(result),
-                        name: toolCall.name,
-                        tool_call_id: toolCall.id ?? "",
-                    }),
-            );
-
-            // Check if every entry across all tool calls is an error — if so, respond
-            // programmatically rather than forwarding empty context to the general node.
-            // TYPE COERCION: result union (WebsiteResultEntry[] | VideoCaptionsResultEntry[]) causes
-            // TS to resolve the wrong every() overload; casting to a shared structural type is safe here.
-            // const allFailed = toolResults
-            //     .flatMap(({ result }) => result as { error?: string }[])
-            //     .every((entry) => "error" in entry);
-
-            // if (allFailed) {
-            //     const calledTools = new Set(toolResults.map(({ toolCall }) => toolCall.name));
-            //     const hasWebsite = calledTools.has("get_website");
-            //     const hasVideo = calledTools.has("get_video_captions");
-
-            //     // TYPE COERCION: tool_calls args typed as Record<string, unknown>; Zod schema guarantees urls: string[]
-            //     const urlCount = (toolName: string) =>
-            //         toolResults
-            //             .filter(({ toolCall }) => toolCall.name === toolName)
-            //             .reduce((n, { toolCall }) => n + (toolCall.args as { urls: string[] }).urls.length, 0);
-
-            //     const videoCount = hasVideo ? urlCount("get_video_captions") : 0;
-            //     const websiteCount = hasWebsite ? urlCount("get_website") : 0;
-            //     const videoWord = videoCount > 1 ? "videos" : "video";
-            //     const websiteWord = websiteCount > 1 ? "websites" : "website";
-
-            //     let errorContent: string;
-            //     if (hasWebsite && hasVideo) {
-            //         errorContent = `I am sorry, I failed to retrieve both the captions for the ${videoWord} and the contents of the ${websiteWord} from the links you provided.`;
-            //     } else if (hasVideo) {
-            //         errorContent = `I am sorry, I failed to retrieve video captions for the ${videoWord} you linked.`;
-            //     } else {
-            //         errorContent = `I am sorry, I failed to retrieve the contents of the ${websiteWord} you linked.`;
-            //     }
-
-            //     span.setAttribute("agent.fetch_content.all_failed", true);
-            //     this.logger.warn({ calledTools: [...calledTools] }, "All tool calls failed, short-circuiting to END");
-
-            //     return new Command({
-            //         goto: END,
-            //         update: { messages: [...toolMessages, new AIMessage(errorContent)], isRetryable: true },
-            //     });
-            // }
-
-            return new Command({
-                goto: OrchestratorNode.GENERAL,
-                update: { messages: toolMessages },
-            });
+            return new Command({ goto: answerNode, update: { messages: toolMessages } });
         });
+    }
+
+    /**
+     * Generates the user-facing answer of an answering node: the shared part of the general,
+     * computation and googleSearch nodes.
+     *
+     * Tool exchanges are flattened into plain HumanMessages for the model call only (see
+     * {@link flattenToolExchanges}); state keeps the original messages.
+     *
+     * When the current turn ran web searches, their sources are attached to the answer as
+     * grounding chunks in the Google Search shape, so resolveGroundingSources can extract them
+     * the same way as natively grounded ones.
+     *
+     * @throws LlmError when the model answers with a tool call. Answering models have no callable
+     *   tools, and a call persisted without a response would invalidate the history.
+     */
+    private async answer(spec: AnswerSpec, state: GraphState, config: NodeConfig): Promise<NodeResult> {
+        return Sentry.startSpan(
+            { name: spec.spanName, op: `agent.node.${spec.node}`, attributes: spec.attributes },
+            async (span) => {
+                const history = flattenToolExchanges(state.messages, this.logger);
+                span.setAttribute("agent.flattened_tool_exchanges", history.exchangeCount);
+                this.logger.debug(
+                    { node: spec.node, ...spec.attributes, flattenedToolExchanges: history.exchangeCount },
+                    "Answering node prompt parameters",
+                );
+
+                const invocation = await this.invokeModel(
+                    spec.node,
+                    spec.provider,
+                    [new SystemMessage(spec.systemPrompt), ...history.messages],
+                    spec.status,
+                    config,
+                );
+                const response = invocation.result;
+
+                if (response.tool_calls && response.tool_calls.length > 0) {
+                    this.logger.error(
+                        { node: spec.node, toolCalls: response.tool_calls.map((tc) => tc.name) },
+                        "User-facing model produced illegal tool calls",
+                    );
+                    throw new LlmError(`User-facing ${spec.node} model produced an illegal tool call`);
+                }
+
+                const groundingChunks = searchResultsToGroundingChunks(
+                    currentSearchResults(state.messages).map(parseToolResult),
+                    this.logger,
+                );
+                if (groundingChunks !== null) {
+                    response.additional_kwargs.groundingMetadata = { groundingChunks };
+                }
+
+                return {
+                    messages: [response],
+                    ...degradationUpdate(invocation, this.nodes[spec.node].isFallbackRetryable),
+                };
+            },
+        );
     }
 
     /**
      * General agent node: generates the final answer using the general-purpose model.
      *
-     * When the last state message is a ToolMessage (content tool path), the system prompt
-     * gains instructions for handling the retrieved content. Tool exchanges are flattened
-     * into plain HumanMessages for the model call only (see {@link flattenToolExchanges});
-     * state keeps the original messages.
+     * Also answers from whatever the tools node retrieved in the current turn (unless triage
+     * picked another node for that): the system prompt then gains instructions for handling
+     * the fetched content and web search results.
      */
     private async generalNode(state: GraphState, config: NodeConfig): Promise<NodeResult> {
-        return Sentry.startSpan({ name: "General agent node", op: "agent.node.general" }, async (span) => {
-            // Derived from the raw state: flattening below removes the ToolMessages these inspect
-            const lastMsg = state.messages.at(-1);
-            const hasToolResult = lastMsg instanceof ToolMessage;
-            const hasVideoCaptions = state.messages.some(
-                (msg) => msg instanceof ToolMessage && msg.name === ToolName.GET_VIDEO_CAPTIONS,
-            );
-            const history = flattenToolExchanges(state.messages, this.logger);
+        const hints = retrievedContextHints(state.messages);
 
-            span.setAttributes({
-                "agent.has_tool_result": hasToolResult,
-                "agent.general_node.has_video_captions": hasVideoCaptions,
-                "agent.flattened_tool_exchanges": history.exchangeCount,
-            });
-
-            this.logger.debug(
-                { hasVideoCaptions, hasToolResult, flattenedToolExchanges: history.exchangeCount },
-                "General node prompt parameters",
-            );
-
-            const invokeMessages: BaseMessage[] = [
-                new SystemMessage(buildGeneralSystemPrompt(this.basePrompt, hasVideoCaptions, hasToolResult)),
-                ...history.messages,
-            ];
-
-            const invocation = await this.invoker.invoke(
-                this.nodeApiKeyTypes.general,
-                this.generalProvider.get.bind(this.generalProvider),
-                this.generalProvider.getFallback.bind(this.generalProvider),
-                invokeMessages,
-                {
-                    timeoutMs: this.nodeTimeoutsMs.general,
-                    mainGracePeriodMs: this.nodeGracePeriodsMs.general,
-                    onStatusUpdate: config.context?.onStatusUpdate,
-                    beforeInvokeStatus: AgentStatusType.GENERATING,
+        return this.answer(
+            {
+                node: OrchestratorNode.GENERAL,
+                spanName: "General agent node",
+                provider: this.generalProvider,
+                systemPrompt: buildGeneralSystemPrompt(this.basePrompt, hints),
+                status: AgentStatusType.GENERATING,
+                attributes: {
+                    "agent.has_tool_result": hints.hasFetchedContent,
+                    "agent.has_search_results": hints.hasSearchResults,
+                    "agent.general_node.has_video_captions": hints.hasVideoCaptions,
                 },
-            );
-            const response = invocation.result;
-
-            if (response.tool_calls && response.tool_calls.length > 0) {
-                this.logger.error(
-                    { toolCalls: response.tool_calls.map((tc) => tc.name) },
-                    "General node: user-facing model produced illegal tool calls",
-                );
-                throw new LlmError("User-facing general model produced an illegal tool call");
-            }
-
-            return {
-                messages: [response],
-                ...degradationUpdate(invocation, this.nodeFallbackRetryable.general),
-            };
-        });
+            },
+            state,
+            config,
+        );
     }
 
     /**
      * Computation node: generates an answer using the code-execution-capable model.
      *
-     * A simplified single-pass node — no tool pre-fetching or video caption hints.
      * The model has the native `codeExecution` tool bound, allowing it to run Python
      * to produce accurate numerical or data-processing results.
      */
     private async computationNode(state: GraphState, config: NodeConfig): Promise<NodeResult> {
-        return Sentry.startSpan({ name: "Computation agent node", op: "agent.node.computation" }, async () => {
-            const invokeMessages: BaseMessage[] = [
-                new SystemMessage(buildComputationSystemPrompt(this.basePrompt)),
-                ...state.messages,
-            ];
+        const hints = retrievedContextHints(state.messages);
 
-            const invocation = await this.invoker.invoke(
-                this.nodeApiKeyTypes.computation,
-                this.computationProvider.get.bind(this.computationProvider),
-                this.computationProvider.getFallback.bind(this.computationProvider),
-                invokeMessages,
-                {
-                    timeoutMs: this.nodeTimeoutsMs.computation,
-                    mainGracePeriodMs: this.nodeGracePeriodsMs.computation,
-                    onStatusUpdate: config.context?.onStatusUpdate,
-                    beforeInvokeStatus: AgentStatusType.COMPUTING,
+        return this.answer(
+            {
+                node: OrchestratorNode.COMPUTATION,
+                spanName: "Computation agent node",
+                provider: this.computationProvider,
+                systemPrompt: buildComputationSystemPrompt(this.basePrompt, hints),
+                status: AgentStatusType.COMPUTING,
+                attributes: {
+                    "agent.has_tool_result": hints.hasFetchedContent,
+                    "agent.has_search_results": hints.hasSearchResults,
                 },
-            );
-
-            return {
-                messages: [invocation.result],
-                ...degradationUpdate(invocation, this.nodeFallbackRetryable.computation),
-            };
-        });
+            },
+            state,
+            config,
+        );
     }
 
     /**
-     * Search agent node: generates an answer using a search-backed model.
+     * Google Search agent node: generates an answer using the Gemini model with native Google
+     * Search grounding bound, which searches on its own.
      *
-     * In Google mode: passes the system prompt and state to the Gemini model with
-     * native Google Search grounding bound. Always uses the paid API key.
-     *
-     * In Tavily mode: reads the `web_search` tool calls from the triage AIMessage already in
-     * state, invokes the Tavily tool once per call in parallel, then appends one ToolMessage per
-     * call to the history before invoking the LLM. The ToolMessages and the final AIMessage are
-     * included in the state update so they are persisted for future turns.
-     *
-     * In both modes, tool exchanges are flattened into plain HumanMessages for the model call
-     * only (see {@link flattenToolExchanges}); state keeps the original messages.
+     * Only reachable in Google search mode. In Tavily mode, web searches are run by the tools
+     * node instead.
      */
-    private async searchNode(state: GraphState, config: NodeConfig): Promise<NodeResult> {
-        return Sentry.startSpan({ name: "Search agent node", op: "agent.node.search" }, async (span) => {
-            if (this.searchMode === SearchMode.tavily) {
-                if (!this.tavilyTool) {
-                    throw new AppError(
-                        "ORCHESTRATOR_MISSING_TAVILY_TOOL",
-                        "Search mode is tavily but no tavilyTool was provided to the orchestrator",
-                    );
-                }
+    private async googleSearchNode(state: GraphState, config: NodeConfig): Promise<NodeResult> {
+        const hints = retrievedContextHints(state.messages);
 
-                // The triage AIMessage (with its web_search tool calls) was added to state by
-                // triageNode. It may hold several: despite the single-query tool schema, the model
-                // occasionally splits a search, and every call needs its own ToolMessage.
-                const triageMessage = state.messages.at(-1);
-                const webSearchCalls =
-                    triageMessage instanceof AIMessage
-                        ? (triageMessage.tool_calls ?? []).filter((tc) => tc.name === ToolName.WEB_SEARCH)
-                        : [];
-                if (webSearchCalls.length === 0) {
-                    throw new AppError(
-                        "ORCHESTRATOR_MISSING_SEARCH_QUERY",
-                        "Tavily search mode: expected last state message to carry a web_search tool call",
-                    );
-                }
-
-                const tavilyTool = this.tavilyTool;
-                const searches = await Promise.all(
-                    webSearchCalls.map((toolCall) => runWebSearch(tavilyTool, toolCall, this.logger)),
-                );
-                const tavilyResultMessages = searches.map(({ toolMessage }) => toolMessage);
-                span.setAttribute("agent.web_search_count", searches.length);
-
-                // Grounding chunks in the Google Search shape, to be merged onto the final AIMessage
-                // so resolveGroundingSources can extract Tavily sources transparently.
-                // Only populated from successful schema parses; searches can overlap, so a source
-                // found by more than one of them is listed once.
-                const parsedGroundingChunks = searches.flatMap(({ groundingChunks }) =>
-                    groundingChunks === null ? [] : [groundingChunks],
-                );
-                const tavilyGroundingKwargs =
-                    parsedGroundingChunks.length > 0
-                        ? {
-                              groundingMetadata: {
-                                  groundingChunks: dedupeGroundingChunks(parsedGroundingChunks.flat()),
-                              },
-                          }
-                        : {};
-
-                // The current turn's results must be flattened along with their triage tool calls,
-                // which are already on the last state message.
-                const history = flattenToolExchanges([...state.messages, ...tavilyResultMessages], this.logger);
-                span.setAttribute("agent.flattened_tool_exchanges", history.exchangeCount);
-
-                const invokeMessages: BaseMessage[] = [
-                    new SystemMessage(buildSearchSystemPrompt(this.basePrompt, this.searchMode)),
-                    ...history.messages,
-                ];
-
-                const invocation = await this.invoker.invoke(
-                    this.nodeApiKeyTypes.search,
-                    this.searchProvider.get.bind(this.searchProvider),
-                    this.searchProvider.getFallback.bind(this.searchProvider),
-                    invokeMessages,
-                    {
-                        timeoutMs: this.nodeTimeoutsMs.search,
-                        mainGracePeriodMs: this.nodeGracePeriodsMs.search,
-                        onStatusUpdate: config.context?.onStatusUpdate,
-                        beforeInvokeStatus: AgentStatusType.SEARCHING,
-                    },
-                );
-                const result = invocation.result;
-
-                Object.assign(result.additional_kwargs, tavilyGroundingKwargs);
-
-                if (result.tool_calls && result.tool_calls.length > 0) {
-                    this.logger.error(
-                        { toolCalls: result.tool_calls.map((tc) => tc.name) },
-                        "Search node (Tavily mode): user-facing model produced illegal tool calls",
-                    );
-                    throw new LlmError("User-facing search model produced an illegal tool call");
-                }
-
-                return {
-                    messages: [...tavilyResultMessages, result],
-                    ...degradationUpdate(invocation, this.nodeFallbackRetryable.search),
-                };
-            }
-
-            const history = flattenToolExchanges(state.messages, this.logger);
-            span.setAttribute("agent.flattened_tool_exchanges", history.exchangeCount);
-
-            const messages: BaseMessage[] = [
-                new SystemMessage(buildSearchSystemPrompt(this.basePrompt, this.searchMode)),
-                ...history.messages,
-            ];
-            const invocation = await this.invoker.invoke(
-                this.nodeApiKeyTypes.search,
-                this.searchProvider.get.bind(this.searchProvider),
-                this.searchProvider.getFallback.bind(this.searchProvider),
-                messages,
-                {
-                    timeoutMs: this.nodeTimeoutsMs.search,
-                    mainGracePeriodMs: this.nodeGracePeriodsMs.search,
-                    onStatusUpdate: config.context?.onStatusUpdate,
-                    beforeInvokeStatus: AgentStatusType.SEARCHING,
-                },
-            );
-            const response = invocation.result;
-
-            if (response.tool_calls && response.tool_calls.length > 0) {
-                this.logger.error(
-                    { toolCalls: response.tool_calls.map((tc) => tc.name) },
-                    "Search node (Google mode): user-facing model produced illegal tool calls",
-                );
-                throw new LlmError("User-facing search model produced an illegal tool call");
-            }
-
-            return {
-                messages: [response],
-                ...degradationUpdate(invocation, this.nodeFallbackRetryable.search),
-            };
-        });
+        return this.answer(
+            {
+                node: OrchestratorNode.GOOGLE_SEARCH,
+                spanName: "Google Search agent node",
+                provider: this.googleSearchProvider,
+                systemPrompt: buildGoogleSearchSystemPrompt(this.basePrompt, hints),
+                status: AgentStatusType.SEARCHING,
+                attributes: { "agent.has_tool_result": hints.hasFetchedContent },
+            },
+            state,
+            config,
+        );
     }
 }

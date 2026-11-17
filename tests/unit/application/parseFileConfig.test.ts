@@ -28,7 +28,7 @@ agent:
       fallbackModel: "gemini-flash"
       timeoutMs: 120000
       apiKeyType: "free"
-    search:
+    googleSearch:
       model: "gemini-pro"
       fallbackModel: "gemini-flash"
       timeoutMs: 120000
@@ -42,7 +42,14 @@ describe("parseFileConfig", () => {
         expect(config.agent.nodes.triage.fallbackModel).toBe("gemini-flash");
         expect(config.agent.nodes.triage.timeoutMs).toBe(60000);
         expect(config.agent.nodes.general.model).toBe("gemini-flash");
-        expect(config.agent.nodes.search.model).toBe("gemini-pro");
+        expect(config.agent.nodes.googleSearch.model).toBe("gemini-pro");
+    });
+
+    it("defaults searchMode to google and accepts it as an agent-level setting", () => {
+        expect(parseFileConfig(VALID_YAML).agent.searchMode).toBe("google");
+
+        const tavily = parseFileConfig(VALID_YAML.replace("agent:\n", 'agent:\n  searchMode: "Tavily"\n'));
+        expect(tavily.agent.searchMode).toBe("tavily");
     });
 
     it("accepts fallbackModel being absent", () => {
@@ -61,7 +68,7 @@ agent:
       model: "gemini-flash"
       timeoutMs: 120000
       apiKeyType: "free"
-    search:
+    googleSearch:
       model: "gemini-pro"
       timeoutMs: 120000
       apiKeyType: "paid"
@@ -74,7 +81,7 @@ agent:
         const config = parseFileConfig(VALID_YAML);
         expect(config.agent.nodes.general.isFallbackRetryable).toBe(true);
         expect(config.agent.nodes.computation.isFallbackRetryable).toBe(true);
-        expect(config.agent.nodes.search.isFallbackRetryable).toBe(true);
+        expect(config.agent.nodes.googleSearch.isFallbackRetryable).toBe(true);
     });
 
     it("reads isFallbackRetryable per answering node", () => {
@@ -94,7 +101,7 @@ agent:
       model: "gemini-flash"
       timeoutMs: 120000
       apiKeyType: "free"
-    search:
+    googleSearch:
       model: "gemini-pro"
       timeoutMs: 120000
       apiKeyType: "paid"
@@ -103,7 +110,7 @@ agent:
         const config = parseFileConfig(yaml);
         expect(config.agent.nodes.general.isFallbackRetryable).toBe(false);
         expect(config.agent.nodes.computation.isFallbackRetryable).toBe(true);
-        expect(config.agent.nodes.search.isFallbackRetryable).toBe(false);
+        expect(config.agent.nodes.googleSearch.isFallbackRetryable).toBe(false);
     });
 
     it("defaults fallbackExecutionMode to sequential and leaves grace periods unset", () => {
@@ -152,7 +159,7 @@ agent:
       model: "gemini-flash"
       timeoutMs: 120000
       apiKeyType: "free"
-    search:
+    googleSearch:
       model: "gemini-pro"
       timeoutMs: 120000
       apiKeyType: "paid"
@@ -207,7 +214,7 @@ agent:
     general:
       model: "gemini-flash"
       timeoutMs: 120000
-    search:
+    googleSearch:
       model: "gemini-pro"
       timeoutMs: 120000
 `;
@@ -224,7 +231,7 @@ agent:
     general:
       model: "gemini-flash"
       timeoutMs: 120000
-    search:
+    googleSearch:
       model: "gemini-pro"
       timeoutMs: 120000
 `;
@@ -240,7 +247,7 @@ agent:
     general:
       model: "gemini-flash"
       timeoutMs: 120000
-    search:
+    googleSearch:
       model: "gemini-pro"
       timeoutMs: 120000
 `;
@@ -268,7 +275,7 @@ agent:
       model: "gemini-flash"
       timeoutMs: 120000
       apiKeyType: "free"
-    search:
+    googleSearch:
       model: "gemini-pro"
       timeoutMs: 120000
       apiKeyType: "paid"
@@ -300,7 +307,7 @@ agent:
       model: "gemini-flash"
       timeoutMs: 120000
       apiKeyType: "free"
-    search:
+    googleSearch:
       model: "gemini-pro"
       timeoutMs: 120000
       apiKeyType: "paid"
@@ -329,7 +336,7 @@ agent:
       model: "gemini-flash"
       timeoutMs: 120000
       apiKeyType: "free"
-    search:
+    googleSearch:
       model: "gemini-pro"
       timeoutMs: 120000
       apiKeyType: "paid"
@@ -356,7 +363,7 @@ agent:
       model: "gemini-flash"
       timeoutMs: 120000
       apiKeyType: "free"
-    search:
+    googleSearch:
       model: "gemini-pro"
       timeoutMs: 120000
       apiKeyType: "paid"
@@ -382,7 +389,7 @@ agent:
       model: "gemini-flash"
       timeoutMs: 120000
       apiKeyType: "free"
-    search:
+    googleSearch:
       model: "gemini-pro"
       timeoutMs: 120000
       apiKeyType: "paid"

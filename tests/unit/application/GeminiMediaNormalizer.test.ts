@@ -46,6 +46,7 @@ const testConfig = {
             maxInlineAttachmentSizeMB: 100,
             maxInlineAttachmentSizeBytes: 100 * 1024 * 1024,
             fallbackExecutionMode: "sequential" as const,
+            searchMode: "google" as const,
             nodes: {
                 triage: {
                     model: "gemini-test",
@@ -65,10 +66,9 @@ const testConfig = {
                     apiKeyType: "free" as const,
                     isFallbackRetryable: true,
                 },
-                search: {
+                googleSearch: {
                     model: "gemini-test",
                     timeoutMs: 120_000,
-                    mode: "google" as const,
                     apiKeyType: "paid" as const,
                     isFallbackRetryable: true,
                 },

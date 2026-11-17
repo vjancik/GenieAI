@@ -49,8 +49,12 @@ import { MarkdownToHtmlRenderer } from "./infrastructure/exporters/MarkdownToHtm
 import { AgentOrchestrator } from "./infrastructure/llm/agents/agentOrchestrator.ts";
 import { ComputationModelProvider } from "./infrastructure/llm/models/computationModel.ts";
 import { GeneralModelProvider } from "./infrastructure/llm/models/generalModel.ts";
-import { SearchModelProvider } from "./infrastructure/llm/models/searchModel.ts";
-import { TavilyOnlyTriageModelProvider, TriageModelProvider } from "./infrastructure/llm/models/triageModel.ts";
+import { GoogleSearchModelProvider } from "./infrastructure/llm/models/googleSearchModel.ts";
+import {
+    buildSearchIntentTriageTools,
+    buildTriageTools,
+    TriageModelProvider,
+} from "./infrastructure/llm/models/triageModel.ts";
 import { ResilientModelInvoker } from "./infrastructure/llm/ResilientModelInvoker.ts";
 import { RoundRobinKeyProvider } from "./infrastructure/llm/RoundRobinKeyProvider.ts";
 import { createGetVideoCaptionsTool } from "./infrastructure/llm/tools/getVideoCaptionsTool.ts";
@@ -115,7 +119,8 @@ const getVideoCaptionsTool = await createGetVideoCaptionsTool(
     logger.child({ module: "tool:video" }),
     config.file.ytDlp,
 );
-const tavilyTool = config.file.agent.nodes.search.mode === "tavily" ? createTavilyTool() : undefined;
+const tavilyTool =
+    config.file.agent.searchMode === "tavily" ? createTavilyTool(logger.child({ module: "tool:search" })) : undefined;
 
 // Lazy model providers — one ChatGoogle client per (provider, apiKey) pair
 // Key pools — validateConfig has already ensured that every pool an agent node uses is non-empty.
@@ -123,23 +128,26 @@ const tavilyTool = config.file.agent.nodes.search.mode === "tavily" ? createTavi
 // cursor); the paid pool always starts from the first key, respecting the configured order.
 const freeKeyProvider = new RoundRobinKeyProvider(freeKeys, geminiApiKeyRepository);
 const paidKeyProvider = new RoundRobinKeyProvider(paidKeys);
-const triageProvider = new TriageModelProvider({
+const triageModelSettings = {
     modelName: config.file.agent.nodes.triage.model,
     fallbackModelName: config.file.agent.nodes.triage.fallbackModel,
     thinkingLevel: config.file.agent.nodes.triage.thinkingLevel,
     includeThoughts: config.file.geminiModels.includeThoughts,
-    searchMode: config.file.agent.nodes.search.mode,
-    getWebsiteTool,
-    getVideoCaptionsTool,
-    tavilyTool,
+};
+const triageProvider = new TriageModelProvider({
+    ...triageModelSettings,
+    tools: buildTriageTools({
+        searchMode: config.file.agent.searchMode,
+        getWebsiteTool,
+        getVideoCaptionsTool,
+        tavilyTool,
+    }),
 });
-const tavilyOnlyTriageProvider = tavilyTool
-    ? new TavilyOnlyTriageModelProvider({
-          modelName: config.file.agent.nodes.triage.model,
-          fallbackModelName: config.file.agent.nodes.triage.fallbackModel,
-          thinkingLevel: config.file.agent.nodes.triage.thinkingLevel,
-          includeThoughts: config.file.geminiModels.includeThoughts,
-          tavilyTool,
+// Tavily mode only: triage for a declared SEARCH intent mainly writes the search query
+const searchIntentTriageProvider = tavilyTool
+    ? new TriageModelProvider({
+          ...triageModelSettings,
+          tools: buildSearchIntentTriageTools({ getWebsiteTool, getVideoCaptionsTool, tavilyTool }),
       })
     : undefined;
 const generalProvider = new GeneralModelProvider({
@@ -152,11 +160,11 @@ const computationProvider = new ComputationModelProvider({
     fallbackModelName: config.file.agent.nodes.computation.fallbackModel,
     includeThoughts: config.file.geminiModels.includeThoughts,
 });
-const searchProvider = new SearchModelProvider({
-    modelName: config.file.agent.nodes.search.model,
-    fallbackModelName: config.file.agent.nodes.search.fallbackModel,
+// Only invoked in Google search mode; in Tavily mode the general model answers from search results
+const googleSearchProvider = new GoogleSearchModelProvider({
+    modelName: config.file.agent.nodes.googleSearch.model,
+    fallbackModelName: config.file.agent.nodes.googleSearch.fallbackModel,
     includeThoughts: config.file.geminiModels.includeThoughts,
-    searchMode: config.file.agent.nodes.search.mode,
 });
 
 // Discord client lifecycle wrapper — created before use cases and gateway so both can share it
@@ -206,14 +214,14 @@ const agentOrchestrator = new AgentOrchestrator(
     triageProvider,
     generalProvider,
     computationProvider,
-    searchProvider,
+    googleSearchProvider,
     resilientInvoker,
     getWebsiteTool,
     getVideoCaptionsTool,
     logger.child({ module: "agent" }),
     config,
     tavilyTool,
-    tavilyOnlyTriageProvider,
+    searchIntentTriageProvider,
 );
 
 // Live Discord chain fetch service — used as fallback when DB reply chain is empty
@@ -268,7 +276,7 @@ const handleRetryUseCase = new HandleRetryUseCase(
 );
 const handleSourcesUseCase = new HandleSourcesUseCase(
     messageRepository,
-    config.file.agent.nodes.search.mode,
+    config.file.agent.searchMode,
     logger.child({ module: "use-case:sources" }),
 );
 const handleSummarizeUseCase = new HandleSummarizeUseCase(

@@ -44,7 +44,7 @@ A Discord bot powered by Google Gemini that answers questions in multi-turn repl
 |---|---|---|
 | `@mention` (no prefix) | `UNKNOWN` | → **Triage** (model decides) |
 | `!ai` | `GENERAL` | → **General** directly (triage skipped) |
-| `!aisearch` | `SEARCH` | → **Search** directly (triage skipped, or via Triage in Tavily mode) |
+| `!aisearch` | `SEARCH` | Google mode: → **Google Search** directly (triage skipped). Tavily mode: → **Triage**, which is told a search was requested |
 | Context menu: Summarize | `SUMMARY` | → **Triage** (model decides), with an ephemeral *"Summarize this in English"* instruction |
 
 ### Graph topology
@@ -53,39 +53,44 @@ A Discord bot powered by Google Gemini that answers questions in multi-turn repl
 flowchart TD
     START(["START"])
     TRIAGE["Triage\n(fast model, thinking)"]
-    FETCH["Fetch Content\n(get_website / get_video_captions)"]
+    TOOLS["Tools\n(get_website / get_video_captions / web_search)"]
     GENERAL["General\n(answer model)"]
     COMPUTATION["Computation\n(code execution model)"]
-    SEARCH["Search\n(search model + grounding)"]
+    GSEARCH["Google Search\n(model with search grounding,\nGoogle mode only)"]
     END(["END"])
 
     START -- "UNKNOWN / SUMMARY intent" --> TRIAGE
     START -- "!ai (GENERAL intent)" --> GENERAL
-    START -- "!aisearch, Google mode (SEARCH intent)" --> SEARCH
+    START -- "!aisearch, Google mode (SEARCH intent)" --> GSEARCH
     START -- "!aisearch, Tavily mode (SEARCH intent)" --> TRIAGE
 
-    TRIAGE -- "route_to_general" --> GENERAL
+    TRIAGE -- "real tool calls" --> TOOLS
+    TRIAGE -- "route_to_general / no route" --> GENERAL
     TRIAGE -- "route_to_python" --> COMPUTATION
-    TRIAGE -- "route_to_search (Google)" --> SEARCH
-    TRIAGE -- "web_search tool call (Tavily)" --> SEARCH
-    TRIAGE -- "get_website / get_video_captions" --> FETCH
+    TRIAGE -- "route_to_search (Google mode)" --> GSEARCH
 
-    FETCH --> GENERAL
+    TOOLS -- "route_to_general / no route" --> GENERAL
+    TOOLS -- "route_to_python" --> COMPUTATION
+    TOOLS -- "route_to_search (Google mode)" --> GSEARCH
 
     GENERAL --> END
     COMPUTATION --> END
-    SEARCH --> END
+    GSEARCH --> END
 ```
 
-**Triage** is a lightweight model. It inspects only the latest turn and chooses one of five actions:
+**Triage** is a lightweight model. It inspects only the latest turn and answers two independent questions with tool calls:
 
-- Call `get_website` or `get_video_captions` → **Fetch Content**, then **General**
-- Call `route_to_search` → **Search** directly
-- Call `route_to_python` → **Computation** directly (Python code execution)
-- Call `route_to_general` → **General** directly
-- No tool call (fallback) → **General** directly
+- **What data is needed?** Any number of real tools: `get_website`, `get_video_captions`, and in Tavily mode `web_search`. They all run in parallel in the **Tools** node, and URLs whose content is already in the conversation are not fetched again.
+- **Who answers?** At most one routing sentinel: `route_to_general`, `route_to_python` (**Computation**, Python code execution) or, in Google mode, `route_to_search` (**Google Search**). Without one, **General** answers.
 
-Routing sentinel calls (`route_to_search`, `route_to_python`, `route_to_general`) are consumed by the triage node and are never written to message state, keeping conversation history clean. Real tool calls (`get_website`, `get_video_captions`, `web_search`) are added to state so their `ToolMessage` responses have valid `tool_call_id` pairings.
+The two combine freely: with real tool calls the request goes through **Tools** first and then to the chosen answering node, otherwise straight to that node. For example, a link plus `route_to_python` fetches the page and lets **Computation** work with its content.
+
+**Web search** depends on `agent.searchMode`:
+
+- `"google"`: search is an answering node. **Google Search** runs a Gemini model that searches on its own through native Google Search grounding.
+- `"tavily"`: search is a tool. Triage writes the queries as `web_search` calls, **Tools** runs them, and **General** answers from the results (or **Computation**, if triage routed there). The **Google Search** node and its `agent.nodes.googleSearch` settings are not used.
+
+Routing sentinel calls are consumed by the triage node and are never written to message state, keeping conversation history clean. Real tool calls are added to state so their `ToolMessage` responses have valid `tool_call_id` pairings.
 
 ## Requirements
 
@@ -113,7 +118,7 @@ Copy `.env.example` to `.env` and fill in the required values.
 | `DATABASE_URL` | ✅ | PostgreSQL connection string |
 | `GOOGLE_FREE_API_KEYS` | ✅* | Comma-separated free-tier Google AI API keys (required when any agent node uses `apiKeyType: "free"`) |
 | `GOOGLE_PAID_API_KEYS` | ✅* | Comma-separated paid Google AI API keys, used in the listed order (required when any agent node uses `apiKeyType: "paid"`) |
-| `TAVILY_API_KEY` | | [Tavily](https://app.tavily.com/playground) API key — required only when `agent.nodes.search.mode` is set to `"tavily"` |
+| `TAVILY_API_KEY` | | [Tavily](https://app.tavily.com/playground) API key — required only when `agent.searchMode` is set to `"tavily"` |
 | `LOG_LEVEL` | | Pino log level: `trace`, `debug`, `info`, `warn`, `error` (default: `info`) |
 | `FILE_LOG` | | Write structured JSON logs to `./logs/` alongside console output (default: `false`) |
 | `NODE_ENV` | | Set to `production` to disable pino-pretty and output raw JSON |
@@ -133,8 +138,8 @@ cp config.default.yaml config.local.yaml
 
 Key things to configure:
 
-- **Models** — set the Gemini model and `apiKeyType` (`"free"` / `"paid"`) for each of the four agent nodes (`triage`, `general`, `computation`, `search`)
-- **Search backend** — `agent.nodes.search.mode`: `"google"` (Gemini grounding) or `"tavily"`
+- **Models** — set the Gemini model and `apiKeyType` (`"free"` / `"paid"`) for each of the four agent nodes (`triage`, `general`, `computation`, `googleSearch`)
+- **Search backend** — `agent.searchMode`: `"google"` (Gemini grounding, answered by the `googleSearch` node) or `"tavily"` (search results are answered from by the `general` node; `googleSearch` is unused)
 - **Attachment mode** — `agent.uploadAttachmentMode`: `"upload"` (Gemini Files API) or `"inline"` (base64)
 - **DMs** — `discord.enableInDMs: true` to allow the bot to respond in Direct Messages
 - **System prompt** — `prompts.basePrompt` to customise the bot's persona and instructions
@@ -270,7 +275,7 @@ bun db:studio      # Runs Drizzle Kit Database Web UI (default port 4983, works 
 - **Not suitable for large public servers.** There are no per-user or per-channel access controls, allowlists, or token budgets. Anyone who can mention the bot can use it without restriction.
 - **Gemini API reliability.** Since early 2026, Gemini models have been notably flaky — HTTP 503 responses and response times of up to a minute during peak hours are common. The resilient invoker retries on 503s and rotates free keys on 429s, but sustained outages will still surface as failures.
 - **Inline attachment mode is second-class.** `inline` mode re-downloads all attachments in the conversation on every turn (no disk cache), and encodes them as base64 in the request. It was added as a cross-provider fallback; `upload` mode (Gemini Files API with 48-hour caching) is strongly preferred.
-- **Gemini 3 tool call hallucinations.** Gemini 3 models occasionally hallucinate tool calls in Tavily search mode in nodes where tool use is not expected (general and search nodes). This causes a hard failure that requires the user to hit Retry.
+- **Gemini 3 tool call hallucinations.** Gemini 3 models occasionally hallucinate tool calls in Tavily search mode in the answering nodes, where tool use is not expected. This causes a hard failure that requires the user to hit Retry.
 
 ## Q&A
 
@@ -287,7 +292,7 @@ ytDlp:
 
 **Q: How can I run this bot with only Free Tier Google AI keys?**
 
-A: In the YAML file config, change the `search:` node model to `gemini-2.5-flash`, or use `searchMode: "tavily"` with a free [Tavily](https://app.tavily.com/playground) account (500 searches/month). `gemini-3...` models don't work with free keys when Google Search grounding is enabled.
+A: In the YAML file config, change the `googleSearch:` node model to `gemini-2.5-flash`, or use `agent.searchMode: "tavily"` with a free [Tavily](https://app.tavily.com/playground) account (500 searches/month). `gemini-3...` models don't work with free keys when Google Search grounding is enabled.
 
 ---
 

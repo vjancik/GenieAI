@@ -2,16 +2,16 @@ import { ChatGoogle } from "@langchain/google/node";
 import * as Sentry from "@sentry/bun";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
 import { ModelProvider } from "../ModelProvider.ts";
-import { SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
+import { buildRetrievedContextHints, type RetrievedContextHints, SYSTEM_PROMPT_FOOTER } from "./basePrompt.ts";
 import { blockNoneSafetySettings, noInternalRetries } from "./sharedGeminiSettings.ts";
 
 /**
  * Builds the system prompt for the computation agent.
  * Injects the current date so the model knows its base knowledge is outdated.
- * Intentionally minimal — no tool result hints or video caption instructions,
- * since the computation node is a direct single-pass route with no tool pre-fetching.
+ *
+ * @param hints - What the tools of the turn retrieved, see {@link buildRetrievedContextHints}
  */
-export function buildComputationSystemPrompt(basePrompt: string): string {
+export function buildComputationSystemPrompt(basePrompt: string, hints: RetrievedContextHints = {}): string {
     const dateStr = new Date().toLocaleDateString("en-US", {
         weekday: "long",
         year: "numeric",
@@ -23,6 +23,7 @@ export function buildComputationSystemPrompt(basePrompt: string): string {
         "\n" +
         "Always report the result of your computation in text as the code output may not always be shown to the user.\n" +
         `You should assume the current date is ${dateStr} and your base knowledge is outdated by more than a year. Do not mention the date unless the user asks about it.\n` +
+        buildRetrievedContextHints(hints) +
         SYSTEM_PROMPT_FOOTER
     );
 }

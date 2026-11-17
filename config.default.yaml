@@ -66,6 +66,13 @@ agent:
   #               model's request quota on every call. Requires mainGracePeriodMs on every node
   #               with a fallbackModel.
   fallbackExecutionMode: "sequential"
+  # Search backend to use. Options: "google" | "tavily"   <optional, default: "google">
+  #   google: Google Search grounding via Gemini API, answered by the googleSearch node.
+  #           Requires GOOGLE_PAID_API_KEYS. Free only for gemini-2.5 models — gemini-3+ requires
+  #           a paid plan.
+  #   tavily: Tavily Search API. Requires TAVILY_API_KEY env var. Searches run as a tool and their
+  #           results are evaluated by the general node, so the googleSearch node is not used.
+  searchMode: "tavily"
 
   nodes:
     triage:
@@ -100,7 +107,7 @@ agent:
       fallbackModel: "gemini-3.6-flash" # <optional>
       # Whether fallback model responses get a Retry button. Set to false when the fallback is an
       # alternative rather than a downgrade. Interrupted responses are always retryable.
-      isFallbackRetryable: true         # <optional>
+      isFallbackRetryable: true         # answerNode<optional>
       # Maximum milliseconds to wait for a general model response before aborting.
       timeoutMs: 120000
       # Parallel fallback mode only (no-op in sequential mode): milliseconds the main model is given to
@@ -108,21 +115,19 @@ agent:
       # preferred, otherwise the fallback answer is used. Required in parallel mode with a fallbackModel.
       # mainGracePeriodMs: 30000
 
-    search:
+    # Only used when searchMode is "google": the model with Google Search grounding that answers
+    # search requests.
+    googleSearch:
       model: "gemini-3.8-flash"         # <required>
       apiKeyType: "free"                # <required>
       fallbackModel: "gemini-3.6-flash" # <optional>
       # Whether fallback model responses get a Retry button. Set to false when the fallback is an
       # alternative rather than a downgrade. Interrupted responses are always retryable.
       isFallbackRetryable: true         # <optional>
-      # Maximum milliseconds to wait for a search model response before aborting.
+      # Maximum milliseconds to wait for a Google Search model response before aborting.
       timeoutMs: 120000                 # <required>
       # Parallel fallback mode only (no-op in sequential mode): milliseconds the main model is given to
       # finish after the fallback model answered cleanly. A clean main answer within this window is
       # preferred, otherwise the fallback answer is used. Required in parallel mode with a fallbackModel.
       # mainGracePeriodMs: 30000
-      # Search backend to use. Options: "google" | "tavily"   <optional, default: "google">
-      #   google: Google Search grounding via Gemini API. Requires GOOGLE_PAID_API_KEYS.
-      #           Free only for gemini-2.5 models — gemini-3+ requires a paid plan.
-      #   tavily: Tavily Search API. Requires TAVILY_API_KEY env var.
-      mode: "tavily"
+

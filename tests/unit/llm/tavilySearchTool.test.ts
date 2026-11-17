@@ -2,9 +2,13 @@ import { describe, expect, it, mock } from "bun:test";
 import type { Logger } from "../../../src/application/types/Logger.ts";
 import {
     dedupeGroundingChunks,
+    extractTavilyResults,
     safeParseTavilyResponse,
+    searchResultsToGroundingChunks,
     tavilyResultsToGroundingChunks,
 } from "../../../src/infrastructure/llm/tools/tavilySearchTool.ts";
+
+const makeLogger = () => ({ warn: mock(() => {}) }) as unknown as Logger;
 
 describe("safeParseTavilyResponse", () => {
     it("parses a pre-parsed object directly", () => {
@@ -42,7 +46,6 @@ describe("safeParseTavilyResponse", () => {
 });
 
 describe("tavilyResultsToGroundingChunks", () => {
-    const makeLogger = () => ({ warn: mock(() => {}) }) as unknown as Logger;
     const result = (url: string) => ({ url, title: "Title", content: "text" });
 
     it("maps absolute http(s) URLs to grounding chunks titled with the hostname", () => {
@@ -107,5 +110,71 @@ describe("dedupeGroundingChunks", () => {
 
     it("returns an empty array for no chunks", () => {
         expect(dedupeGroundingChunks([])).toEqual([]);
+    });
+});
+
+describe("extractTavilyResults", () => {
+    it("returns the untouched results array of a valid response", () => {
+        const results = [{ url: "https://example.com", title: "Example", content: "text", favicon: "kept" }];
+        const logger = makeLogger();
+
+        expect(extractTavilyResults({ results, query: "q" }, logger)).toBe(results);
+        expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it("accepts a JSON string response", () => {
+        const results = [{ url: "https://example.com", title: "Example", content: "text" }];
+
+        expect(extractTavilyResults(JSON.stringify({ results }), makeLogger())).toEqual(results);
+    });
+
+    it("warns about and still forwards results that don't match the schema", () => {
+        const results = [{ url: "https://example.com" }];
+        const logger = makeLogger();
+
+        expect(extractTavilyResults({ results }, logger)).toBe(results);
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+    });
+
+    it("forwards the whole response when it has no results array", () => {
+        const response = { error: "quota exceeded" };
+        const logger = makeLogger();
+
+        expect(extractTavilyResults(response, logger)).toBe(response);
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("searchResultsToGroundingChunks", () => {
+    const result = (url: string) => ({ url, title: "t", content: "c" });
+
+    it("combines the sources of several searches, listing a shared one once", () => {
+        const chunks = searchResultsToGroundingChunks(
+            [[result("https://shared.com")], [result("https://shared.com"), result("https://b.com")]],
+            makeLogger(),
+        );
+
+        expect(chunks).toEqual([
+            { web: { uri: "https://shared.com", title: "shared.com" } },
+            { web: { uri: "https://b.com", title: "b.com" } },
+        ]);
+    });
+
+    it("ignores result sets that don't match the schema", () => {
+        const chunks = searchResultsToGroundingChunks(
+            [null, { error: "quota exceeded" }, [result("https://a.com")]],
+            makeLogger(),
+        );
+
+        expect(chunks).toEqual([{ web: { uri: "https://a.com", title: "a.com" } }]);
+    });
+
+    it("returns an empty list for a search without results", () => {
+        expect(searchResultsToGroundingChunks([[]], makeLogger())).toEqual([]);
+    });
+
+    it("returns null when no result set matched the schema", () => {
+        expect(searchResultsToGroundingChunks([null, "garbage"], makeLogger())).toBeNull();
+        expect(searchResultsToGroundingChunks([], makeLogger())).toBeNull();
     });
 });

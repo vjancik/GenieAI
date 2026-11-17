@@ -16,7 +16,7 @@ export const ToolName = {
 
 export type ToolName = (typeof ToolName)[keyof typeof ToolName];
 
-/** Tools that fetch the content of URLs from the user's message, run by the fetchContent node. */
+/** Tools that fetch the content of URLs from the user's message. */
 export const CONTENT_TOOLS: ReadonlySet<string> = new Set<ToolName>([
     ToolName.GET_WEBSITE,
     ToolName.GET_VIDEO_CAPTIONS,
@@ -26,3 +26,15 @@ export const CONTENT_TOOLS: ReadonlySet<string> = new Set<ToolName>([
 export function isToolName(name: string): name is ToolName {
     return Object.values<string>(ToolName).includes(name);
 }
+
+/**
+ * Names of the routing sentinels triage can call to hand the request to an answering node.
+ * They carry no arguments and produce no result, so they never reach conversation history.
+ */
+export const RoutingSentinel = {
+    SEARCH: "route_to_search",
+    PYTHON: "route_to_python",
+    GENERAL: "route_to_general",
+} as const;
+
+export type RoutingSentinel = (typeof RoutingSentinel)[keyof typeof RoutingSentinel];

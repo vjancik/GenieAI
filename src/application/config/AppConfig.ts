@@ -29,10 +29,12 @@ export type AttachmentMode = (typeof AttachmentMode)[keyof typeof AttachmentMode
 const ATTACHMENT_MODES = Object.values(AttachmentMode) as readonly AttachmentMode[];
 
 /**
- * Controls which search backend is used by the search node.
+ * Controls which search backend is used.
  * - "google": Google Search grounding via the Gemini API (requires a paid API key;
- *   only free for gemini-2.5 models — gemini-3+ requires a paid plan).
- * - "tavily": Tavily Search API (requires TAVILY_API_KEY env var).
+ *   only free for gemini-2.5 models — gemini-3+ requires a paid plan). Answered by the
+ *   googleSearch node.
+ * - "tavily": Tavily Search API (requires TAVILY_API_KEY env var). Runs as a tool, with the
+ *   general node answering from the results.
  */
 export const SearchMode = {
     google: "google",
@@ -125,6 +127,8 @@ const fileConfigDefaults = {
         maxInlineAttachmentSizeMB: 100,
         /** How fallback models are run alongside main models ("sequential" or "parallel"). */
         fallbackExecutionMode: FallbackExecutionMode.sequential,
+        /** Which search backend answers requests that need current information. */
+        searchMode: SearchMode.google,
     },
     ytDlp: {
         /** Number of proxy rotation retries on bot-detection or 429 responses. */
@@ -158,7 +162,7 @@ const agentModelSchema = z.object({
 });
 
 /**
- * Schema for the nodes that generate the user-facing answer (general, computation, search).
+ * Schema for the nodes that generate the user-facing answer (general, computation, googleSearch).
  * Triage only routes, so answer-quality settings do not apply to it.
  */
 const answerNodeModelSchema = agentModelSchema.extend({
@@ -169,22 +173,6 @@ const answerNodeModelSchema = agentModelSchema.extend({
      * Defaults to true.
      */
     isFallbackRetryable: z.boolean().prefault(true),
-});
-
-const searchModelSchema = answerNodeModelSchema.extend({
-    /**
-     * Which search backend to use.
-     * - "google": Google Search grounding via the Gemini API (requires a paid key;
-     *   free only for gemini-2.5 models — gemini-3+ requires a paid plan).
-     * - "tavily": Tavily Search API (requires TAVILY_API_KEY env var).
-     * Defaults to "google".
-     */
-    mode: z
-        .string()
-        .transform((v) => v.toLowerCase())
-        .pipe(z.enum(SEARCH_MODES))
-
-        .prefault(SearchMode.google),
 });
 
 const triageModelSchema = agentModelSchema.extend({
@@ -292,11 +280,27 @@ const fileConfigSchema = z.object({
             .pipe(z.enum(FALLBACK_EXECUTION_MODES))
 
             .prefault(fileConfigDefaults.agent.fallbackExecutionMode),
+        /**
+         * Which search backend to use.
+         * - "google": Google Search grounding via the Gemini API (requires a paid key;
+         *   free only for gemini-2.5 models — gemini-3+ requires a paid plan). Search requests
+         *   are answered by the googleSearch node.
+         * - "tavily": Tavily Search API (requires TAVILY_API_KEY env var). Searches run as a
+         *   tool and their results are answered from by the general node.
+         * Defaults to "google".
+         */
+        searchMode: z
+            .string()
+            .transform((v) => v.toLowerCase())
+            .pipe(z.enum(SEARCH_MODES))
+
+            .prefault(fileConfigDefaults.agent.searchMode),
         nodes: z.object({
             triage: triageModelSchema,
             general: answerNodeModelSchema,
             computation: answerNodeModelSchema,
-            search: searchModelSchema,
+            /** Only used when `searchMode` is "google": the model with Google Search grounding. */
+            googleSearch: answerNodeModelSchema,
         }),
     }),
     ytDlp: z
@@ -346,7 +350,7 @@ const envConfigSchema = z
          */
         GOOGLE_PAID_API_KEYS: commaSeparatedKeysSchema.optional(),
         /**
-         * Tavily Search API key — required when agent.nodes.search.mode is "tavily".
+         * Tavily Search API key — required when agent.searchMode is "tavily".
          * Obtain a key at https://tavily.com.
          */
         TAVILY_API_KEY: z
@@ -572,15 +576,16 @@ function applyComputedValues(config: EnvConfig & { file: FileConfig }): AppConfi
  * Logs warnings for non-fatal but likely-misconfigured combinations.
  */
 export function validateConfig(config: AppConfig, logger?: Logger): void {
-    const nodes = config.file.agent.nodes;
+    const { nodes, searchMode } = config.file.agent;
+
+    // The googleSearch node never runs in Tavily mode, so its settings impose no requirements there.
+    const activeNodes = Object.entries(nodes).filter(
+        ([name]) => name !== "googleSearch" || searchMode === SearchMode.google,
+    );
 
     // Ensure required API key env vars are present for the configured node apiKeyTypes.
-    const needsFree = [nodes.triage, nodes.general, nodes.computation, nodes.search].some(
-        (n) => n.apiKeyType === ApiKeyType.free,
-    );
-    const needsPaid = [nodes.triage, nodes.general, nodes.computation, nodes.search].some(
-        (n) => n.apiKeyType === ApiKeyType.paid,
-    );
+    const needsFree = activeNodes.some(([, node]) => node.apiKeyType === ApiKeyType.free);
+    const needsPaid = activeNodes.some(([, node]) => node.apiKeyType === ApiKeyType.paid);
     if (needsFree && !config.googleFreeApiKeys?.length) {
         throw new ConfigError(
             'GOOGLE_FREE_API_KEYS is required because one or more agent nodes use apiKeyType: "free"',
@@ -595,12 +600,12 @@ export function validateConfig(config: AppConfig, logger?: Logger): void {
     // In parallel mode the grace period decides when a fallback answer wins, and suitable values
     // vary widely with each node's task complexity, so it must be set explicitly per node.
     if (config.file.agent.fallbackExecutionMode === FallbackExecutionMode.parallel) {
-        const missingGracePeriod = Object.entries(nodes)
+        const missingGracePeriod = activeNodes
             .filter(([, node]) => node.fallbackModel !== undefined && node.mainGracePeriodMs === undefined)
             .map(([name]) => `agent.nodes.${name}.mainGracePeriodMs`);
         if (missingGracePeriod.length > 0) {
             throw new ConfigError(
-                'agent.fallbackExecutionMode is "parallel", which requires a grace period on every node ' +
+                'agent.fallbackExecutionMode is "parallel", which requires a grace period on every active node ' +
                     `with a fallbackModel. Missing: ${missingGracePeriod.join(", ")}`,
             );
         }
@@ -608,20 +613,21 @@ export function validateConfig(config: AppConfig, logger?: Logger): void {
 
     // Warn when search is configured with free keys + Google grounding + a Gemini 3 model,
     // because the Ground with Google Search quota is zero for free-tier on Gemini 3+.
-    if (logger && nodes.search.apiKeyType === ApiKeyType.free && nodes.search.mode === SearchMode.google) {
-        const searchModels = [nodes.search.model, nodes.search.fallbackModel].filter(Boolean) as string[];
-        const hasGemini3 = searchModels.some((m) => m.startsWith("gemini-3"));
-        if (hasGemini3) {
+    const googleSearch = nodes.googleSearch;
+    if (logger && googleSearch.apiKeyType === ApiKeyType.free && searchMode === SearchMode.google) {
+        const searchModels = [googleSearch.model, googleSearch.fallbackModel].filter(Boolean) as string[];
+        const hasGemini3Plus = searchModels.some((m) => m.startsWith("gemini-3") || m.startsWith("gemini-4"));
+        if (hasGemini3Plus) {
             logger.warn(
                 {
-                    searchModel: nodes.search.model,
-                    fallbackModel: nodes.search.fallbackModel,
-                    searchMode: nodes.search.mode,
-                    apiKeyType: nodes.search.apiKeyType,
+                    searchModel: googleSearch.model,
+                    fallbackModel: googleSearch.fallbackModel,
+                    searchMode,
+                    apiKeyType: googleSearch.apiKeyType,
                 },
-                "Gemini 3 models do not support Google Search grounding on free-tier keys " +
+                "Gemini 3+ models do not support Google Search grounding on free-tier keys " +
                     "(Ground with Google Search quota is 0 for free tier on gemini-3+). " +
-                    'Switch agent.nodes.search.mode to "tavily" or use a gemini-2.5 model.',
+                    'Switch agent.searchMode to "tavily" or use a gemini-2.5 model.',
             );
         }
     }
@@ -629,12 +635,7 @@ export function validateConfig(config: AppConfig, logger?: Logger): void {
     if (config.file.agent.uploadAttachmentMode !== AttachmentMode.upload) return;
 
     // Upload mode uses the Gemini Files API, which is only supported by Gemini models.
-    const providers: { name: string; model: string }[] = [
-        { name: "agent.nodes.triage.model", model: nodes.triage.model },
-        { name: "agent.nodes.general.model", model: nodes.general.model },
-        { name: "agent.nodes.computation.model", model: nodes.computation.model },
-        { name: "agent.nodes.search.model", model: nodes.search.model },
-    ];
+    const providers = activeNodes.map(([name, node]) => ({ name: `agent.nodes.${name}.model`, model: node.model }));
     for (const { name, model } of providers) {
         if (!model.startsWith("gemini")) {
             throw new ConfigError(`Upload attachment mode requires Gemini models, but "${name}" is set to: ${model}`);

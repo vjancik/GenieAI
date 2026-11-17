@@ -41,8 +41,32 @@ const TavilySearchResponseResultsSchema = z.object({
  * result can still be forwarded to the LLM; grounding sources should only be populated on success.
  */
 export function safeParseTavilyResponse(raw: unknown) {
-    const objResponse = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const objResponse: unknown = typeof raw === "string" ? JSON.parse(raw) : raw;
     return { objResponse, parsed: TavilySearchResponseResultsSchema.safeParse(objResponse) };
+}
+
+/**
+ * Reduces a raw Tavily response to its results array, which is all the rest of the application
+ * consumes: the model reads it as context and the grounding sources are derived from it.
+ *
+ * A response that doesn't match the expected schema is reported and still forwarded as far as
+ * possible, so the model gets whatever Tavily returned.
+ *
+ * @param raw - The raw Tavily invoke result
+ * @param logger - Used to report responses that don't match the expected schema
+ * @returns The untouched results array, or the whole response when it has no such array
+ */
+export function extractTavilyResults(raw: unknown, logger: Logger): unknown {
+    const { objResponse, parsed } = safeParseTavilyResponse(raw);
+    if (!parsed.success) {
+        logger.warn(
+            { error: parsed.error.message },
+            "Tavily response did not match expected schema — grounding sources will be omitted",
+        );
+    }
+
+    const hasResults = typeof objResponse === "object" && objResponse !== null && "results" in objResponse;
+    return hasResults ? objResponse.results : objResponse;
 }
 
 type TavilySearchResult = z.infer<typeof TavilySearchResultSchema>;
@@ -121,6 +145,27 @@ export function dedupeGroundingChunks(chunks: WebGroundingChunk[]): WebGrounding
     });
 }
 
+/**
+ * Builds the grounding chunks for an answer based on one or more web searches, in the Google
+ * Search shape so source formatting stays provider-agnostic.
+ *
+ * Result sets that don't match the expected schema contribute no sources. Searches can overlap,
+ * so a source found by more than one of them is listed once.
+ *
+ * @param resultSets - The results of each search, as produced by the Tavily tool
+ * @param logger - Logger used to report skipped results
+ * @returns The deduplicated chunks, or null when no result set matched the expected schema
+ */
+export function searchResultsToGroundingChunks(resultSets: unknown[], logger: Logger): WebGroundingChunk[] | null {
+    const parsedSets = resultSets.flatMap((resultSet) => {
+        const parsed = z.array(TavilySearchResultSchema).safeParse(resultSet);
+        return parsed.success ? [parsed.data] : [];
+    });
+    if (parsedSets.length === 0) return null;
+
+    return dedupeGroundingChunks(parsedSets.flatMap((results) => tavilyResultsToGroundingChunks(results, logger)));
+}
+
 const TAVILY_SEARCH_DESCRIPTION =
     "Use this tool when the question requires " +
     "up-to-date information, current events, recent news, live data, or " +
@@ -131,9 +176,13 @@ const QUERY_DESCRIPTION = "A one sentence natural language search query that can
 
 /**
  * Creates a LangChain tool that wraps TavilySearch and exposes a simple { query } schema.
+ * Resolves to the search's results array (see {@link extractTavilyResults}), so like every other
+ * tool it yields a plain serializable result.
  * Must only be called when TAVILY_API_KEY is set.
+ *
+ * @param logger - Used to report responses that don't match the expected schema
  */
-export function createTavilyTool() {
+export function createTavilyTool(logger: Logger) {
     const inner = new TavilySearch({
         maxResults: 10,
         includeUsage: true,
@@ -148,7 +197,7 @@ export function createTavilyTool() {
         verbose: false,
     });
 
-    return tool(({ query }) => inner.invoke({ query }), {
+    return tool(async ({ query }) => extractTavilyResults(await inner.invoke({ query }), logger), {
         name: ToolName.WEB_SEARCH,
         description: TAVILY_SEARCH_DESCRIPTION,
         schema: z.object({

@@ -128,7 +128,11 @@ GenieAIV2/
 │       │   └── instrumentation.ts                      # Sentry error and tracing setup
 │       ├── llm/
 │       │   ├── agents/
-│       │   │   └── agentOrchestrator.ts                # LangGraph StateGraph definition and execution: triage → fetch/tool → general/search
+│       │   │   ├── agentOrchestrator.ts                # LangGraph StateGraph definition and execution: triage → tools → general/computation/googleSearch
+│       │   │   ├── flattenToolExchanges.ts             # Rewrites tool exchanges into plain HumanMessages for a model call
+│       │   │   ├── orchestratorNode.ts                 # Names of the graph nodes
+│       │   │   ├── pruneToolCalls.ts                   # Reduces a triage AIMessage to the tool calls that are executed
+│       │   │   └── triageRoutePlanner.ts               # Pure routing decision: which tool calls run and which node answers
 │       │   ├── errors/
 │       │   │   ├── httpStatusOf.ts                     # Reads the structured HTTP status code off an error
 │       │   │   ├── isKeyRotationError.ts               # Detects errors warranting API key rotation (HTTP 401, 402, 403, 429)
@@ -138,7 +142,7 @@ GenieAIV2/
 │       │   ├── models/
 │       │   │   ├── basePrompt.ts                       # Shared system prompt injected into all models
 │       │   │   ├── generalModel.ts                     # Builds the ChatGoogle model for general queries
-│       │   │   ├── searchModel.ts                      # Builds the ChatGoogle model with web search grounding
+│       │   │   ├── googleSearchModel.ts                # Builds the ChatGoogle model with Google Search grounding
 │       │   │   ├── sharedGeminiSettings.ts             # Common Gemini model config (temperature, safety, etc.)
 │       │   │   └── triageModel.ts                      # Builds the ChatGoogle triage model with thinking budget
 │       │   ├── tools/

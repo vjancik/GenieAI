@@ -5,19 +5,19 @@ import { z } from "zod";
 import { SearchMode } from "../../../application/config/AppConfig.ts";
 import type { IModelTool } from "../../../application/ports/IModelTool.ts";
 import type { ThinkingLevel } from "../../../application/types/ThinkingLevel.ts";
-import { ToolName } from "../../../application/types/ToolName.ts";
+import { RoutingSentinel, ToolName } from "../../../application/types/ToolName.ts";
 import { ModelProvider } from "../ModelProvider.ts";
 import type { GetVideoCaptionsTool } from "../tools/getVideoCaptionsTool.ts";
 import type { GetWebsiteTool } from "../tools/getWebsiteTool.ts";
 import { blockNoneSafetySettings, noInternalRetries } from "./sharedGeminiSettings.ts";
 
 /**
- * Sentinel tool that signals routing to the Google Search agent.
+ * Sentinel tool that signals routing to the Google Search agent (Google search mode only).
  * The triage model calls this when the user's question needs up-to-date information.
- * Google Search grounding is handled by the search model itself — no query needed here.
+ * Google Search grounding is handled by the Google Search model itself — no query needed here.
  */
 const routeToGoogleSearchTool = tool(async () => JSON.stringify({ route: "search" }), {
-    name: "route_to_search",
+    name: RoutingSentinel.SEARCH,
     description:
         "Route to a search-capable agent. Use this when the question requires " +
         "up-to-date information, current events, recent news, live data, or " +
@@ -30,7 +30,7 @@ const routeToGoogleSearchTool = tool(async () => JSON.stringify({ route: "search
  * Used for everything that doesn't need websites, video captions, or search.
  */
 const routeToGeneralTool = tool(async () => JSON.stringify({ route: "general" }), {
-    name: "route_to_general",
+    name: RoutingSentinel.GENERAL,
     description:
         "Route to the general-purpose agent for: creative writing, coding questions, general knowledge, " +
         "explanations, and anything that doesn't require real-time data, external content, or Python execution.",
@@ -42,7 +42,7 @@ const routeToGeneralTool = tool(async () => JSON.stringify({ route: "general" })
  * Used when the request requires running Python code for computation, data processing, or math.
  */
 const routeToPythonTool = tool(async () => JSON.stringify({ route: "python" }), {
-    name: "route_to_python",
+    name: RoutingSentinel.PYTHON,
     description:
         "Route to the Python agent. Use this when the request would benefit from executing Python code " +
         "to produce a result: numerical computation, graphing, plotting, " +
@@ -54,31 +54,94 @@ const routeToPythonTool = tool(async () => JSON.stringify({ route: "python" }), 
 
 /**
  * Builds the system prompt for the triage agent.
- * Instructs the model to classify and route — not to answer directly.
+ * Instructs the model to retrieve data and route — not to answer directly.
  *
- * In Tavily mode the search tool is `web_search` (the real Tavily tool bound directly);
- * in Google mode it is the `route_to_search` sentinel.
+ * Data retrieval tools and a route tool can be combined: the retrieval tools run first, then
+ * the routed agent answers. In Tavily mode web search is a retrieval tool (`web_search`, the real
+ * Tavily tool bound directly); in Google mode it is a route (`route_to_search`), as the Google
+ * Search agent does its own searching.
  *
- * @param searchMode - Determines the name of the search tool referenced in the prompt.
+ * @param searchMode - Determines how the prompt refers to web search
+ * @param isSearchRequested - Whether the user explicitly asked for a web search. Only supported
+ *   in Tavily mode, where it selects the prompt matching {@link buildSearchIntentTriageTools}.
  */
-export function buildTriageSystemPrompt(searchMode: SearchMode): string {
-    const searchToolName = searchMode === SearchMode.tavily ? ToolName.WEB_SEARCH : "route_to_search";
+export function buildTriageSystemPrompt(searchMode: SearchMode, isSearchRequested = false): string {
+    const isTavily = searchMode === SearchMode.tavily;
+    const searchToolName = isTavily ? ToolName.WEB_SEARCH : RoutingSentinel.SEARCH;
+    const canRouteToPython = !(isTavily && isSearchRequested);
+
+    const retrievalTools = [ToolName.GET_WEBSITE, ToolName.GET_VIDEO_CAPTIONS, ...(isTavily ? [searchToolName] : [])];
+    const routeTools = [
+        ...(isTavily ? [] : [searchToolName]),
+        ...(canRouteToPython ? [RoutingSentinel.PYTHON] : []),
+        RoutingSentinel.GENERAL,
+    ];
 
     return (
-        "You are a request analysis agent. Your job is to intelligently respond to the user's message with the right " +
-        "tools and call exactly one route tool to route the request to another agent or one or more data retrieval " +
-        "tools to retrieve the necessary information to satisfy the request.\n" +
+        "You are a request analysis agent. You never answer the user yourself, you respond only with tool calls.\n" +
+        `Call the data retrieval tools (${retrievalTools.join(", ")}) needed to satisfy the request, if any. ` +
+        "You may call several of them in one response.\n" +
+        `Call at most one route tool (${routeTools.join(", ")}) to pick the agent that answers the request, ` +
+        "which it does with the retrieved data. When you call no route tool, the general-purpose agent answers.\n" +
         "Rules:\n" +
         `- If the message contains web page URLs to analyze: call ${ToolName.GET_WEBSITE}\n` +
         `- If the message contains video URLs (YouTube, social media, etc.): call ${ToolName.GET_VIDEO_CAPTIONS}\n` +
-        "- DO NOT ever call the previous 2 tools for the same URLs more than once\n" +
-        "- You should only use URLs present in the user's message — do not make assumptions or add new URLs on your own\n" +
-        "- If the question needs current/live information or very niche topics: call " +
-        searchToolName +
-        "\n" +
-        "- If the request requires running Python code to compute or process a result: call route_to_python\n" +
-        "- For everything else: call route_to_general"
+        "- DO NOT call the previous 2 tools for the same URLs more than once\n" +
+        "- You should only use URLs present in the user's message — do not add new URLs on your own\n" +
+        (isSearchRequested
+            ? `- The user explicitly requested a web search: call ${searchToolName}, unless a search clearly cannot contribute to the request\n`
+            : `- If the question needs current/live information or is about very niche topics: call ${searchToolName}\n` +
+              `- Only combine ${searchToolName} with retrieving URLs when the user asks for information beyond the linked ` +
+              "content, such as a comparison with current events or a fact check. A request to summarize or explain " +
+              "a link needs no search\n") +
+        (canRouteToPython
+            ? `- If the request requires running Python code to compute or process a result: call ${RoutingSentinel.PYTHON}\n`
+            : "") +
+        `- If no data needs to be retrieved and no other rule applies: call ${RoutingSentinel.GENERAL}`
     );
+}
+
+/** The tools a triage model can be bound to. */
+type TriageTools = Parameters<ChatGoogle["bindTools"]>[0];
+
+/** Dependencies for selecting the tools of the regular triage model. */
+interface TriageToolsOptions {
+    /** Which search backend is active — determines which search tool is bound. */
+    searchMode: SearchMode;
+    getWebsiteTool: GetWebsiteTool;
+    getVideoCaptionsTool: GetVideoCaptionsTool;
+    /** Required when searchMode is tavily — the pre-constructed Tavily search tool instance. */
+    tavilyTool?: IModelTool<{ query: string }>;
+}
+
+/**
+ * Selects the tools of the regular triage model: the content tools, a search tool and the
+ * routing sentinels.
+ *
+ * In Tavily mode the real Tavily tool (`web_search`) is bound, so the model writes the search
+ * query itself and the orchestrator executes the call. In Google mode the `route_to_search`
+ * sentinel is bound instead, as the Google Search model does its own searching.
+ */
+export function buildTriageTools(options: TriageToolsOptions): TriageTools {
+    // There is no Google Search agent to route to in Tavily mode
+    const searchTool = options.searchMode === SearchMode.tavily ? options.tavilyTool : routeToGoogleSearchTool;
+
+    return [
+        options.getWebsiteTool,
+        options.getVideoCaptionsTool,
+        ...(searchTool ? [searchTool] : []),
+        routeToPythonTool,
+        routeToGeneralTool,
+    ];
+}
+
+/**
+ * Selects the tools of the triage model used in Tavily mode when the user explicitly requested
+ * a web search: every data retrieval tool, and `route_to_general` as the only way to opt out.
+ * Triage mainly has to write the search query here, so the other routing sentinels are left out.
+ */
+export function buildSearchIntentTriageTools(options: Required<Omit<TriageToolsOptions, "searchMode">>): TriageTools {
+    return [options.getWebsiteTool, options.getVideoCaptionsTool, options.tavilyTool, routeToGeneralTool];
 }
 
 /** Dependencies for constructing a triage model provider instance. */
@@ -91,101 +154,22 @@ interface TriageModelOptions {
     thinkingLevel: ThinkingLevel;
     /** Whether to include thought tokens in the model response. */
     includeThoughts: boolean;
-    /** Which search backend is active — determines which search tool is bound. */
-    searchMode: SearchMode;
-    getWebsiteTool: GetWebsiteTool;
-    getVideoCaptionsTool: GetVideoCaptionsTool;
-    /** Required when searchMode is tavily — the pre-constructed TavilySearch tool instance. */
-    tavilyTool?: IModelTool<{ query: string }>;
+    /** The tools the model must choose from, see {@link buildTriageTools}. */
+    tools: TriageTools;
 }
 
 /**
- * Creates the triage model with all routing tools bound.
+ * Creates a triage model with the given tools bound, forced to call at least one of them.
  *
  * The triage model is invoked with a single-pass (no ReAct loop) — the orchestrator
- * inspects the tool call from the response and routes accordingly.
+ * inspects the tool calls from the response and routes accordingly.
  *
  * Uses a low thinking budget to keep latency and cost minimal for classification.
- * In Tavily mode the real `tavilySearchTool` (`web_search`) is bound directly so the
- * model calls it and the result is captured from the triage response. In Google mode
- * the `route_to_search` sentinel is bound instead and routing is handled separately.
  */
 function createTriageModel(
     apiKey: string,
     modelName: string,
     options: Omit<TriageModelOptions, "modelName" | "fallbackModelName">,
-) {
-    // automatic Sentry instrumentation doesn't work in Bun
-    const sentryCallback =
-        process.versions.bun && process.env.SENTRY_INITIALIZED ? [Sentry.createLangChainCallbackHandler()] : undefined;
-
-    const llm = new ChatGoogle({
-        model: modelName,
-        apiKey,
-        thinkingConfig: {
-            thinkingLevel: options.thinkingLevel,
-            includeThoughts: options.includeThoughts,
-        },
-        safetySettings: blockNoneSafetySettings,
-        callbacks: sentryCallback,
-        maxRetries: noInternalRetries,
-    });
-
-    const searchTool =
-        options.searchMode === SearchMode.tavily
-            ? (options.tavilyTool ?? routeToGoogleSearchTool)
-            : routeToGoogleSearchTool;
-
-    const tools = [
-        options.getWebsiteTool,
-        options.getVideoCaptionsTool,
-        searchTool,
-        routeToPythonTool,
-        routeToGeneralTool,
-    ];
-    return llm.bindTools(tools, { tool_choice: "any" });
-}
-
-/**
- * Lazy-caching provider for the triage model.
- *
- * Builds one {@link TriageModel} per unique `[apiKey, modelName]` pair.
- * The fallback model (if configured) is cached in the same map under its own key.
- */
-export class TriageModelProvider extends ModelProvider {
-    constructor(private readonly options: TriageModelOptions) {
-        super(options.modelName, options.fallbackModelName);
-    }
-
-    protected create(apiKey: string, modelName: string) {
-        return createTriageModel(apiKey, modelName, this.options);
-    }
-}
-
-/** Dependencies for constructing a Tavily-only triage model provider instance. */
-interface TavilyOnlyTriageModelOptions {
-    /** Gemini model identifier. */
-    modelName: string;
-    /** Fallback model name used on 503 or timeout errors. */
-    fallbackModelName?: string;
-    /** Gemini reasoning effort level. */
-    thinkingLevel: ThinkingLevel;
-    /** Whether to include thought tokens in the model response. */
-    includeThoughts: boolean;
-    /** The pre-constructed TavilySearch tool instance. */
-    tavilyTool: IModelTool<{ query: string }>;
-}
-
-/**
- * Creates a triage model bound only to the Tavily `web_search` tool and
- * `route_to_general`. No content tools are bound — this variant is used
- * when the intent is already known to be SEARCH in Tavily mode, so
- * content fetching and routing sentinel tools are unnecessary.
- */
-function createTavilyOnlyTriageModel(
-    apiKey: string,
-    modelName: string,
-    options: Omit<TavilyOnlyTriageModelOptions, "modelName" | "fallbackModelName">,
 ) {
     // automatic Sentry instrumentation doesn't work in Bun
     const sentryCallback =
@@ -204,22 +188,21 @@ function createTavilyOnlyTriageModel(
         maxRetries: noInternalRetries,
     });
 
-    return llm.bindTools([options.tavilyTool, routeToGeneralTool], { tool_choice: "any" });
+    return llm.bindTools(options.tools, { tool_choice: "any" });
 }
 
 /**
- * Lazy-caching provider for the Tavily-only triage model.
+ * Lazy-caching provider for a triage model.
  *
- * Used exclusively when search mode is Tavily and the declared intent is SEARCH.
- * Only binds `web_search` and `route_to_general` — content tools and routing
- * sentinels are omitted because they are irrelevant for this narrow path.
+ * Builds one model per unique `[apiKey, modelName]` pair.
+ * The fallback model (if configured) is cached in the same map under its own key.
  */
-export class TavilyOnlyTriageModelProvider extends ModelProvider {
-    constructor(private readonly options: TavilyOnlyTriageModelOptions) {
+export class TriageModelProvider extends ModelProvider {
+    constructor(private readonly options: TriageModelOptions) {
         super(options.modelName, options.fallbackModelName);
     }
 
     protected create(apiKey: string, modelName: string) {
-        return createTavilyOnlyTriageModel(apiKey, modelName, this.options);
+        return createTriageModel(apiKey, modelName, this.options);
     }
 }

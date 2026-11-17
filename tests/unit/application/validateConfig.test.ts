@@ -50,6 +50,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
                 maxInlineAttachmentSizeMB: 100,
                 maxInlineAttachmentSizeBytes: 100 * 1024 * 1024,
                 fallbackExecutionMode: FallbackExecutionMode.sequential,
+                searchMode: SearchMode.google,
                 nodes: {
                     triage: {
                         model: "gemini-2.5-flash",
@@ -69,10 +70,9 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
                         apiKeyType: "free",
                         isFallbackRetryable: true,
                     },
-                    search: {
+                    googleSearch: {
                         model: "gemini-2.5-flash",
                         timeoutMs: 120_000,
-                        mode: SearchMode.google,
                         apiKeyType: "free",
                         isFallbackRetryable: true,
                     },
@@ -109,8 +109,8 @@ describe("validateConfig", () => {
             ...config.file.agent.nodes.computation,
             apiKeyType: "paid",
         };
-        (config.file.agent.nodes as Record<string, unknown>).search = {
-            ...config.file.agent.nodes.search,
+        (config.file.agent.nodes as Record<string, unknown>).googleSearch = {
+            ...config.file.agent.nodes.googleSearch,
             apiKeyType: "paid",
         };
         expect(() => validateConfig(config)).not.toThrow();
@@ -136,16 +136,30 @@ describe("validateConfig", () => {
             ...config.file.agent.nodes.computation,
             apiKeyType: "paid",
         };
-        (config.file.agent.nodes as Record<string, unknown>).search = {
-            ...config.file.agent.nodes.search,
+        (config.file.agent.nodes as Record<string, unknown>).googleSearch = {
+            ...config.file.agent.nodes.googleSearch,
             apiKeyType: "paid",
         };
         expect(() => validateConfig(config)).toThrow(/GOOGLE_PAID_API_KEYS is required/);
     });
 
+    it("ignores the googleSearch node's key type in tavily mode, where it never runs", () => {
+        const config = makeConfig();
+        // TYPE COERCION: deep-merging nodes into a readonly nested object requires a cast
+        (config.file.agent.nodes as Record<string, unknown>).googleSearch = {
+            ...config.file.agent.nodes.googleSearch,
+            apiKeyType: "paid",
+        };
+        // No paid keys are configured: required in google mode, irrelevant in tavily mode
+        expect(() => validateConfig(config)).toThrow(/GOOGLE_PAID_API_KEYS is required/);
+
+        (config.file.agent as { searchMode: SearchMode }).searchMode = SearchMode.tavily;
+        expect(() => validateConfig(config)).not.toThrow();
+    });
+
     describe("parallel fallback execution mode", () => {
-        /** Config in parallel mode where general and search have a fallback model. */
-        function makeParallelConfig(grace: { general?: number; search?: number }): AppConfig {
+        /** Config in parallel mode where general and googleSearch have a fallback model. */
+        function makeParallelConfig(grace: { general?: number; googleSearch?: number }): AppConfig {
             const config = makeConfig();
             // TYPE COERCION: deep-merging into a readonly nested object requires a cast
             (config.file.agent as Record<string, unknown>).fallbackExecutionMode = FallbackExecutionMode.parallel;
@@ -154,23 +168,30 @@ describe("validateConfig", () => {
                 fallbackModel: "gemini-2.5-flash-lite",
                 mainGracePeriodMs: grace.general,
             };
-            (config.file.agent.nodes as Record<string, unknown>).search = {
-                ...config.file.agent.nodes.search,
+            (config.file.agent.nodes as Record<string, unknown>).googleSearch = {
+                ...config.file.agent.nodes.googleSearch,
                 fallbackModel: "gemini-2.5-flash-lite",
-                mainGracePeriodMs: grace.search,
+                mainGracePeriodMs: grace.googleSearch,
             };
             return config;
         }
 
         it("passes when every node with a fallback model has a grace period", () => {
             // triage and computation have no fallbackModel in the base fixture, so need no grace period
-            expect(() => validateConfig(makeParallelConfig({ general: 10_000, search: 0 }))).not.toThrow();
+            expect(() => validateConfig(makeParallelConfig({ general: 10_000, googleSearch: 0 }))).not.toThrow();
         });
 
         it("throws ConfigError naming each node with a fallback model but no grace period", () => {
             const config = makeParallelConfig({ general: 10_000 });
-            expect(() => validateConfig(config)).toThrow(/agent\.nodes\.search\.mainGracePeriodMs/);
+            expect(() => validateConfig(config)).toThrow(/agent\.nodes\.googleSearch\.mainGracePeriodMs/);
             expect(() => validateConfig(config)).not.toThrow(/agent\.nodes\.general\.mainGracePeriodMs/);
+        });
+
+        it("does not require a grace period on the googleSearch node in tavily mode, where it never runs", () => {
+            const config = makeParallelConfig({ general: 10_000 });
+            // TYPE COERCION: overriding a readonly nested setting requires a cast
+            (config.file.agent as { searchMode: SearchMode }).searchMode = SearchMode.tavily;
+            expect(() => validateConfig(config)).not.toThrow();
         });
 
         it("does not require grace periods in sequential mode", () => {
@@ -185,17 +206,16 @@ describe("validateConfig", () => {
         const { logger, warnMock } = makeLogger();
         const config = makeConfig();
         // TYPE COERCION: deep-merging nodes into a readonly nested object requires a cast
-        (config.file.agent.nodes as Record<string, unknown>).search = {
-            ...config.file.agent.nodes.search,
+        (config.file.agent.nodes as Record<string, unknown>).googleSearch = {
+            ...config.file.agent.nodes.googleSearch,
             model: "gemini-3-flash-preview",
             apiKeyType: "free",
-            mode: SearchMode.google,
         };
         validateConfig(config, logger);
         expect(warnMock).toHaveBeenCalledTimes(1);
         expect(warnMock).toHaveBeenCalledWith(
             expect.objectContaining({ searchModel: "gemini-3-flash-preview" }),
-            expect.stringContaining("Gemini 3 models do not support Google Search grounding on free-tier"),
+            expect.stringContaining("Gemini 3+ models do not support Google Search grounding on free-tier"),
         );
     });
 
@@ -203,12 +223,11 @@ describe("validateConfig", () => {
         const { logger, warnMock } = makeLogger();
         const config = makeConfig();
         // TYPE COERCION: deep-merging nodes into a readonly nested object requires a cast
-        (config.file.agent.nodes as Record<string, unknown>).search = {
-            ...config.file.agent.nodes.search,
+        (config.file.agent.nodes as Record<string, unknown>).googleSearch = {
+            ...config.file.agent.nodes.googleSearch,
             model: "gemini-2.5-flash",
             fallbackModel: "gemini-3-flash",
             apiKeyType: "free",
-            mode: SearchMode.google,
         };
         validateConfig(config, logger);
         expect(warnMock).toHaveBeenCalledTimes(1);
@@ -227,11 +246,10 @@ describe("validateConfig", () => {
             googlePaidApiKeys: ["paid-key"],
         });
         // TYPE COERCION: deep-merging nodes into a readonly nested object requires a cast
-        (config.file.agent.nodes as Record<string, unknown>).search = {
-            ...config.file.agent.nodes.search,
+        (config.file.agent.nodes as Record<string, unknown>).googleSearch = {
+            ...config.file.agent.nodes.googleSearch,
             model: "gemini-3-flash-preview",
             apiKeyType: "paid",
-            mode: SearchMode.google,
         };
         validateConfig(config, logger);
         expect(warnMock).not.toHaveBeenCalled();
@@ -241,12 +259,13 @@ describe("validateConfig", () => {
         const { logger, warnMock } = makeLogger();
         const config = makeConfig();
         // TYPE COERCION: deep-merging nodes into a readonly nested object requires a cast
-        (config.file.agent.nodes as Record<string, unknown>).search = {
-            ...config.file.agent.nodes.search,
+        (config.file.agent.nodes as Record<string, unknown>).googleSearch = {
+            ...config.file.agent.nodes.googleSearch,
             model: "gemini-3-flash-preview",
             apiKeyType: "free",
-            mode: SearchMode.tavily,
         };
+        // TYPE COERCION: overriding a readonly nested setting requires a cast
+        (config.file.agent as { searchMode: SearchMode }).searchMode = SearchMode.tavily;
         validateConfig(config, logger);
         expect(warnMock).not.toHaveBeenCalled();
     });
@@ -254,11 +273,10 @@ describe("validateConfig", () => {
     it("does not warn when no logger is provided", () => {
         const config = makeConfig();
         // TYPE COERCION: deep-merging nodes into a readonly nested object requires a cast
-        (config.file.agent.nodes as Record<string, unknown>).search = {
-            ...config.file.agent.nodes.search,
+        (config.file.agent.nodes as Record<string, unknown>).googleSearch = {
+            ...config.file.agent.nodes.googleSearch,
             model: "gemini-3-flash-preview",
             apiKeyType: "free",
-            mode: SearchMode.google,
         };
         // Should not throw even though the combination is problematic
         expect(() => validateConfig(config)).not.toThrow();

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { load } from "@langchain/core/load";
 import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage } from "@langchain/core/messages";
+import type { ToolCall } from "@langchain/core/messages/tool";
 import { pruneToolCalls } from "../../../src/infrastructure/llm/agents/pruneToolCalls.ts";
 
 const thoughtBlock = { type: "text", text: "thinking", thought: true, thoughtSignature: "sig-thought" };
@@ -39,11 +40,16 @@ function retainedCall(message: AIMessage, name: string) {
     return call;
 }
 
+/** Retains the given calls unchanged. */
+function unchanged(calls: ToolCall[]) {
+    return new Map(calls.map((call) => [call, call]));
+}
+
 describe("pruneToolCalls", () => {
     test("removes a dropped call from both tool_calls and content, keeping its position's block", () => {
         const message = makeTwoCallMessage();
 
-        const pruned = pruneToolCalls(message, [retainedCall(message, "second_tool")]);
+        const pruned = pruneToolCalls(message, unchanged([retainedCall(message, "second_tool")]));
 
         expect(pruned.tool_calls?.map((tc) => tc.name)).toEqual(["second_tool"]);
         expect(pruned.content).toEqual([thoughtBlock, functionCallBlock("second_tool", "b")]);
@@ -52,7 +58,7 @@ describe("pruneToolCalls", () => {
     test("keeps the block holding the thought signature when its call is retained", () => {
         const message = makeTwoCallMessage();
 
-        const pruned = pruneToolCalls(message, [retainedCall(message, "first_tool")]);
+        const pruned = pruneToolCalls(message, unchanged([retainedCall(message, "first_tool")]));
 
         expect(pruned.content).toEqual([thoughtBlock, functionCallBlock("first_tool", "a", "sig-call")]);
     });
@@ -65,7 +71,7 @@ describe("pruneToolCalls", () => {
         const secondCall = message.tool_calls?.[1];
         if (!secondCall) throw new Error("Missing tool call");
 
-        const pruned = pruneToolCalls(message, [secondCall]);
+        const pruned = pruneToolCalls(message, unchanged([secondCall]));
 
         expect(pruned.content).toEqual([functionCallBlock("web_search", "b")]);
     });
@@ -73,10 +79,25 @@ describe("pruneToolCalls", () => {
     test("keeps every block when all calls are retained", () => {
         const message = makeTwoCallMessage();
 
-        const pruned = pruneToolCalls(message, message.tool_calls ?? []);
+        const pruned = pruneToolCalls(message, unchanged(message.tool_calls ?? []));
 
         expect(pruned.content).toEqual(message.content);
         expect(pruned.tool_calls).toHaveLength(2);
+    });
+
+    test("writes a rewritten call's arguments to both tool_calls and its content block", () => {
+        const message = makeTwoCallMessage();
+        const first = retainedCall(message, "first_tool");
+        const rewritten = { ...first, args: { query: "narrowed" } };
+
+        const pruned = pruneToolCalls(message, new Map([[first, rewritten]]));
+
+        expect(pruned.tool_calls).toEqual([rewritten]);
+        // The block keeps its other fields, such as the thought signature
+        expect(pruned.content).toEqual([thoughtBlock, functionCallBlock("first_tool", "narrowed", "sig-call")]);
+        // The original call and block are left as they were
+        expect(first.args).toEqual({ query: "a" });
+        expect(message.content).toEqual(makeTwoCallMessage().content);
     });
 
     test("leaves string content untouched", () => {
@@ -85,7 +106,7 @@ describe("pruneToolCalls", () => {
             tool_calls: [toolCall("first_tool", "a", "1"), toolCall("second_tool", "b", "2")],
         });
 
-        const pruned = pruneToolCalls(message, [retainedCall(message, "first_tool")]);
+        const pruned = pruneToolCalls(message, unchanged([retainedCall(message, "first_tool")]));
 
         expect(pruned.content).toBe("plain text");
         expect(pruned.tool_calls?.map((tc) => tc.name)).toEqual(["first_tool"]);
@@ -94,7 +115,7 @@ describe("pruneToolCalls", () => {
     test("preserves other message fields and does not mutate the original", () => {
         const message = makeTwoCallMessage();
 
-        const pruned = pruneToolCalls(message, [retainedCall(message, "first_tool")]);
+        const pruned = pruneToolCalls(message, unchanged([retainedCall(message, "first_tool")]));
 
         expect(pruned).toBeInstanceOf(AIMessage);
         expect(pruned.id).toBe("message-id");
@@ -107,7 +128,7 @@ describe("pruneToolCalls", () => {
     test("stays pruned through the serialization used for persistence", async () => {
         const message = makeTwoCallMessage();
 
-        const pruned = pruneToolCalls(message, [retainedCall(message, "first_tool")]);
+        const pruned = pruneToolCalls(message, unchanged([retainedCall(message, "first_tool")]));
         const restored = await load<BaseMessage>(JSON.stringify(pruned.toJSON()));
 
         expect(restored).toBeInstanceOf(AIMessage);
