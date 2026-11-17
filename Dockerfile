@@ -1,20 +1,31 @@
 FROM oven/bun:1.4.4-slim AS base
 WORKDIR /usr/src/app
 
+# Resolve the locked patchright version so the installed Chromium build always
+# matches the library in node_modules (each patchright release expects one exact
+# browser revision). Only the version string leaves this stage, so the Chromium
+# layers below stay cached unless the patchright version itself changes.
+FROM base AS patchright_version
+COPY bun.lock ./
+RUN version=$(sed -n 's/^ *"patchright": \["patchright@\([^"]*\)".*/\1/p' bun.lock) \
+    && if [ -z "$version" ]; then echo "Could not resolve patchright version from bun.lock" >&2; exit 1; fi \
+    && printf '%s' "$version" > /patchright-version
+
 FROM base AS base_with_chromium
 ARG TARGETARCH
+COPY --from=patchright_version /patchright-version /patchright-version
 # install dependencies into temp directory
 # this will cache them and speed up future builds
 RUN --mount=type=cache,id=apt-cache-$TARGETARCH,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib-$TARGETARCH,target=/var/lib/apt,sharing=locked \
     --mount=type=cache,id=bun-$TARGETARCH,target=/root/.bun/install/cache \
-    DEBIAN_FRONTEND=noninteractive bunx patchright@1.61.1 install-deps chromium
+    DEBIAN_FRONTEND=noninteractive bunx "patchright@$(cat /patchright-version)" install-deps chromium
 # Install to a fixed path accessible by all users (including the 'bun' user at runtime)
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 # Full Chromium, not the headless shell: the shell is detected by bot protections
 # when fetching web pages, and one build serves both rendering and fetching.
 RUN --mount=type=cache,id=bun-$TARGETARCH,target=/root/.bun/install/cache \
-    bunx patchright@1.61.1 install --no-shell chromium
+    bunx "patchright@$(cat /patchright-version)" install --no-shell chromium
 # Load custom fonts into the system font cache
 COPY src/infrastructure/exporters/fonts /usr/local/share/fonts/genie
 RUN fc-cache -f -v
