@@ -408,8 +408,13 @@ describe("@langchain/google — ToolMessage serialization", () => {
      *
      * Update: After update to 0.1.8, this test is changed to succeed if the bug is still present
      * to track further changes, as it doesn't directly affect this codebase anymore.
+     *
+     * Update (@langchain/google@0.2.15): the ToolMessage is no longer dropped — its
+     * `functionResponse` turn is now sent. The preceding AIMessage (empty content,
+     * `tool_calls` only) is still omitted, so `contents` has two turns rather than
+     * three. The test pins this new behavior to track further changes.
      */
-    test("ToolMessage with array content is dropped from generateContent request", async () => {
+    test("ToolMessage with array content is kept in generateContent request", async () => {
         const model = new ChatGoogle({
             model: "gemini-2.5-flash",
             apiKey: "test-api-key-fake",
@@ -440,11 +445,11 @@ describe("@langchain/google — ToolMessage serialization", () => {
         const body = await captureGenerateContentBody(() => model.invoke(messages));
         const contents = body.contents as Array<{ role: string; parts: Array<Record<string, unknown>> }>;
 
-        // All three turns must be present — the bug causes the ToolMessage turn to be dropped.
-        expect(contents).toHaveLength(1);
+        // Human turn + ToolMessage turn; the tool-call-only AIMessage turn is still omitted upstream.
+        expect(contents).toHaveLength(2);
 
-        // The third turn must carry a functionResponse part.
-        // const thirdTurnParts = contents[2]?.parts ?? [];
-        // expect(thirdTurnParts.some((p) => "functionResponse" in p)).toBe(true);
+        // The last turn must carry the functionResponse part.
+        const lastTurnParts = contents[1]?.parts ?? [];
+        expect(lastTurnParts.some((p) => "functionResponse" in p)).toBe(true);
     });
 });

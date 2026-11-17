@@ -168,7 +168,7 @@ const answerNodeModelSchema = agentModelSchema.extend({
      * are treated as final. Interrupted or abnormally stopped responses stay retryable regardless.
      * Defaults to true.
      */
-    isFallbackRetryable: z.boolean().optional().prefault(true),
+    isFallbackRetryable: z.boolean().prefault(true),
 });
 
 const searchModelSchema = answerNodeModelSchema.extend({
@@ -183,7 +183,7 @@ const searchModelSchema = answerNodeModelSchema.extend({
         .string()
         .transform((v) => v.toLowerCase())
         .pipe(z.enum(SEARCH_MODES))
-        .optional()
+
         .prefault(SearchMode.google),
 });
 
@@ -193,7 +193,7 @@ const triageModelSchema = agentModelSchema.extend({
         .string()
         .transform((v) => v.toUpperCase())
         .pipe(z.enum(THINKING_LEVELS))
-        .optional()
+
         .prefault("LOW"),
 });
 
@@ -201,9 +201,9 @@ const fileConfigSchema = z.object({
     prompts: z
         .object({
             /** Base system prompt prepended to all agent system prompts. */
-            basePrompt: z.string().optional().prefault(fileConfigDefaults.prompts.basePrompt),
+            basePrompt: z.string().prefault(fileConfigDefaults.prompts.basePrompt),
         })
-        .optional()
+
         .prefault(fileConfigDefaults.prompts),
     attachmentDownloader: z
         .object({
@@ -211,7 +211,7 @@ const fileConfigSchema = z.object({
                 .number()
                 .int()
                 .positive()
-                .optional()
+
                 .prefault(fileConfigDefaults.attachmentDownloader.timeoutMs),
             memory: z
                 .object({
@@ -219,78 +219,78 @@ const fileConfigSchema = z.object({
                         .number()
                         .int()
                         .positive()
-                        .optional()
+
                         .prefault(fileConfigDefaults.attachmentDownloader.memory.maxSizeMB),
                 })
-                .optional()
+
                 .prefault(fileConfigDefaults.attachmentDownloader.memory),
         })
-        .optional()
+
         .prefault(fileConfigDefaults.attachmentDownloader),
-    globalModelTimeoutMs: z.number().int().positive().optional().prefault(fileConfigDefaults.globalModelTimeoutMs),
+    globalModelTimeoutMs: z.number().int().positive().prefault(fileConfigDefaults.globalModelTimeoutMs),
     geminiFileApi: z
         .object({
             pollIntervalMs: z
                 .number()
                 .int()
                 .positive()
-                .optional()
+
                 .prefault(fileConfigDefaults.geminiFileApi.pollIntervalMs),
             maxPollWaitMs: z
                 .number()
                 .int()
                 .positive()
-                .optional()
+
                 .prefault(fileConfigDefaults.geminiFileApi.maxPollWaitMs),
             fileStaleBeforeExpiryMinutes: z
                 .number()
                 .int()
                 .positive()
-                .optional()
+
                 .prefault(fileConfigDefaults.geminiFileApi.fileStaleBeforeExpiryMinutes),
         })
-        .optional()
+
         .prefault(fileConfigDefaults.geminiFileApi),
     cache: z
         .object({
-            geminiFileUrls: z.number().int().nonnegative().optional().prefault(fileConfigDefaults.cache.geminiFileUrls),
+            geminiFileUrls: z.number().int().nonnegative().prefault(fileConfigDefaults.cache.geminiFileUrls),
         })
-        .optional()
+
         .prefault(fileConfigDefaults.cache),
     discord: z
         .object({
-            chainLimit: z.number().int().positive().optional().prefault(fileConfigDefaults.discord.chainLimit),
-            retries: z.number().int().nonnegative().optional().prefault(fileConfigDefaults.discord.retries),
-            enableInDMs: z.boolean().optional().prefault(fileConfigDefaults.discord.enableInDMs),
+            chainLimit: z.number().int().positive().prefault(fileConfigDefaults.discord.chainLimit),
+            retries: z.number().int().nonnegative().prefault(fileConfigDefaults.discord.retries),
+            enableInDMs: z.boolean().prefault(fileConfigDefaults.discord.enableInDMs),
             previousBotId: z.string().optional(),
         })
-        .optional()
+
         .prefault(fileConfigDefaults.discord),
     geminiModels: z
         .object({
             /** Whether to include thought tokens in model responses. Useful for debugging. */
-            includeThoughts: z.boolean().optional().prefault(fileConfigDefaults.geminiModels.includeThoughts),
+            includeThoughts: z.boolean().prefault(fileConfigDefaults.geminiModels.includeThoughts),
         })
-        .optional()
+
         .prefault(fileConfigDefaults.geminiModels),
     agent: z.object({
         uploadAttachmentMode: z
             .string()
             .transform((v) => v.toLowerCase())
             .pipe(z.enum(ATTACHMENT_MODES))
-            .optional()
+
             .prefault(fileConfigDefaults.agent.uploadAttachmentMode),
         maxInlineAttachmentSizeMB: z
             .number()
             .int()
             .positive()
-            .optional()
+
             .prefault(fileConfigDefaults.agent.maxInlineAttachmentSizeMB),
         fallbackExecutionMode: z
             .string()
             .transform((v) => v.toLowerCase())
             .pipe(z.enum(FALLBACK_EXECUTION_MODES))
-            .optional()
+
             .prefault(fileConfigDefaults.agent.fallbackExecutionMode),
         nodes: z.object({
             triage: triageModelSchema,
@@ -302,10 +302,10 @@ const fileConfigSchema = z.object({
     ytDlp: z
         .object({
             httpProxy: z.url().optional(),
-            retries: z.number().int().nonnegative().optional().prefault(fileConfigDefaults.ytDlp.retries),
-            timeoutMs: z.number().int().positive().optional().prefault(fileConfigDefaults.ytDlp.timeoutMs),
+            retries: z.number().int().nonnegative().prefault(fileConfigDefaults.ytDlp.retries),
+            timeoutMs: z.number().int().positive().prefault(fileConfigDefaults.ytDlp.timeoutMs),
         })
-        .optional()
+
         .prefault(fileConfigDefaults.ytDlp),
 });
 
