@@ -996,16 +996,19 @@ describe("ResilientModelInvoker — sequential fallback execution", () => {
     test.each([
         ["503", make503Error, ModelOverloadedError],
         ["timeout", makeTimeoutError, ModelTimeoutError],
-    ] as const)("maps a main model %s to a model error when the node has no fallback model", async (_label, makeErr, ErrorClass) => {
-        const mainErr = makeErr();
+    ] as const)(
+        "maps a main model %s to a model error when the node has no fallback model",
+        async (_label, makeErr, ErrorClass) => {
+            const mainErr = makeErr();
 
-        const thrown = await makeInvoker()
-            .invokeWithPaidKeys(() => makeErrorModel(mainErr), undefined, [])
-            .catch((err: unknown) => err);
+            const thrown = await makeInvoker()
+                .invokeWithPaidKeys(() => makeErrorModel(mainErr), undefined, [])
+                .catch((err: unknown) => err);
 
-        expect(thrown).toBeInstanceOf(ErrorClass);
-        expect((thrown as InstanceType<typeof ErrorClass>).cause).toBe(mainErr);
-    });
+            expect(thrown).toBeInstanceOf(ErrorClass);
+            expect((thrown as InstanceType<typeof ErrorClass>).cause).toBe(mainErr);
+        },
+    );
 });
 
 // ---------------------------------------------------------------------------

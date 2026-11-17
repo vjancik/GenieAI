@@ -67,8 +67,8 @@ describe("FetchAttachmentDownloader", () => {
         await downloader.download(testAttachment);
         await downloader.download({ ...testAttachment, contentType: null }, "video/mp4");
 
-        expect((globalFetch.mock.calls[0]?.[1] as RequestInit).headers).toEqual(MEDIA_REQUEST_HEADERS);
-        expect((globalFetch.mock.calls[1]?.[1] as RequestInit).headers).toEqual({
+        expect((globalFetch.mock.calls[0]?.[1] as RequestInit | undefined)?.headers).toEqual(MEDIA_REQUEST_HEADERS);
+        expect((globalFetch.mock.calls[1]?.[1] as RequestInit | undefined)?.headers).toEqual({
             ...MEDIA_REQUEST_HEADERS,
             Accept: "video/mp4",
         });

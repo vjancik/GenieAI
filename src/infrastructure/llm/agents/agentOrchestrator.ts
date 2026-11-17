@@ -522,7 +522,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
 
         // automatic Sentry instrumentation doesn't work in Bun
         if (process.versions.bun && process.env.SENTRY_INITIALIZED) {
-            graph = Sentry.instrumentLangGraph(graph);
+            graph = Sentry.instrumentStateGraph(graph);
         }
 
         return graph.compile();

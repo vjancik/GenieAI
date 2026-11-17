@@ -64,9 +64,6 @@ async function initSentry() {
 
     Sentry.init({
         dsn: process.env.SENTRY_URL,
-        // Send structured logs to Sentry
-        enableLogs: true,
-        enableMetrics: true,
         // Tracing
         tracesSampleRate: 1.0, // Capture 100% of the transactions
         debug: process.env.SENTRY_DEBUG === "true" || false,
