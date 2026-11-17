@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { file } from "bun";
 import { splitMarkdown } from "../../../src/application/formatters/markdownSplitter.ts";
+import { checkPagination } from "../../helpers/markdownSplitInvariants.ts";
 
 // ---------------------------------------------------------------------------
 // Regression test: real payload from production error 2026-03-14
@@ -77,7 +78,7 @@ describe("splitMarkdown — regression: production over-limit page", () => {
           \`\`\`"
           ,
             "endedInCodeBlock": true,
-            "newOffset": 1919,
+            "newOffset": 1920,
             "pageCount": 2,
           }
         `);
@@ -157,6 +158,16 @@ function lines(numLines: number, lineLen: number): string {
     return Array.from({ length: numLines }, () => chars(lineLen)).join("\n");
 }
 
+/**
+ * Paginates `text` the way production does, asserts that every page satisfies the
+ * splitter's invariants, and returns the page contents.
+ */
+function paginate(text: string, limit: number, firstPageLimit?: number): string[] {
+    const report = checkPagination(text, limit, firstPageLimit);
+    expect(report.violations).toEqual([]);
+    return report.pages.map((page) => page.content);
+}
+
 describe("splitMarkdown — basic splitting", () => {
     it("returns full text and newOffset=text.length when under limit", () => {
         const text = "Hello\nWorld";
@@ -172,16 +183,15 @@ describe("splitMarkdown — basic splitting", () => {
         expect(result.newOffset).toBe(2000);
     });
 
-    it("splits at the last newline before the limit", () => {
-        // 1000 chars, newline, 1000 chars, newline, 1 char — total 2002 chars + 2 newlines
+    it("splits on a line boundary and consumes the line break", () => {
         const line1 = chars(1000);
         const line2 = chars(1000);
-        const line3 = "z";
-        const text = `${line1}\n${line2}\n${line3}`;
+        const text = `${line1}\n${line2}\nz`;
+        // line1 + \n + line2 is exactly 2001 chars; the third line no longer fits
         const result = splitMarkdown(text, 0, 2001);
-        // 1001 chars for line1+\n, plus 1000 for line2 = 2001 exactly — fits
         expect(result.content).toBe(`${line1}\n${line2}`);
-        expect(result.newOffset).toBe(line1.length + 1 + line2.length);
+        expect(result.newOffset).toBe(2002);
+        expect(splitMarkdown(text, result.newOffset, 2001).content).toBe("z");
     });
 
     it("handles empty string", () => {
@@ -192,16 +202,21 @@ describe("splitMarkdown — basic splitting", () => {
 
     it("continues correctly from a non-zero offset", () => {
         const text = "AAAA\nBBBB\nCCCC";
-        // Start from offset 5 (after "AAAA\n")
         const result = splitMarkdown(text, 5, 10);
         expect(result.content).toBe("BBBB\nCCCC");
         expect(result.newOffset).toBe(text.length);
     });
 
-    it("returns newOffset equal to text.length on the last page", () => {
-        const text = "line one\nline two\nline three";
-        const result = splitMarkdown(text, 0, 100);
+    it("resumes from an offset that points at a line break", () => {
+        // Offsets stored by the previous splitter pointed at the newline before the next line
+        const text = "AAAA\nBBBB";
+        const result = splitMarkdown(text, 4, 10);
+        expect(result.content.trim()).toBe("BBBB");
         expect(result.newOffset).toBe(text.length);
+    });
+
+    it("handles CRLF line endings", () => {
+        expect(paginate("AAAA\r\nBBBB\r\nCCCC", 10)).toEqual(["AAAA\r\nBBBB", "CCCC"]);
     });
 
     it("single line exceeding limit is hard-split with trailing ellipsis", () => {
@@ -210,6 +225,28 @@ describe("splitMarkdown — basic splitting", () => {
         const result = splitMarkdown(text, 0, 2000);
         expect(result.content).toBe(`${chars(1999)}…`);
         expect(result.newOffset).toBe(1999);
+    });
+
+    it("does not cut a surrogate pair in half when hard-splitting", () => {
+        const text = `${chars(8)}🚀${chars(20)}`;
+        // A cut at 9 would fall between the two halves of the emoji
+        const result = splitMarkdown(text, 0, 10);
+        expect(result.content).toBe(`${chars(8)}…`);
+        expect(result.newOffset).toBe(8);
+    });
+
+    it("consumes blank lines at a page boundary instead of opening the next page with them", () => {
+        expect(paginate("aaaa\n\n  \n\nbbbb", 4)).toEqual(["aaaa", "bbbb"]);
+    });
+
+    it("does not produce a trailing page for blank lines at the end of the text", () => {
+        const result = splitMarkdown("aaaa\n\n\n", 0, 4, { pageCount: true });
+        expect(result.content).toBe("aaaa");
+        expect(result.pageCount).toBe(1);
+    });
+
+    it("treats a limit below 1 as 1", () => {
+        expect(splitMarkdown("abc", 0, 0).content).toBe("a");
     });
 });
 
@@ -225,623 +262,210 @@ describe("splitMarkdown — regression: long single-line content (message1)", ()
         text = await file(new URL("data/markdownSplitterTest-message1.md", import.meta.url)).text();
     });
 
-    it("total text length exceeds 2000 characters", () => {
-        expect(text.length).toBeGreaterThan(2000);
-    });
-
-    it("splits into exactly 3 pages", () => {
-        const { pageCount } = splitMarkdown(text, 0, 2000, { pageCount: true });
-        expect(pageCount).toBe(3);
-    });
-
-    it("all 3 pages are non-empty and within the 2000-char limit", () => {
-        const page1 = splitMarkdown(text, 0, 2000);
-        const page2 = splitMarkdown(text, page1.newOffset, 2000);
-        const page3 = splitMarkdown(text, page2.newOffset, 2000);
-        for (const page of [page1, page2, page3]) {
-            expect(page.content.length).toBeGreaterThan(0);
-            expect(page.content.length).toBeLessThanOrEqual(2000);
-        }
+    it("splits into exactly 3 non-empty pages within the limit", () => {
+        const pages = paginate(text, 2000);
+        expect(pages).toHaveLength(3);
+        for (const page of pages) expect(page.length).toBeGreaterThan(0);
     });
 
     it("page 2 ends with the ellipsis (hard-split mid-line)", () => {
-        const page1 = splitMarkdown(text, 0, 2000);
-        const page2 = splitMarkdown(text, page1.newOffset, 2000);
-        expect(page2.content.endsWith("…")).toBe(true);
-    });
-
-    it("paginating step-by-step covers the full text", () => {
-        let offset = 0;
-        let pages = 0;
-        while (offset < text.length) {
-            const { newOffset } = splitMarkdown(text, offset, 2000);
-            expect(newOffset).toBeGreaterThan(offset);
-            offset = newOffset;
-            pages++;
-            if (pages > 10) break; // safety
-        }
-        expect(offset).toBe(text.length);
-        expect(pages).toBe(3);
+        expect(paginate(text, 2000)[1]?.endsWith("…")).toBe(true);
     });
 });
 
-describe("splitMarkdown — code block protection", () => {
-    it("does not split inside a fenced code block — closes block gracefully", () => {
-        // Build: preamble (safe) + code block that spans multiple lines
-        const preamble = "Some text before the block";
-        const codeBlock = `${FENCE}typescript\n${chars(500)}\n${chars(500)}\n${FENCE}`;
-        const text = `${preamble}\n${codeBlock}`;
-        // Limit is set so that the split would fall inside the code block
-        const limit = preamble.length + 1 + `${FENCE}typescript\n`.length + 100;
-        const result = splitMarkdown(text, 0, limit);
-        // The page must end with a synthetic closing fence (not truncated mid-line)
-        expect(result.content.endsWith(`\n${FENCE}`)).toBe(true);
-        // Content must start with the preamble
-        expect(result.content.startsWith(preamble)).toBe(true);
-        // newOffset must be strictly before the real closing fence in the original text
-        expect(result.newOffset).toBeLessThan(text.length);
-        expect(result.endedInCodeBlock).toBe(true);
-        expect(result.codeBlockType).toBe("typescript");
-    });
-
-    it("splits after a code block that ends before the limit", () => {
-        const codeBlock = "```\ncode\n```";
-        const after = "\nafter text";
-        const text = codeBlock + after;
+describe("splitMarkdown — code blocks", () => {
+    it("keeps a block that fits on the page intact", () => {
+        const text = `${FENCE}\ncode\n${FENCE}\nafter text`;
         const result = splitMarkdown(text, 0, 2000);
         expect(result.content).toBe(text);
+        expect(result.endedInCodeBlock).toBe(false);
+        expect(result.codeBlockType).toBeNull();
+    });
+
+    it("closes a block at the page boundary and re-opens it on the next page", () => {
+        const text = `intro\n${FENCE}ts\na1\na2\na3\na4\n${FENCE}\noutro`;
+        expect(paginate(text, 20)).toEqual([
+            `intro\n${FENCE}ts\na1\n${FENCE}`,
+            `${FENCE}ts\na2\na3\na4\n${FENCE}`,
+            "outro",
+        ]);
+    });
+
+    it("reports the open block's label, and an empty label for an unlabelled block", () => {
+        const labelled = splitMarkdown(`${FENCE}typescript\n${lines(5, 10)}\n${FENCE}`, 0, 40);
+        expect(labelled.endedInCodeBlock).toBe(true);
+        expect(labelled.codeBlockType).toBe("typescript");
+
+        const unlabelled = splitMarkdown(`${FENCE}\n${lines(5, 10)}\n${FENCE}`, 0, 40);
+        expect(unlabelled.endedInCodeBlock).toBe(true);
+        expect(unlabelled.codeBlockType).toBe("");
+    });
+
+    it("counts the re-opening header toward the limit and not toward the offset", () => {
+        const text = `${FENCE}typescript\n${lines(40, 20)}\n${FENCE}`;
+        const page1 = splitMarkdown(text, 0, 200);
+        const page2 = splitMarkdown(text, page1.newOffset, 200, { continuationCodeBlock: page1.codeBlockType });
+        expect(page2.content.startsWith(`${FENCE}typescript\n${chars(20)}\n`)).toBe(true);
+        expect(page2.content.length).toBeLessThanOrEqual(200);
+        // Every source character lands on exactly one page
+        expect(paginate(text, 200).join("").replaceAll(FENCE, "").replaceAll("typescript", "")).toMatch(/^[x\n]+$/);
+    });
+
+    it("moves the block to the next page when not even one body line fits behind the text", () => {
+        const block = `${FENCE}ts\n${chars(20)}\n${FENCE}`;
+        // The opening fence would still fit on page 1, but an opener without a body is never left behind
+        expect(paginate(`intro text\n${block}`, 30)).toEqual(["intro text", block]);
+    });
+
+    it("carries a body line over when the closing fence does not fit", () => {
+        // The whole block is 12 chars; the closing fence is what overflows
+        expect(paginate(`${FENCE}\nab\ncd\n${FENCE}`, 11)).toEqual([
+            `${FENCE}\nab\n${FENCE}`,
+            `${FENCE}\ncd\n${FENCE}`,
+        ]);
+    });
+
+    it("cuts a body line longer than a page inside the fences", () => {
+        const text = `${FENCE}js\n${chars(50)}\n${FENCE}`;
+        const pages = paginate(text, 20);
+        expect(pages[0]).toBe(`${FENCE}js\n${chars(9)}…\n${FENCE}`);
+        expect(pages[1]).toBe(`${FENCE}js\n${chars(9)}…\n${FENCE}`);
+        expect(pages.at(-1)?.endsWith(`\n${FENCE}`)).toBe(true);
+    });
+
+    it("closes a block the text ends in", () => {
+        const text = `${FENCE}py\nprint(1)`;
+        const result = splitMarkdown(text, 0, 2000);
+        expect(result.content).toBe(`${text}\n${FENCE}`);
         expect(result.newOffset).toBe(text.length);
+        expect(result.endedInCodeBlock).toBe(true);
+        expect(result.codeBlockType).toBe("py");
     });
 
-    it("splits into a code block gracefully when preamble + block would exceed limit", () => {
-        const preamble = lines(3, 100); // 3 lines of 100 chars = 302 chars with newlines
-        const codeLines = lines(20, 100); // 20 lines of 100 chars inside code block
-        const codeBlock = `${FENCE}\n${codeLines}\n${FENCE}`;
-        const text = `${preamble}\n${codeBlock}`;
-        // Limit just enough for preamble + opening fence, but not all code lines
-        const limit = preamble.length + 50;
-        const result = splitMarkdown(text, 0, limit);
-        // Page must contain the preamble and end with a synthetic closing fence
-        expect(result.content.startsWith(preamble)).toBe(true);
-        expect(result.content.endsWith(`\n${FENCE}`)).toBe(true);
-        expect(result.endedInCodeBlock).toBe(true);
-        // newOffset must be before the real closing fence
-        expect(result.newOffset).toBeLessThan(text.length);
+    it("splits an unterminated block so that its closing fence still fits", () => {
+        // 14 chars of text plus the synthetic fence would be 18
+        expect(paginate(`${FENCE}\nab\ncd\nefgh`, 16)).toEqual([
+            `${FENCE}\nab\ncd\n${FENCE}`,
+            `${FENCE}\nefgh\n${FENCE}`,
+        ]);
     });
 
-    it("gracefully closes a large code block that starts at the very beginning of the page", () => {
-        // Edge case: code block at offset 0 — opening fence fits, then content exceeds limit.
-        // New behavior: closes the block with a synthetic fence rather than hard-splitting.
-        const bigCodeBlock = `${FENCE}\n${chars(3000)}\n${FENCE}`;
-        const result = splitMarkdown(bigCodeBlock, 0, 100);
-        // Must end with the synthetic closing fence
+    it("does not treat a single-line fenced span as a block opener", () => {
+        const text = `${FENCE}inline${FENCE}\n${lines(6, 10)}`;
+        const report = checkPagination(text, 30);
+        expect(report.violations).toEqual([]);
+        expect(report.pages.length).toBeGreaterThan(1);
+        for (const page of report.pages) expect(page.endedInCodeBlock).toBe(false);
+    });
+
+    it("recognizes an indented fence", () => {
+        const result = splitMarkdown(`  ${FENCE}sh\n${lines(5, 10)}\n  ${FENCE}`, 0, 40);
+        expect(result.codeBlockType).toBe("sh");
         expect(result.content.endsWith(`\n${FENCE}`)).toBe(true);
-        // newOffset is after the opening fence only — not 100 characters in
-        expect(result.newOffset).toBeGreaterThan(0);
-        expect(result.newOffset).toBeLessThan(bigCodeBlock.length);
-        expect(result.endedInCodeBlock).toBe(true);
+    });
+
+    it("ignores table rows inside a code block", () => {
+        const text = `${FENCE}\n| a |\n| b |\n| c |\n| d |\n${FENCE}`;
+        expect(paginate(text, 20)).toEqual([`${FENCE}\n| a |\n| b |\n${FENCE}`, `${FENCE}\n| c |\n| d |\n${FENCE}`]);
     });
 });
 
-describe("splitMarkdown — table protection", () => {
-    it("does not split inside a markdown table", () => {
-        const preamble = "Before the table";
-        const table = "| Col A | Col B |\n| --- | --- |\n| val1 | val2 |\n| val3 | val4 |";
-        const text = `${preamble}\n${table}`;
-        // Limit just enough to cut into the table without protection
-        const limit = preamble.length + 1 + "| Col A | Col B |".length + 5;
-        const result = splitMarkdown(text, 0, limit);
-        // Must not split inside the table
-        expect(result.content).toBe(preamble);
-        expect(result.newOffset).toBe(preamble.length);
+describe("splitMarkdown — tables", () => {
+    const table = "| Col A | Col B |\n| --- | --- |\n| val1 | val2 |\n| val3 | val4 |";
+
+    it("moves a table to the next page instead of splitting it", () => {
+        const text = `Before the table\n${table}\nAfter`;
+        // Enough room to cut into the table, not enough for all of it
+        expect(paginate(text, table.length + 6)).toEqual(["Before the table", `${table}\nAfter`]);
     });
 
-    it("splits after a table that ends before the limit", () => {
-        const table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
-        const after = "\nsome text after";
-        const text = table + after;
-        const result = splitMarkdown(text, 0, 2000);
-        expect(result.content).toBe(text);
-        expect(result.newOffset).toBe(text.length);
+    it("keeps a table that fits on the page intact", () => {
+        const text = `${table}\nsome text after`;
+        expect(splitMarkdown(text, 0, 2000).content).toBe(text);
     });
 
-    it("splits before a table when preamble + table would exceed limit", () => {
-        const preamble = "Intro paragraph\nwith two lines";
-        const tableRow = `| ${chars(80)} | ${chars(80)} |`;
-        const table = `${tableRow}\n| --- | --- |\n${tableRow}\n${tableRow}\n${tableRow}`;
-        const text = `${preamble}\n${table}`;
-        const limit = preamble.length + 50; // enough for preamble, not table
-        const result = splitMarkdown(text, 0, limit);
-        expect(result.content).toBe(preamble);
-        expect(result.newOffset).toBe(preamble.length);
+    it("splits right after a table when the following text does not fit", () => {
+        expect(paginate(`intro\n${table}\nsome text after`, table.length + 6)).toEqual([
+            `intro\n${table}`,
+            "some text after",
+        ]);
+    });
+
+    it("splits a table longer than a page between rows", () => {
+        const rows = Array.from({ length: 10 }, (_, i) => `| row ${i} |`);
+        const pages = paginate(rows.join("\n"), 30);
+        expect(pages).toEqual([
+            rows.slice(0, 3).join("\n"),
+            rows.slice(3, 6).join("\n"),
+            rows.slice(6, 9).join("\n"),
+            rows.slice(9).join("\n"),
+        ]);
     });
 });
 
 describe("splitMarkdown — pageCount option", () => {
     it("returns pageCount=1 for text under limit", () => {
-        const text = "Short text";
-        const result = splitMarkdown(text, 0, 2000, { pageCount: true });
-        expect(result.pageCount).toBe(1);
+        expect(splitMarkdown("short text", 0, 2000, { pageCount: true }).pageCount).toBe(1);
     });
 
-    it("returns pageCount=1 for empty text", () => {
+    it("returns pageCount=1 and empty content for empty text", () => {
         const result = splitMarkdown("", 0, 2000, { pageCount: true });
         expect(result.pageCount).toBe(1);
-    });
-
-    it("returns correct pageCount for two-page text", () => {
-        // Two lines of 1000 chars each joined by \n = 2001 chars total.
-        // Limit 1001: page 1 fits "line1\n" (1001 chars) but not line2, page 2 gets line2.
-        const line = chars(1000);
-        const text = `${line}\n${line}`;
-        const result = splitMarkdown(text, 0, 1001, { pageCount: true });
-        expect(result.pageCount).toBe(2);
-    });
-
-    it("pageCount is consistent: paginating step-by-step reaches end in exactly pageCount steps", () => {
-        // 5 lines of 500 chars, limit = 1001 (each page holds at most 2 lines)
-        const line = chars(500);
-        const text = [line, line, line, line, line].join("\n");
-        const limit = 1001;
-        const { pageCount } = splitMarkdown(text, 0, limit, { pageCount: true });
-
-        let steps = 0;
-        let offset = 0;
-        while (offset < text.length) {
-            const { newOffset } = splitMarkdown(text, offset, limit);
-            expect(newOffset).toBeGreaterThan(offset); // always makes progress
-            offset = newOffset;
-            steps++;
-        }
-
-        expect(steps).toBe(pageCount ?? 0);
+        expect(result.content).toBe("");
     });
 
     it("does not include pageCount when option not passed", () => {
-        const result = splitMarkdown("hello\nworld", 0, 2000);
-        expect(result.pageCount).toBeUndefined();
-    });
-});
-
-describe("splitMarkdown — offset continuation", () => {
-    it("pages through text completely when called sequentially", () => {
-        // 10 lines of 300 chars, limit=601 (2 lines per page)
-        const line = chars(300);
-        const text = Array.from({ length: 10 }, () => line).join("\n");
-        const limit = 601;
-
-        const pages: string[] = [];
-        let offset = 0;
-        while (offset < text.length) {
-            const { content, newOffset } = splitMarkdown(text, offset, limit);
-            pages.push(content);
-            if (newOffset <= offset) break; // safety
-            offset = newOffset;
-        }
-
-        // Pages are split at the \n boundary; the boundary \n is consumed and becomes
-        // the first character of the next page's slice, so joining with "" reconstructs the original.
-        expect(pages.join("")).toBe(text);
+        expect(splitMarkdown("some text", 0, 2000).pageCount).toBeUndefined();
     });
 
-    it("final page newOffset equals text.length", () => {
-        const text = "aaa\nbbb\nccc";
-        let offset = 0;
-        let lastNewOffset = 0;
-        while (offset < text.length) {
-            const { newOffset } = splitMarkdown(text, offset, 5);
-            lastNewOffset = newOffset;
-            if (newOffset <= offset) break;
-            offset = newOffset;
-        }
-        expect(lastNewOffset).toBe(text.length);
-    });
-});
-
-describe("splitMarkdown — endedInCodeBlock / codeBlockType fields", () => {
-    it("endedInCodeBlock is false and codeBlockType is null for normal splits", () => {
-        const text = "line one\nline two\nline three";
-        const result = splitMarkdown(text, 0, 2000);
-        expect(result.endedInCodeBlock).toBe(false);
-        expect(result.codeBlockType).toBeNull();
+    it("matches the number of pages produced step by step", () => {
+        const text = `${lines(10, 150)}\n${FENCE}ts\n${lines(30, 60)}\n${FENCE}\n${lines(10, 150)}`;
+        const report = checkPagination(text, 500);
+        expect(report.violations).toEqual([]);
+        expect(report.pageCount).toBe(report.pages.length);
+        expect(report.pages.length).toBeGreaterThan(5);
     });
 
-    it("appends closing fence and sets endedInCodeBlock when split falls inside a labelled code block", () => {
-        // preamble + opening fence + code lines (too many to fit in limit)
-        const preamble = "intro\n";
-        const open = `${FENCE}typescript\n`;
-        const codeLine = chars(100);
-        // limit: fits preamble + open fence + 2 code lines, but not all of them
-        const limit = preamble.length + open.length + (codeLine.length + 1) * 2 + 10;
-        const text = `${preamble}${open}${Array.from({ length: 10 }, () => codeLine).join("\n")}\n${FENCE}`;
-
-        const result = splitMarkdown(text, 0, limit);
-
-        expect(result.endedInCodeBlock).toBe(true);
-        expect(result.codeBlockType).toBe("typescript");
-        // Content must end with the synthetic closing fence
-        expect(result.content.endsWith(`\n${FENCE}`)).toBe(true);
-        // newOffset must not include the synthetic fence characters
-        expect(text.slice(result.newOffset)).not.toBe("");
-    });
-
-    it("sets endedInCodeBlock for an unlabelled code block", () => {
-        const preamble = "before\n";
-        const open = `${FENCE}\n`;
-        const codeLine = chars(100);
-        const limit = preamble.length + open.length + codeLine.length + 10;
-        const text = `${preamble}${open}${Array.from({ length: 5 }, () => codeLine).join("\n")}\n${FENCE}`;
-
-        const result = splitMarkdown(text, 0, limit);
-
-        expect(result.endedInCodeBlock).toBe(true);
-        expect(result.codeBlockType).toBe("");
-    });
-
-    it("endedInCodeBlock is false after a code block that fits entirely on the page", () => {
-        const text = `${FENCE}typescript\ncode here\n${FENCE}\nafter`;
-        const result = splitMarkdown(text, 0, 2000);
-        expect(result.endedInCodeBlock).toBe(false);
-        expect(result.codeBlockType).toBeNull();
-    });
-});
-
-describe("splitMarkdown — code block continuation (2-page)", () => {
-    it("continuation header is prepended on page 2 and does not shift newOffset", () => {
-        const preamble = "intro\n";
-        const open = `${FENCE}typescript\n`;
-        const codeLines = Array.from({ length: 10 }, () => chars(80)).join("\n");
-        const text = `${preamble}${open}${codeLines}\n${FENCE}\nafter`;
-
-        // Limit that forces a split inside the code block
-        const limit = preamble.length + open.length + chars(80).length + 10;
-
-        const page1 = splitMarkdown(text, 0, limit);
-        expect(page1.endedInCodeBlock).toBe(true);
-        expect(page1.codeBlockType).toBe("typescript");
-
-        // Page 2: pass the continuation
-        const page2 = splitMarkdown(text, page1.newOffset, limit, {
-            continuationCodeBlock: page1.codeBlockType,
-        });
-
-        // Content must start with the re-opening fence
-        expect(page2.content.startsWith(`${FENCE}typescript\n`)).toBe(true);
-        // newOffset must advance past page1.newOffset
-        expect(page2.newOffset).toBeGreaterThan(page1.newOffset);
-    });
-
-    it("page 2 with continuation does not double-count continuation header in newOffset", () => {
-        // The continuation header is cosmetic — newOffset must reflect only real text chars
-        const open = `${FENCE}ts\n`;
-        const codeLines = Array.from({ length: 6 }, () => chars(50)).join("\n");
-        const text = `${open}${codeLines}\n${FENCE}`;
-        const limit = open.length + chars(50).length * 2 + 5;
-
-        const page1 = splitMarkdown(text, 0, limit);
-        const page2 = splitMarkdown(text, page1.newOffset, limit, {
-            continuationCodeBlock: page1.codeBlockType,
-        });
-
-        // Joining page1 raw offset slice + page2 raw offset slice must cover all real text
-        const covered = text.slice(0, page1.newOffset) + text.slice(page1.newOffset, page2.newOffset);
-        expect(covered).toBe(text.slice(0, page2.newOffset));
-        // The continuation header must NOT appear in the raw text at page1.newOffset
-        expect(text.slice(page1.newOffset).startsWith(FENCE)).toBe(false);
-    });
-
-    it("null continuationCodeBlock produces no prepended header", () => {
-        const text = "just text\nmore text";
-        const result = splitMarkdown(text, 0, 2000, { continuationCodeBlock: null });
-        expect(result.content.startsWith(FENCE)).toBe(false);
-    });
-});
-
-describe("splitMarkdown — code block continuation (3-page)", () => {
-    /**
-     * Helper: simulate the full pagination loop the way the real caller does it,
-     * threading endedInCodeBlock/codeBlockType as continuationCodeBlock each time.
-     * Returns the array of page results.
-     */
-    function paginateWithContinuation(text: string, limit: number): Array<ReturnType<typeof splitMarkdown>> {
-        const pages: Array<ReturnType<typeof splitMarkdown>> = [];
-        let offset = 0;
-        let continuationCodeBlock: string | null = null;
-
-        while (offset < text.length) {
-            const result = splitMarkdown(text, offset, limit, { continuationCodeBlock });
-            pages.push(result);
-            if (result.newOffset <= offset) break; // safety: no progress
-            offset = result.newOffset;
-            continuationCodeBlock = result.endedInCodeBlock ? result.codeBlockType : null;
-        }
-
-        return pages;
-    }
-
-    it("3 pages: all newOffsets are distinct and cover the full text exactly once", () => {
-        // Construct text that forces exactly 3 pages with a code block spanning all of them
-        const open = `${FENCE}python\n`;
-        const codeLine = chars(60);
-        // 30 code lines so the block is long enough to span 3 pages
-        const codeLines = Array.from({ length: 30 }, () => codeLine).join("\n");
-        const text = `preamble\n${open}${codeLines}\n${FENCE}`;
-        // Limit: fits preamble + open + ~3 code lines per page
-        const limit = "preamble\n".length + open.length + (codeLine.length + 1) * 3 + 5;
-
-        const pages = paginateWithContinuation(text, limit);
-        expect(pages.length).toBeGreaterThanOrEqual(3);
-
-        // Offsets must be strictly increasing
-        for (let i = 1; i < pages.length; i++) {
-            const page = pages[i];
-            const prevPage = pages[i - 1];
-            if (!page || !prevPage) throw new Error(`Missing page at index ${i}`);
-            expect(page.newOffset).toBeGreaterThan(prevPage.newOffset);
-        }
-
-        // Last newOffset must equal text.length
-        const lastPage = pages.at(-1);
-        if (!lastPage) throw new Error("pages array is empty");
-        expect(lastPage.newOffset).toBe(text.length);
-    });
-
-    it("3 pages: stripping synthetic fences from page contents and joining reconstructs original text", () => {
-        const open = `${FENCE}javascript\n`;
-        const codeLine = chars(70);
-        const codeLines = Array.from({ length: 24 }, () => codeLine).join("\n");
-        const text = `header line\n${open}${codeLines}\n${FENCE}\nfooter line`;
-        const limit = "header line\n".length + open.length + (codeLine.length + 1) * 4 + 5;
-
-        const pages = paginateWithContinuation(text, limit);
-        expect(pages.length).toBeGreaterThanOrEqual(3);
-
-        // Strip synthetic fences: closing ``` added at end of a mid-block page,
-        // and re-opening ```{lang}\n prepended at start of a continuation page.
-        // The real text at each page is text.slice(prevOffset, page.newOffset).
-        let reconstructed = "";
-        let prevOffset = 0;
+    it("returns the page at the requested offset, re-opening header included", () => {
+        const text = `${FENCE}ts\n${lines(30, 60)}\n${FENCE}`;
+        const { pages, pageCount } = checkPagination(text, 500);
         for (const page of pages) {
-            reconstructed += text.slice(prevOffset, page.newOffset);
-            prevOffset = page.newOffset;
-        }
-        expect(reconstructed).toBe(text);
-    });
-
-    it("3 pages: no line is emitted twice or omitted — content length accounting", () => {
-        const open = `${FENCE}rust\n`;
-        const codeLine = chars(55);
-        const codeLines = Array.from({ length: 20 }, () => codeLine).join("\n");
-        const text = `${open}${codeLines}\n${FENCE}`;
-        const limit = open.length + (codeLine.length + 1) * 3 + 5;
-
-        const pages = paginateWithContinuation(text, limit);
-        expect(pages.length).toBeGreaterThanOrEqual(3);
-
-        // Each page's newOffset minus the previous one = the real character count consumed
-        // from the original text on that page. Their sum must equal text.length exactly.
-        const allOffsets = [0, ...pages.map((p) => p.newOffset)];
-        const realCharCounts = allOffsets.slice(1).map((end, i) => end - (allOffsets[i] ?? 0));
-        const total = realCharCounts.reduce((sum, n) => sum + n, 0);
-        expect(total).toBe(text.length);
-    });
-
-    it("3 pages: middle page has continuation header when it spans a code block", () => {
-        const open = `${FENCE}go\n`;
-        const codeLine = chars(65);
-        const codeLines = Array.from({ length: 18 }, () => codeLine).join("\n");
-        const text = `preamble\n${open}${codeLines}\n${FENCE}\npostamble`;
-        const limit = "preamble\n".length + open.length + (codeLine.length + 1) * 3 + 5;
-
-        const pages = paginateWithContinuation(text, limit);
-        expect(pages.length).toBeGreaterThanOrEqual(3);
-
-        // Middle page(s) that are still inside the code block must have a continuation header
-        for (let i = 1; i < pages.length - 1; i++) {
-            const prev = pages[i - 1];
-            const curr = pages[i];
-            if (!prev || !curr) throw new Error(`Missing page at index ${i}`);
-            if (prev.endedInCodeBlock) {
-                expect(curr.content.startsWith(`${FENCE}go\n`)).toBe(true);
-            }
+            const lookedUp = splitMarkdown(text, page.offset, 500, { pageCount: true });
+            expect(lookedUp.content).toBe(page.content);
+            expect(lookedUp.newOffset).toBe(page.newOffset);
+            expect(lookedUp.pageCount).toBe(pageCount);
         }
     });
-
-    it("3 pages: pageCount from extractAllPages matches step-by-step pagination count", () => {
-        const open = `${FENCE}bash\n`;
-        const codeLine = chars(50);
-        const codeLines = Array.from({ length: 18 }, () => codeLine).join("\n");
-        const text = `intro\n${open}${codeLines}\n${FENCE}`;
-        const limit = "intro\n".length + open.length + (codeLine.length + 1) * 3 + 5;
-
-        const { pageCount } = splitMarkdown(text, 0, limit, { pageCount: true });
-        const pages = paginateWithContinuation(text, limit);
-        expect(typeof pageCount).toBe("number");
-        expect(pages.length).toBe(pageCount as number);
-    });
 });
 
 // ---------------------------------------------------------------------------
-// Edge cases: closing fence doesn't fit (lines 211-228)
+// Invariant sweep over a fixture that packs every tricky construct into one text.
+// The limits were picked from a brute-force run over 1..2000 so that together they
+// hit every kind of page boundary (see tests/helpers/markdownSplitInvariants.ts).
 // ---------------------------------------------------------------------------
-describe("splitMarkdown — closing fence doesn't fit at limit", () => {
-    it("closing fence line itself exceeds the limit: splits at last newline inside block, signals endedInCodeBlock", () => {
-        // Build a code block where the closing fence line (4 chars: \n```) would push past limit.
-        // Structure:  "safe\n```\nA\nB\n```"
-        // We want the limit to allow everything up to B but NOT the closing fence line.
-        // CODE_FENCE_CLOSE = "\n```" (4 chars). "\n```" is the closing fence line.
-        // Construct text where everything fits except the last ``` line.
-        const body = "safe\n```\nA\nB";
-        // Adding "\n```" (4 chars) as the closing fence line exceeds the limit
-        const text = `${body}\n\`\`\``;
-        // limit: just enough to hold everything up to B, but not "\n```" (closing fence)
-        // body.length = 12, text.length = 16, limit = 15 means the "\n```" (last 4) doesn't fit
-        const limit = body.length; // 12 — fits body exactly but not "\n```"
+describe("splitMarkdown — invariants on the fuzz fixture", () => {
+    // Too small for fence markup: only size, progress and coverage can hold
+    const DEGENERATE_LIMITS = [1, 2, 5, 13, 19, 20, 63];
+    const BOUNDARY_LIMITS = [
+        64, 66, 68, 69, 78, 81, 84, 87, 93, 99, 101, 115, 116, 118, 123, 147, 151, 189, 192, 195, 217, 224, 356,
+    ];
+    const REALISTIC_LIMITS = [500, 1000, 1847, 2000];
 
-        const result = splitMarkdown(text, 0, limit);
-        // Should split inside the block, close with synthetic fence, signal continuation
-        expect(result.endedInCodeBlock).toBe(true);
-        expect(result.content.length).toBeLessThanOrEqual(limit);
-        expect(result.content).toContain("```");
+    let variants: Record<string, string>;
+    beforeAll(async () => {
+        const lf = await file(new URL("data/markdownSplitterTest-fuzz.md", import.meta.url)).text();
+        variants = { LF: lf, CRLF: lf.replaceAll("\n", "\r\n") };
     });
 
-    it("closing fence doesn't fit and no viable newline inside block: falls back to hard split", () => {
-        // Single line inside a code block, no newlines.
-        // Lines split as lookahead on \n: ["```", "\nx"*50, "\n```"].
-        // accumulated after opening fence ("```") = 3 chars.
-        // CODE_FENCE_CLOSE = "\n```" = 4 chars.
-        // limit = 6: accumulated(3) + fence(4) = 7 > 6, so fence doesn't fit.
-        // fenceRoom = 6 - 4 = 2, searchRegion = "``" (no \n), lastNl = -1.
-        // lastSafeLength = 0 → raw hard-cut: text.slice(0, limit), no ellipsis.
-        const longLine = "x".repeat(50);
-        const text = `\`\`\`\n${longLine}\n\`\`\``;
-        const limit = 6;
-
-        const result = splitMarkdown(text, 0, limit);
-        expect(result.content.length).toBeLessThanOrEqual(limit);
-        expect(result.newOffset).toBe(limit);
-        expect(result.endedInCodeBlock).toBe(false);
-    });
-});
-
-// ---------------------------------------------------------------------------
-// Edge cases: table hard-split when lastSafeLength=0 (lines 233-240)
-// ---------------------------------------------------------------------------
-describe("splitMarkdown — table starts at position 0 (no safe backup)", () => {
-    it("hard-splits when table begins at offset 0 and immediately exceeds limit", () => {
-        // Table row that is longer than the limit — no safe position before table
-        const row = `| ${"A".repeat(100)} |`;
-        const text = `${row}\n| --- |\n| cell |`;
-        const limit = 20;
-
-        const result = splitMarkdown(text, 0, limit);
-        // Must not exceed limit and must make forward progress
-        expect(result.content.length).toBeLessThanOrEqual(limit);
-        expect(result.newOffset).toBeGreaterThan(0);
-    });
-});
-
-// ---------------------------------------------------------------------------
-// Edge cases: code block — accumulated=0 hard-split (lines 254-261)
-// ---------------------------------------------------------------------------
-describe("splitMarkdown — code block with accumulated=0 (opening fence exceeds limit)", () => {
-    it("hard-splits when the opening fence line itself is the only content and it exceeds limit", () => {
-        // The opening fence + first code line together exceed the limit, AND accumulated
-        // at the point of overflow is 0 (nothing before the fence)
-        // Text: "```typescript\n" + long line
-        // limit: smaller than the opening fence line length so accumulated=0 when overflow fires
-        const openFence = "```typescript\n";
-        const longLine = "x".repeat(100);
-        const text = openFence + longLine;
-        // limit smaller than openFence — no prior safe position, accumulated is 0 at check
-        const limit = 5;
-
-        const result = splitMarkdown(text, 0, limit);
-        expect(result.content.length).toBeLessThanOrEqual(limit);
-        expect(result.newOffset).toBeGreaterThan(0);
-    });
-});
-
-// ---------------------------------------------------------------------------
-// Edge cases: code block where fence doesn't fit and no lastNl > codeBlockStart
-// → fall back to lastSafeLength (lines 288-305)
-// ---------------------------------------------------------------------------
-describe("splitMarkdown — code block: fence doesn't fit, no viable split inside block, has safe fallback", () => {
-    it("falls back to pre-block safe content when fence doesn't fit and no split inside block is possible", () => {
-        // Build:  "safe-line\n```\n<one-very-long-line-no-newline>"
-        // Lines split as lookahead on \n: ["safe-line", "\n```", "\ny"*100].
-        // accumulated after opening fence ("safe-line\n```") = 13 chars.
-        // CODE_FENCE_CLOSE = "\n```" = 4 chars.
-        // limit = 16: accumulated(13) + fence(4) = 17 > 16, so fence doesn't fit.
-        // fenceRoom = 16 - 4 = 12, searchRegion = "safe-line\n``" (12 chars).
-        // lastNl = 9 (the \n before ```), codeBlockStartLength = 13.
-        // lastNl(9) > codeBlockStartLength(13) is false → fall back to lastSafeLength(9).
-        // safeContent = accumulated.slice(0, 9) = "safe-line", endedInCodeBlock=false.
-        const safeLine = "safe-line";
-        const openFence = "```";
-        const codeLine = "y".repeat(100);
-        const text = `${safeLine}\n${openFence}\n${codeLine}`;
-        const limit = 16;
-
-        const result = splitMarkdown(text, 0, limit);
-        expect(result.endedInCodeBlock).toBe(false);
-        // safeContent = "safe-line" (last safe point before the block opened)
-        expect(result.content).toBe(safeLine);
-        expect(result.newOffset).toBe(safeLine.length);
-    });
-});
-
-// ---------------------------------------------------------------------------
-// Edge cases: unclosed code block at end of text, fence would not fit (lines 339-344)
-// ---------------------------------------------------------------------------
-describe("splitMarkdown — unclosed code block at end of text where fence exceeds limit", () => {
-    it("returns content without closing fence when adding it would exceed the limit", () => {
-        // Build text where the entire content fits within limit BUT adding \n``` (4 chars) would overflow.
-        // "```\nabc" — 7 chars. If limit = 7, adding \n``` (4 chars) = 11 > 7.
-        const text = "```\nabc";
-        const limit = text.length; // exactly 7 — fence ("\n```" = 4) would make it 11
-
-        const result = splitMarkdown(text, 0, limit);
-        // Falls into the "no room for fence" branch: returns content as-is without synthetic fence
-        expect(result.endedInCodeBlock).toBe(false);
-        expect(result.content).toBe(text);
-        expect(result.newOffset).toBe(text.length);
-    });
-
-    it("appends closing fence and signals endedInCodeBlock when fence fits within limit", () => {
-        // "```\nabc" — 7 chars. With limit=12: 7+4=11 <= 12, fence fits.
-        const text = "```\nabc";
-        const limit = 12;
-
-        const result = splitMarkdown(text, 0, limit);
-        expect(result.endedInCodeBlock).toBe(true);
-        expect(result.content).toBe(`${text}\n\`\`\``);
-        expect(result.newOffset).toBe(text.length);
-    });
-});
-
-// ---------------------------------------------------------------------------
-// Edge cases: isClosingFence hard split (lines 226-228) when lastNl <= 0
-// ---------------------------------------------------------------------------
-describe("splitMarkdown — isClosingFence: no viable newline, falls to hardSplit", () => {
-    it("hard-splits when closing fence doesn't fit and searchRegion has no newline", () => {
-        // "```\n\n```": opening fence ("```" = 3), empty line ("\n" = 1), closing fence ("\n```" = 4).
-        // accumulated after processing "```" (3) and "\n" (1) = "```\n" (4 chars).
-        // limit=6: closing fence "\n```" (4 chars): 4+4=8 > 6. Doesn't fit.
-        // isClosingFence=true. fenceRoom=6-4=2. searchRegion="``" (no \n). lastNl=-1.
-        // -1 > 0 is false → hardSplit(text, 0, 6). cutoff=5. content="```\n\n"+"…" = 6 chars.
-        const text = "```\n\n```";
-        const limit = 6;
-
-        const result = splitMarkdown(text, 0, limit);
-        expect(result.content.length).toBeLessThanOrEqual(limit);
-        expect(result.content).toMatch(/…$/);
-        expect(result.endedInCodeBlock).toBe(false);
-    });
-});
-
-// ---------------------------------------------------------------------------
-// Edge cases: inCodeBlock fence doesn't fit, lastNl > codeBlockStartLength (lines 281-287)
-// ---------------------------------------------------------------------------
-describe("splitMarkdown — inCodeBlock: fence doesn't fit, splits at newline inside block", () => {
-    it("splits at the last newline inside the block when fence doesn't fit but a newline exists after the opening fence", () => {
-        // "```\nline1\nline2\nverylonglinethatpushesitover"
-        // Lines (lookahead split): ["```", "\nline1", "\nline2", "\nverylongline..."]
-        // accumulated after "```"(3) + "\nline1"(6) + "\nline2"(6) = "```\nline1\nline2" (15 chars).
-        // codeBlockStartLength = 3 (after opening fence "```").
-        // Next line "\nverylongline..." (many chars) causes overflow.
-        // limit=18: accumulated(15) + fence(4) = 19 > 18. Fence doesn't fit.
-        // fenceRoom=18-4=14. searchRegion="```\nline1\nline" (14 chars).
-        // lastNl = position of last \n in searchRegion = 10 (before "line2" partial).
-        // 10 > codeBlockStartLength(3) → split at position 10.
-        // content = accumulated.slice(0,10) + "\n```" = "```\nline1\n" + "\n```"
-        const text = `\`\`\`\nline1\nline2\n${"x".repeat(50)}`;
-        const limit = 18;
-
-        const result = splitMarkdown(text, 0, limit);
-        expect(result.endedInCodeBlock).toBe(true);
-        expect(result.content.length).toBeLessThanOrEqual(limit);
-        expect(result.content).toContain("```\nline1");
-        expect(result.newOffset).toBeLessThan(text.length);
-    });
+    for (const lineEnding of ["LF", "CRLF"]) {
+        for (const limit of [...DEGENERATE_LIMITS, ...BOUNDARY_LIMITS, ...REALISTIC_LIMITS]) {
+            it(`holds at limit ${limit} (${lineEnding})`, () => {
+                const text = variants[lineEnding] ?? "";
+                expect(text.length).toBeGreaterThan(10_000);
+                expect(checkPagination(text, limit).violations).toEqual([]);
+                // A shorter first page, as when page 1 carries a reply prefix and footer
+                expect(checkPagination(text, limit, Math.max(1, limit - 37)).violations).toEqual([]);
+            });
+        }
+    }
 });
