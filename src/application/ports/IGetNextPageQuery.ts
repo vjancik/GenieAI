@@ -25,10 +25,6 @@ export interface NextPageData {
     currentPage: number;
     /** Total number of pages in this response. */
     totalPages: number;
-    /** True when the previous page ended mid-way through a fenced code block. */
-    endedInCodeBlock: boolean;
-    /** Syntax label of the open code block (e.g. `"typescript"`), or `null`. */
-    codeBlockType: string | null;
     /**
      * The serialized LangChain messages from the first-page messages row.
      * The last entry is the final AI response whose text is paginated.

@@ -71,6 +71,13 @@
             "when": 1794854206389,
             "tag": "0009_fat_owl",
             "breakpoints": true
+        },
+        {
+            "idx": 10,
+            "version": "7",
+            "when": 1794880833685,
+            "tag": "0010_silky_the_order",
+            "breakpoints": true
         }
     ]
 }

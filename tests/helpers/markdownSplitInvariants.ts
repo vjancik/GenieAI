@@ -3,8 +3,8 @@ import { splitMarkdown } from "../../src/application/formatters/markdownSplitter
 /**
  * Invariant checker for {@link splitMarkdown}, shared by the brute-force fuzz run
  * and the unit tests. It paginates a text the way production does (page 1 with
- * `pageCount`, later pages by stored offset and code block label) and checks every
- * page against a reference scan of the source that is independent of the splitter.
+ * `pageCount`, later pages by stored offset alone) and checks every page against a
+ * reference scan of the source that is independent of the splitter.
  */
 
 const FENCE = "```";
@@ -23,8 +23,6 @@ export interface SplitPage {
     offset: number;
     content: string;
     newOffset: number;
-    endedInCodeBlock: boolean;
-    codeBlockType: string | null;
     /** Limit that applied to this page. */
     limit: number;
 }
@@ -44,9 +42,9 @@ interface SourceRange {
 
 interface SourceCodeBlock {
     label: string;
-    /** First offset at which a page boundary lies inside the block (start of its body). */
-    bodyStart: number;
-    /** Last such offset (start of the closing fence, or end of text if unterminated). */
+    /** Start of the opening fence line. A page boundary past it lies inside the block. */
+    openerStart: number;
+    /** Last boundary inside the block (start of the closing fence, or end of text if unterminated). */
     bodyEnd: number;
 }
 
@@ -77,7 +75,7 @@ function scanSource(text: string): SourceStructure {
             }
         } else if (startsWithFence && !trimmed.slice(FENCE.length).includes(FENCE)) {
             openTable = null;
-            openCode = { label: trimmed.slice(FENCE.length).trimEnd(), bodyStart: next, bodyEnd: text.length };
+            openCode = { label: trimmed.slice(FENCE.length).trimEnd(), openerStart: start, bodyEnd: text.length };
             codeBlocks.push(openCode);
         } else if (trimmed.startsWith("|")) {
             if (!openTable) {
@@ -122,27 +120,32 @@ export function checkPagination(text: string, limit: number, firstPageLimit: num
 
     for (let previous = pages[0]; previous && previous.newOffset < text.length; previous = pages.at(-1)) {
         if (previous.newOffset <= previous.offset) break;
-        const page = splitMarkdown(text, previous.newOffset, limit, {
-            continuationCodeBlock: previous.endedInCodeBlock ? previous.codeBlockType : null,
-        });
+        const page = splitMarkdown(text, previous.newOffset, limit);
         pages.push({ ...page, offset: previous.newOffset, limit });
     }
+
+    /** Label of the code block a page boundary at `boundary` falls into, per the reference scan. */
+    const openLabelAt = (boundary: number): string | null => {
+        const block = source.codeBlocks.find((b) => boundary > b.openerStart && boundary <= b.bodyEnd);
+        return block ? block.label : null;
+    };
 
     pages.forEach((page, index) => {
         const where = `limit ${limit}/${firstPageLimit}, page ${index + 1} @${page.offset}`;
         const fail = (message: string) => violations.push(`${where}: ${message}`);
-        const previous = index > 0 ? pages[index - 1] : undefined;
 
         if (page.content.length > page.limit) fail(`content is ${page.content.length} chars`);
         if (page.newOffset <= page.offset) fail("made no progress");
         if (page.newOffset > text.length) fail("ran past the end of the text");
-        if (page.endedInCodeBlock !== (page.codeBlockType !== null)) fail("inconsistent code block state");
 
         // The content must be the page's source slice, plus nothing but known synthetic markup.
         const slice = text.slice(page.offset, page.newOffset);
-        const header = previous?.endedInCodeBlock ? `${FENCE}${previous.codeBlockType}\n` : "";
-        const close = page.endedInCodeBlock ? FENCE_CLOSE : "";
-        const bodies = page.endedInCodeBlock ? [slice.replace(/\r?\n$/, "")] : [slice, slice.trimEnd()];
+        // A page that starts or ends inside a code block must re-open or close it.
+        const labelAtStart = openLabelAt(page.offset);
+        const endsInCode = openLabelAt(page.newOffset) !== null;
+        const header = labelAtStart === null ? "" : `${FENCE}${labelAtStart}\n`;
+        const close = endsInCode ? FENCE_CLOSE : "";
+        const bodies = endsInCode ? [slice.replace(/\r?\n$/, "")] : [slice, slice.trimEnd()];
         const candidates = bodies.flatMap((body) =>
             [...new Set([header, ""])].flatMap((h) =>
                 [...new Set([close, ""])].flatMap((c) => [h + body + c, h + body + ELLIPSIS + c]),
@@ -157,16 +160,7 @@ export function checkPagination(text: string, limit: number, firstPageLimit: num
         if (!page.content.endsWith(close)) fail("missing synthetic closing fence");
         if (!fencesAreBalanced(page.content)) fail("unbalanced code fences");
 
-        // The reported code block state must match the source at the page boundary.
         const boundary = page.newOffset;
-        const block = source.codeBlocks.find((b) => boundary >= b.bodyStart && boundary <= b.bodyEnd);
-        const expectedLabel = block ? block.label : null;
-        if (page.codeBlockType !== expectedLabel) {
-            fail(
-                `reports code block ${JSON.stringify(page.codeBlockType)}, source has ${JSON.stringify(expectedLabel)}`,
-            );
-        }
-
         // A table that fits on a page is never split.
         const splitTable = source.tables.find((t) => boundary > t.start && boundary < t.end);
         if (splitTable && splitTable.end - splitTable.start <= Math.min(limit, firstPageLimit)) {

@@ -17,8 +17,6 @@ function buildInsertPageStmt(db: Db) {
             endOffset: sql.placeholder("endOffset"),
             currentPage: sql.placeholder("currentPage"),
             totalPages: sql.placeholder("totalPages"),
-            endedInCodeBlock: sql.placeholder("endedInCodeBlock"),
-            codeBlockType: sql.placeholder("codeBlockType"),
         })
         .returning()
         .prepare("message_page_insert");

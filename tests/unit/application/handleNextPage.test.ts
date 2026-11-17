@@ -121,8 +121,6 @@ function makePageData(overrides: Partial<NextPageData> = {}): NextPageData {
         endOffset: 2000,
         currentPage: 1,
         totalPages: 2,
-        endedInCodeBlock: false,
-        codeBlockType: null,
         langchainMessages: [aiMsgJson as unknown as Record<string, unknown>],
         ...overrides,
     };

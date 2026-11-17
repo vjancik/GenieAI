@@ -760,8 +760,6 @@ export class HandleChatMessageUseCase {
                 content: page1Content,
                 newOffset,
                 pageCount: totalPages,
-                endedInCodeBlock: page1EndedInCodeBlock,
-                codeBlockType: page1CodeBlockType,
             } = splitMarkdown(discordResponse, 0, MESSAGE_LENGTH_LIMIT, {
                 pageCount: true,
                 firstPageLimit: MESSAGE_LENGTH_LIMIT - page1Overhead,
@@ -831,8 +829,6 @@ export class HandleChatMessageUseCase {
                 endOffset: newOffset,
                 currentPage: 1,
                 totalPages,
-                endedInCodeBlock: page1EndedInCodeBlock,
-                codeBlockType: page1CodeBlockType,
             });
         } else {
             // --- NON-PAGINATED PATH ---

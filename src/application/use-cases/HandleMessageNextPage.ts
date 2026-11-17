@@ -49,13 +49,6 @@ export interface GetNextPageResult {
      * all reference the first page's messages row (where the LangChain content lives).
      */
     firstPageMessageId: string;
-    /** True when this page ended mid-way through a fenced code block. */
-    endedInCodeBlock: boolean;
-    /**
-     * Syntax label of the open code block at the boundary (e.g. `"typescript"`), or an
-     * empty string for an unlabelled block. `null` when `endedInCodeBlock` is false.
-     */
-    codeBlockType: string | null;
 }
 
 /**
@@ -209,8 +202,6 @@ export class HandleNextPageUseCase {
                                 endOffset: result.newOffset,
                                 currentPage: result.currentPage,
                                 totalPages: result.totalPages,
-                                endedInCodeBlock: result.endedInCodeBlock,
-                                codeBlockType: result.codeBlockType,
                             })
                             .catch((err) => {
                                 this.logger.error({ err }, "Failed to save next message page state");
@@ -271,17 +262,11 @@ export class HandleNextPageUseCase {
         const rawText = extractContent(kwargs?.content as string | unknown[]);
         const fullDiscordText = llmTextToDiscordText(rawText);
 
-        const { currentPage, totalPages, endOffset, endedInCodeBlock, codeBlockType } = data;
+        const { currentPage, totalPages, endOffset } = data;
         const nextPage = currentPage + 1;
         const isLast = nextPage >= totalPages;
 
-        const continuationCodeBlock = endedInCodeBlock ? (codeBlockType ?? "") : null;
-        const {
-            content,
-            newOffset,
-            endedInCodeBlock: nextEndedInCodeBlock,
-            codeBlockType: nextCodeBlockType,
-        } = splitMarkdown(fullDiscordText, endOffset, MESSAGE_LENGTH_LIMIT, { continuationCodeBlock });
+        const { content, newOffset } = splitMarkdown(fullDiscordText, endOffset, MESSAGE_LENGTH_LIMIT);
 
         this.logger.debug({ discordMessageId, page: nextPage, totalPages, isLast }, "Computed next page content");
 
@@ -293,8 +278,6 @@ export class HandleNextPageUseCase {
             isLast,
             pageStateId: data.pageStateId,
             firstPageMessageId: data.firstPageMessageId,
-            endedInCodeBlock: nextEndedInCodeBlock,
-            codeBlockType: nextCodeBlockType,
         };
     }
 }

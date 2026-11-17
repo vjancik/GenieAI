@@ -15,8 +15,10 @@
  * - its code fences are balanced, as long as the limit leaves room for the
  *   fence markup (see {@link rawSplit} for the degenerate case).
  *
- * Pages are a pure function of (text, offset, limit, open code block label), so
- * paginating up-front and paginating page by page always agree.
+ * Pages are a pure function of (text, offset, limit): whether an offset lies inside
+ * a code block is derived from the text before it ({@link resumeStateAt}), so no
+ * state has to be carried between pages, and paginating up-front and paginating
+ * page by page always agree.
  */
 
 /** Options for {@link splitMarkdown}. */
@@ -27,17 +29,6 @@ export interface SplitMarkdownOptions {
      * before sending page 1.
      */
     pageCount?: true;
-    /**
-     * When the previous page ended inside a fenced code block, pass its syntax
-     * label (e.g. `"typescript"`), or an empty string for an unlabelled block.
-     * The page then starts with a ` ```{label} ` line that re-opens the block.
-     * That line counts toward the limit but does not advance the text offset.
-     *
-     * Must be `null` or omitted when the previous page did not end in a code
-     * block. Ignored when `pageCount` is true, where the state is derived by
-     * paginating from the start.
-     */
-    continuationCodeBlock?: string | null;
     /**
      * Override the character limit for page 1 only (e.g. when the first page
      * carries a header/footer overhead that subsequent pages do not). Only
@@ -50,6 +41,8 @@ export interface SplitMarkdownOptions {
 export interface SplitMarkdownResult {
     /**
      * The content to display for this page (without footer — caller appends it).
+     * A page that starts inside a fenced code block opens with a synthetic
+     * ` ```{label} ` line, and one that ends inside a block closes with ` ``` `.
      * The line break at a page boundary is consumed but not emitted, so content
      * never ends with the newline that separated it from the next page.
      */
@@ -61,17 +54,6 @@ export interface SplitMarkdownResult {
      * Only present when `options.pageCount === true` was passed.
      */
     pageCount?: number;
-    /**
-     * True when the page boundary falls inside a fenced code block. The next page
-     * must be requested with the matching label
-     * (see {@link SplitMarkdownOptions.continuationCodeBlock}).
-     */
-    endedInCodeBlock: boolean;
-    /**
-     * The syntax label of the code block open at the page boundary (e.g. `"typescript"`),
-     * or an empty string for an unlabelled block. `null` when `endedInCodeBlock` is false.
-     */
-    codeBlockType: string | null;
 }
 
 type Page = Omit<SplitMarkdownResult, "pageCount">;
@@ -146,24 +128,93 @@ function classify(content: string): Pick<Line, "kind" | "label"> {
     return rest.includes(FENCE) ? { kind: "inlineFence", label: "" } : { kind: "fence", label: rest.trimEnd() };
 }
 
-/**
- * Splits `text` from `offset` into classified lines. Both `\n` and `\r\n` end a line.
- *
- * Stops after the first line that ends more than `horizon` characters past `offset`:
- * neither that line nor any later one can be placed whole on a page of that size, so
- * the cost of extracting a page does not grow with the length of the remaining text.
- */
-function tokenize(text: string, offset: number, horizon: number): Line[] {
-    const lines: Line[] = [];
-    let start = offset;
+/** Yields the classified lines of `text` from `from` on. Both `\n` and `\r\n` end a line. */
+function* scanLines(text: string, from: number): Generator<Line> {
+    let start = from;
     while (start < text.length) {
         const newline = text.indexOf("\n", start);
         const next = newline === -1 ? text.length : newline + 1;
         let end = newline === -1 ? text.length : newline;
         if (newline > start && text[newline - 1] === "\r") end--;
-        lines.push({ start, end, next, ...classify(text.slice(start, end)) });
-        if (end - offset > horizon) break;
+        yield { start, end, next, ...classify(text.slice(start, end)) };
         start = next;
+    }
+}
+
+/**
+ * The label of the code block that is open after `line`, given the one open before
+ * it (`null` = none). This is the only place that decides what opens and closes a block.
+ */
+function codeLabelAfter(openLabel: string | null, line: Line): string | null {
+    if (openLabel !== null) return line.kind === "fence" || line.kind === "inlineFence" ? null : openLabel;
+    return line.kind === "fence" ? line.label : null;
+}
+
+/** Where and in which state a page starting at a given offset begins. */
+interface ResumeState {
+    /** Label of the code block open at the start of the page, or `null` when in prose. */
+    openCodeLabel: string | null;
+    /** Offset of the first character of the page. */
+    start: number;
+    /** True when the page starts in the middle of a line that an earlier page cut. */
+    midLine: boolean;
+}
+
+/** Returns the line that starts at `lineStart`, or `undefined` at the end of the text. */
+function lineAt(text: string, lineStart: number): Line | undefined {
+    return scanLines(text, lineStart).next().value;
+}
+
+/** Returns the start of the line that holds the character at `index`. */
+function lineStartOf(text: string, index: number): number {
+    return index === 0 ? 0 : text.lastIndexOf("\n", index - 1) + 1;
+}
+
+/**
+ * Derives the state at `offset` from the text before it.
+ *
+ * A line cut by an earlier page has already taken effect: if it opened or closed
+ * a code block, the rest of it belongs to the state that follows.
+ */
+function resumeStateAt(text: string, offset: number): ResumeState {
+    // Only a line holding a fence can open or close a block, so the scan jumps from
+    // one such line to the next instead of classifying every line.
+    let openCodeLabel: string | null = null;
+    let searchFrom = 0;
+    while (searchFrom < offset) {
+        const fenceAt = text.indexOf(FENCE, searchFrom);
+        if (fenceAt === -1) break;
+        const line = lineAt(text, lineStartOf(text, fenceAt));
+        if (!line || line.start >= offset) break;
+        openCodeLabel = codeLabelAfter(openCodeLabel, line);
+        searchFrom = Math.max(line.next, fenceAt + FENCE.length);
+    }
+
+    const current = lineAt(text, lineStartOf(text, offset));
+    if (current && current.start < offset) {
+        if (offset < current.end) return { openCodeLabel, start: offset, midLine: true };
+        // An offset on the line's terminator, as stored by the previous splitter,
+        // resumes at the next line.
+        if (offset < current.next) return { openCodeLabel, start: current.next, midLine: false };
+    }
+    return { openCodeLabel, start: offset, midLine: false };
+}
+
+/**
+ * Collects the lines of the page starting at `start`.
+ *
+ * Stops after the first line that ends more than `horizon` characters past `start`:
+ * neither that line nor any later one can be placed whole on a page of that size, so
+ * the cost of packing a page does not grow with the length of the remaining text.
+ *
+ * @param midLine - When true, the first line is the rest of a cut line and is taken
+ *                  as plain content, whatever it happens to start with.
+ */
+function tokenize(text: string, start: number, horizon: number, midLine: boolean): Line[] {
+    const lines: Line[] = [];
+    for (const line of scanLines(text, start)) {
+        lines.push(midLine && lines.length === 0 ? { ...line, kind: "text", label: "" } : line);
+        if (line.end - start > horizon) break;
     }
     return lines;
 }
@@ -186,7 +237,7 @@ function parseBlocks(lines: Line[], openCodeLabel: string | null): Block[] {
 
     for (const line of lines) {
         if (code) {
-            if (line.kind === "fence" || line.kind === "inlineFence") {
+            if (codeLabelAfter(code.label, line) === null) {
                 code.closer = line;
                 code = null;
             } else {
@@ -203,8 +254,9 @@ function parseBlocks(lines: Line[], openCodeLabel: string | null): Block[] {
             continue;
         }
         table = null;
-        if (line.kind === "fence") {
-            code = { kind: "code", label: line.label, opener: line, body: [], closer: null };
+        const openedLabel = codeLabelAfter(null, line);
+        if (openedLabel !== null) {
+            code = { kind: "code", label: openedLabel, opener: line, body: [], closer: null };
             blocks.push(code);
         } else {
             blocks.push({ kind: "text", line });
@@ -239,36 +291,14 @@ function avoidSurrogateSplit(text: string, cut: number, floor: number): number {
  *
  * Used for a line longer than a page, and when the limit is too small to hold
  * a code block's fence markup next to any content. In the latter case the page
- * is not fence-balanced, but the reported state still tracks the source.
- *
- * @param labelIfWhole - Code block left open after the whole line was emitted.
- * @param labelIfCut - Code block left open after the line was cut mid-way.
+ * is not fence-balanced.
  */
-function rawSplit(
-    text: string,
-    offset: number,
-    limit: number,
-    line: Line,
-    labelIfWhole: string | null,
-    labelIfCut: string | null,
-): Page {
-    if (line.end - offset <= limit) {
-        return {
-            content: text.slice(offset, line.end),
-            newOffset: line.next,
-            endedInCodeBlock: labelIfWhole !== null,
-            codeBlockType: labelIfWhole,
-        };
-    }
+function rawSplit(text: string, start: number, limit: number, line: Line): Page {
+    if (line.end - start <= limit) return { content: text.slice(start, line.end), newOffset: line.next };
     // A limit of 1 has no room for the ellipsis next to a character of content.
     const marker = limit > ELLIPSIS.length ? ELLIPSIS : "";
-    const cut = avoidSurrogateSplit(text, offset + limit - marker.length, offset);
-    return {
-        content: text.slice(offset, cut) + marker,
-        newOffset: cut,
-        endedInCodeBlock: labelIfCut !== null,
-        codeBlockType: labelIfCut,
-    };
+    const cut = avoidSurrogateSplit(text, start + limit - marker.length, start);
+    return { content: text.slice(start, cut) + marker, newOffset: cut };
 }
 
 /**
@@ -282,27 +312,25 @@ function rawSplit(
  *   re-opening it on the next. A body line longer than a page is cut inside
  *   the fences.
  *
- * @param openCodeLabel - Label of the code block the previous page ended in, or `null`.
  */
-function extractPage(text: string, offset: number, limit: number, openCodeLabel: string | null): Page {
-    const lines = tokenize(text, offset, limit);
+function extractPage(text: string, offset: number, limit: number): Page {
+    const { openCodeLabel, start, midLine } = resumeStateAt(text, offset);
+    const lines = tokenize(text, start, limit, midLine);
     const blocks = parseBlocks(lines, openCodeLabel);
-    // Re-opens the code block carried over from the previous page.
+    // Re-opens the code block that is open where the page starts.
     const header = openCodeLabel !== null && lines.length > 0 ? `${FENCE}${openCodeLabel}\n` : "";
 
     /** Whether the page can end right after `line` with `reserve` characters of synthetic markup to spare. */
-    const fits = (line: Line, reserve = 0) => header.length + (line.end - offset) + reserve <= limit;
+    const fits = (line: Line, reserve = 0) => header.length + (line.end - start) + reserve <= limit;
     const fitsWithClose = (line: Line) => fits(line, FENCE_CLOSE.length);
 
     /** Ends the page after `last`, closing the code block `openLabel` if one is open there. */
     const pageEndingAt = (last: Line, openLabel: string | null): Page => {
-        const content = header + text.slice(offset, last.end);
+        const content = header + text.slice(start, last.end);
         if (openLabel !== null) {
             return {
                 content: content + FENCE_CLOSE,
                 newOffset: last.next,
-                endedInCodeBlock: true,
-                codeBlockType: openLabel,
             };
         }
         // Discord trims messages, so whitespace around a prose boundary is dropped:
@@ -311,8 +339,6 @@ function extractPage(text: string, offset: number, limit: number, openCodeLabel:
         return {
             content: content.trimEnd(),
             newOffset: skipBlankLines(text, last.next),
-            endedInCodeBlock: false,
-            codeBlockType: null,
         };
     };
 
@@ -329,9 +355,7 @@ function extractPage(text: string, offset: number, limit: number, openCodeLabel:
                 hasContent ||= block.line.kind !== "blank";
                 continue;
             }
-            return last && hasContent
-                ? pageEndingAt(last, null)
-                : rawSplit(text, offset, limit, block.line, null, null);
+            return last && hasContent ? pageEndingAt(last, null) : rawSplit(text, start, limit, block.line);
         }
 
         if (block.kind === "table") {
@@ -347,7 +371,7 @@ function extractPage(text: string, offset: number, limit: number, openCodeLabel:
             const lastFittingRow = block.rows.findLast((row) => fits(row));
             if (lastFittingRow) return pageEndingAt(lastFittingRow, null);
             const firstRow = block.rows[0];
-            if (firstRow) return rawSplit(text, offset, limit, firstRow, null, null);
+            if (firstRow) return rawSplit(text, start, limit, firstRow);
             continue;
         }
 
@@ -380,25 +404,23 @@ function extractPage(text: string, offset: number, limit: number, openCodeLabel:
         }
 
         // The first body line is longer than a page: cut it inside the fences.
-        const cutLimit = offset + limit - header.length - ELLIPSIS.length - FENCE_CLOSE.length;
+        const cutLimit = start + limit - header.length - ELLIPSIS.length - FENCE_CLOSE.length;
         if (firstBodyLine && cutLimit > firstBodyLine.start) {
             const cut = avoidSurrogateSplit(text, cutLimit, firstBodyLine.start);
             return {
-                content: header + text.slice(offset, cut) + ELLIPSIS + FENCE_CLOSE,
+                content: header + text.slice(start, cut) + ELLIPSIS + FENCE_CLOSE,
                 newOffset: cut,
-                endedInCodeBlock: true,
-                codeBlockType: label,
             };
         }
 
         // The limit cannot hold the fence markup plus any content.
-        if (opener) return rawSplit(text, offset, limit, opener, label, null);
-        if (firstBodyLine) return rawSplit(text, offset, limit, firstBodyLine, label, label);
-        if (closer) return rawSplit(text, offset, limit, closer, null, null);
+        if (opener) return rawSplit(text, start, limit, opener);
+        if (firstBodyLine) return rawSplit(text, start, limit, firstBodyLine);
+        if (closer) return rawSplit(text, start, limit, closer);
     }
 
     if (last) return pageEndingAt(last, null);
-    return { content: "", newOffset: offset, endedInCodeBlock: false, codeBlockType: null };
+    return { content: "", newOffset: start };
 }
 
 /**
@@ -427,15 +449,15 @@ export function splitMarkdown(
     const pageLimit = Math.max(1, limit);
 
     if (!options?.pageCount) {
-        return extractPage(text, offset, pageLimit, options?.continuationCodeBlock ?? null);
+        return extractPage(text, offset, pageLimit);
     }
 
     // Paginate the full text, keeping the first page that reaches past `offset`.
-    let page = extractPage(text, 0, Math.max(1, options.firstPageLimit ?? pageLimit), null);
+    let page = extractPage(text, 0, Math.max(1, options.firstPageLimit ?? pageLimit));
     let selected = page;
     let pageCount = 1;
     while (page.newOffset < text.length) {
-        page = extractPage(text, page.newOffset, pageLimit, page.codeBlockType);
+        page = extractPage(text, page.newOffset, pageLimit);
         if (selected.newOffset <= offset) selected = page;
         pageCount++;
     }

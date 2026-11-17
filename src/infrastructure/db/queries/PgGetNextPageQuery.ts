@@ -39,8 +39,6 @@ function buildGetNextPageStmt(db: Db) {
             endOffset: messagePages.endOffset,
             currentPage: messagePages.currentPage,
             totalPages: messagePages.totalPages,
-            endedInCodeBlock: messagePages.endedInCodeBlock,
-            codeBlockType: messagePages.codeBlockType,
             langchainMessages: fp.langchainMessages,
         })
         .from(messagePages)
@@ -97,8 +95,6 @@ export class PgGetNextPageQuery implements IGetNextPageQuery {
                         endOffset: row.endOffset,
                         currentPage: row.currentPage,
                         totalPages: row.totalPages,
-                        endedInCodeBlock: row.endedInCodeBlock,
-                        codeBlockType: row.codeBlockType,
                         // TYPE COERCION: the stored shape matches langchainMessages by construction
                         // (written via BaseMessage.toJSON()), but TS cannot verify it.
                         langchainMessages: row.langchainMessages as PersistedChatMessage["langchainMessages"],

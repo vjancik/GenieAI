@@ -6,7 +6,7 @@
  * invariants in tests/helpers/markdownSplitInvariants.ts. It also verifies that a
  * `pageCount` lookup at each page offset returns the same page as stepping there.
  *
- * Too slow for the unit test suite (about 20 seconds for the full range), so run it
+ * Too slow for the unit test suite (about a minute for the full range), so run it
  * by hand after changing the splitter:
  *
  *   bun scripts/dev/markdownSplitterTest.ts [maxLimit=2000] [minLimit=1]

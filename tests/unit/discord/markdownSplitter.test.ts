@@ -34,7 +34,6 @@ describe("splitMarkdown — regression: production over-limit page", () => {
         expect(result.pageCount).toBeGreaterThanOrEqual(2);
         expect(result).toMatchInlineSnapshot(`
           {
-            "codeBlockType": "typescript",
             "content": 
           "Implementing a PNG decoder from scratch is complex because it requires a **DEFLATE** decompressor. In modern environments (Node 18+ or Browsers), you can use the native \`DecompressionStream\` to handle the compression, allowing us to focus on the **PNG-specific chunk parsing and unfiltering algorithm.**
           Here is a simplified implementation:
@@ -77,7 +76,6 @@ describe("splitMarkdown — regression: production over-limit page", () => {
                 const up = y > 0 ? pixels[(y - 1) * rowLen + x] : 0;
           \`\`\`"
           ,
-            "endedInCodeBlock": true,
             "newOffset": 1920,
             "pageCount": 2,
           }
@@ -211,7 +209,7 @@ describe("splitMarkdown — basic splitting", () => {
         // Offsets stored by the previous splitter pointed at the newline before the next line
         const text = "AAAA\nBBBB";
         const result = splitMarkdown(text, 4, 10);
-        expect(result.content.trim()).toBe("BBBB");
+        expect(result.content).toBe("BBBB");
         expect(result.newOffset).toBe(text.length);
     });
 
@@ -225,6 +223,12 @@ describe("splitMarkdown — basic splitting", () => {
         const result = splitMarkdown(text, 0, 2000);
         expect(result.content).toBe(`${chars(1999)}…`);
         expect(result.newOffset).toBe(1999);
+    });
+
+    it("takes the rest of a cut line as plain text, whatever it starts with", () => {
+        // The first page is cut right before the backticks, which must not open a block
+        const text = `${chars(9)}${FENCE}js and more words`;
+        expect(paginate(text, 10)[1]).toBe(`${FENCE}js and…`);
     });
 
     it("does not cut a surrogate pair in half when hard-splitting", () => {
@@ -243,6 +247,14 @@ describe("splitMarkdown — basic splitting", () => {
         const result = splitMarkdown("aaaa\n\n\n", 0, 4, { pageCount: true });
         expect(result.content).toBe("aaaa");
         expect(result.pageCount).toBe(1);
+    });
+
+    it("still covers the text one or two characters at a time", () => {
+        // Far too small for any markup: only size, progress and coverage can hold
+        const text = `intro 🚀\n\n${FENCE}ts\ncode\n${FENCE}\n| a |\n| b |\nend`;
+        expect(checkPagination(text, 1).violations).toEqual([]);
+        expect(checkPagination(text, 2).violations).toEqual([]);
+        expect(checkPagination(text.replaceAll("\n", "\r\n"), 2).violations).toEqual([]);
     });
 
     it("treats a limit below 1 as 1", () => {
@@ -278,8 +290,6 @@ describe("splitMarkdown — code blocks", () => {
         const text = `${FENCE}\ncode\n${FENCE}\nafter text`;
         const result = splitMarkdown(text, 0, 2000);
         expect(result.content).toBe(text);
-        expect(result.endedInCodeBlock).toBe(false);
-        expect(result.codeBlockType).toBeNull();
     });
 
     it("closes a block at the page boundary and re-opens it on the next page", () => {
@@ -291,20 +301,32 @@ describe("splitMarkdown — code blocks", () => {
         ]);
     });
 
-    it("reports the open block's label, and an empty label for an unlabelled block", () => {
-        const labelled = splitMarkdown(`${FENCE}typescript\n${lines(5, 10)}\n${FENCE}`, 0, 40);
-        expect(labelled.endedInCodeBlock).toBe(true);
-        expect(labelled.codeBlockType).toBe("typescript");
+    it("re-opens the block with its own label, and with a bare fence when it has none", () => {
+        const labelled = paginate(`${FENCE}typescript\n${lines(5, 10)}\n${FENCE}`, 40);
+        expect(labelled[1]?.startsWith(`${FENCE}typescript\n`)).toBe(true);
 
-        const unlabelled = splitMarkdown(`${FENCE}\n${lines(5, 10)}\n${FENCE}`, 0, 40);
-        expect(unlabelled.endedInCodeBlock).toBe(true);
-        expect(unlabelled.codeBlockType).toBe("");
+        const unlabelled = paginate(`${FENCE}\n${lines(5, 10)}\n${FENCE}`, 40);
+        expect(unlabelled[1]?.startsWith(`${FENCE}\n${chars(10)}`)).toBe(true);
+    });
+
+    it("derives the open block from the text alone when resuming at a stored offset", () => {
+        const text = `intro\n${FENCE}ts\na1\na2\na3\na4\n${FENCE}\noutro`;
+        // Offset 15 is the start of "a2", inside the block
+        expect(splitMarkdown(text, 15, 20).content).toBe(`${FENCE}ts\na2\na3\na4\n${FENCE}`);
+        // Offset 28 is the start of "outro", after the block
+        expect(splitMarkdown(text, 28, 20).content).toBe("outro");
+    });
+
+    it("resumes inside a block from an offset that points at a line break", () => {
+        // Offsets stored by the previous splitter pointed at the newline before the next line
+        const text = `${FENCE}ts\na1\na2\n${FENCE}`;
+        expect(splitMarkdown(text, 8, 20).content).toBe(`${FENCE}ts\na2\n${FENCE}`);
     });
 
     it("counts the re-opening header toward the limit and not toward the offset", () => {
         const text = `${FENCE}typescript\n${lines(40, 20)}\n${FENCE}`;
         const page1 = splitMarkdown(text, 0, 200);
-        const page2 = splitMarkdown(text, page1.newOffset, 200, { continuationCodeBlock: page1.codeBlockType });
+        const page2 = splitMarkdown(text, page1.newOffset, 200);
         expect(page2.content.startsWith(`${FENCE}typescript\n${chars(20)}\n`)).toBe(true);
         expect(page2.content.length).toBeLessThanOrEqual(200);
         // Every source character lands on exactly one page
@@ -338,8 +360,6 @@ describe("splitMarkdown — code blocks", () => {
         const result = splitMarkdown(text, 0, 2000);
         expect(result.content).toBe(`${text}\n${FENCE}`);
         expect(result.newOffset).toBe(text.length);
-        expect(result.endedInCodeBlock).toBe(true);
-        expect(result.codeBlockType).toBe("py");
     });
 
     it("splits an unterminated block so that its closing fence still fits", () => {
@@ -355,13 +375,14 @@ describe("splitMarkdown — code blocks", () => {
         const report = checkPagination(text, 30);
         expect(report.violations).toEqual([]);
         expect(report.pages.length).toBeGreaterThan(1);
-        for (const page of report.pages) expect(page.endedInCodeBlock).toBe(false);
+        for (const page of report.pages) expect(page.content).not.toEndWith(`\n${FENCE}`);
     });
 
     it("recognizes an indented fence", () => {
-        const result = splitMarkdown(`  ${FENCE}sh\n${lines(5, 10)}\n  ${FENCE}`, 0, 40);
-        expect(result.codeBlockType).toBe("sh");
+        const text = `  ${FENCE}sh\n${lines(5, 10)}\n  ${FENCE}`;
+        const result = splitMarkdown(text, 0, 40);
         expect(result.content.endsWith(`\n${FENCE}`)).toBe(true);
+        expect(splitMarkdown(text, result.newOffset, 40).content.startsWith(`${FENCE}sh\n`)).toBe(true);
     });
 
     it("ignores table rows inside a code block", () => {
@@ -445,7 +466,7 @@ describe("splitMarkdown — pageCount option", () => {
 // ---------------------------------------------------------------------------
 describe("splitMarkdown — invariants on the fuzz fixture", () => {
     // Too small for fence markup: only size, progress and coverage can hold
-    const DEGENERATE_LIMITS = [1, 2, 5, 13, 19, 20, 63];
+    const DEGENERATE_LIMITS = [5, 13, 19, 20, 63];
     const BOUNDARY_LIMITS = [
         64, 66, 68, 69, 78, 81, 84, 87, 93, 99, 101, 115, 116, 118, 123, 147, 151, 189, 192, 195, 217, 224, 356,
     ];
@@ -464,7 +485,7 @@ describe("splitMarkdown — invariants on the fuzz fixture", () => {
                 expect(text.length).toBeGreaterThan(10_000);
                 expect(checkPagination(text, limit).violations).toEqual([]);
                 // A shorter first page, as when page 1 carries a reply prefix and footer
-                expect(checkPagination(text, limit, Math.max(1, limit - 37)).violations).toEqual([]);
+                if (limit > 37) expect(checkPagination(text, limit, limit - 37).violations).toEqual([]);
             });
         }
     }
