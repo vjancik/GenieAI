@@ -16,9 +16,13 @@
  *   fence markup (see {@link rawSplit} for the degenerate case).
  *
  * Pages are a pure function of (text, offset, limit): whether an offset lies inside
- * a code block is derived from the text before it ({@link resumeStateAt}), so no
- * state has to be carried between pages, and paginating up-front and paginating
- * page by page always agree.
+ * a code block or a table is derived from the text before it ({@link resumeStateAt}),
+ * so no state has to be carried between pages, and paginating up-front and
+ * paginating page by page always agree.
+ *
+ * Synthetic markup (a re-opening or closing fence, a repeated table header, an
+ * ellipsis) exists only in a page's content. It counts toward the limit, but offsets
+ * always refer to the untouched source text.
  */
 
 /** Options for {@link splitMarkdown}. */
@@ -43,11 +47,15 @@ export interface SplitMarkdownResult {
      * The content to display for this page (without footer — caller appends it).
      * A page that starts inside a fenced code block opens with a synthetic
      * ` ```{label} ` line, and one that ends inside a block closes with ` ``` `.
+     * A page that starts inside a table opens with a copy of the table's header.
      * The line break at a page boundary is consumed but not emitted, so content
      * never ends with the newline that separated it from the next page.
      */
     content: string;
-    /** Character offset in the original text where this page ends (= start of next page). */
+    /**
+     * Character offset in the original text where this page ends (= start of next page).
+     * Synthetic markup in `content` is never counted here.
+     */
     newOffset: number;
     /**
      * Total page count for the full text at the given limit.
@@ -154,6 +162,11 @@ function codeLabelAfter(openLabel: string | null, line: Line): string | null {
 interface ResumeState {
     /** Label of the code block open at the start of the page, or `null` when in prose. */
     openCodeLabel: string | null;
+    /**
+     * Header and separator rows of the table the page starts in the middle of, ready
+     * to be put in front of the page. Empty when the page does not continue a table.
+     */
+    tableHeader: string;
     /** Offset of the first character of the page. */
     start: number;
     /** True when the page starts in the middle of a line that an earlier page cut. */
@@ -168,6 +181,35 @@ function lineAt(text: string, lineStart: number): Line | undefined {
 /** Returns the start of the line that holds the character at `index`. */
 function lineStartOf(text: string, index: number): number {
     return index === 0 ? 0 : text.lastIndexOf("\n", index - 1) + 1;
+}
+
+/** Matches a table's separator row, e.g. `| :--- | ---: |`. */
+const TABLE_SEPARATOR_RE = /^\|[\s|:-]*-[\s|:-]*$/;
+
+/**
+ * Returns the header of the table that a page starting at the line start `start`
+ * continues: its first two rows, when the second one is a separator and the page
+ * starts below it. Returns an empty string when there is no such table.
+ *
+ * Must only be called for a `start` outside any code block. The rows directly above
+ * it are then outside one too, as only a fence line could change that.
+ */
+function tableHeaderAbove(text: string, start: number): string {
+    if (lineAt(text, start)?.kind !== "tableRow") return "";
+
+    // Walk up to the first row of the table.
+    let top = start;
+    while (top > 0) {
+        const above = lineAt(text, lineStartOf(text, top - 1));
+        if (above?.kind !== "tableRow") break;
+        top = above.start;
+    }
+
+    const header = lineAt(text, top);
+    const separator = header ? lineAt(text, header.next) : undefined;
+    if (!header || !separator || separator.next > start) return "";
+    if (!TABLE_SEPARATOR_RE.test(text.slice(separator.start, separator.end).trim())) return "";
+    return `${text.slice(header.start, separator.end)}\n`;
 }
 
 /**
@@ -190,14 +232,16 @@ function resumeStateAt(text: string, offset: number): ResumeState {
         searchFrom = Math.max(line.next, fenceAt + FENCE.length);
     }
 
+    let start = offset;
     const current = lineAt(text, lineStartOf(text, offset));
     if (current && current.start < offset) {
-        if (offset < current.end) return { openCodeLabel, start: offset, midLine: true };
+        if (offset < current.end) return { openCodeLabel, tableHeader: "", start, midLine: true };
         // An offset on the line's terminator, as stored by the previous splitter,
         // resumes at the next line.
-        if (offset < current.next) return { openCodeLabel, start: current.next, midLine: false };
+        if (offset < current.next) start = current.next;
     }
-    return { openCodeLabel, start: offset, midLine: false };
+    const tableHeader = openCodeLabel === null ? tableHeaderAbove(text, start) : "";
+    return { openCodeLabel, tableHeader, start, midLine: false };
 }
 
 /**
@@ -307,26 +351,36 @@ function rawSplit(text: string, start: number, limit: number, line: Line): Page 
  * Split strategy per block:
  * - plain line: break before it; a line longer than a page is cut with an ellipsis.
  * - table: kept whole, moving to the next page if needed; a table longer than
- *   a page is split between rows.
+ *   a page is split between rows, and its header is repeated on each further page.
  * - code block: split between body lines, closing the block on this page and
  *   re-opening it on the next. A body line longer than a page is cut inside
  *   the fences.
  *
  */
 function extractPage(text: string, offset: number, limit: number): Page {
-    const { openCodeLabel, start, midLine } = resumeStateAt(text, offset);
+    const { openCodeLabel, tableHeader, start, midLine } = resumeStateAt(text, offset);
     const lines = tokenize(text, start, limit, midLine);
     const blocks = parseBlocks(lines, openCodeLabel);
-    // Re-opens the code block that is open where the page starts.
-    const header = openCodeLabel !== null && lines.length > 0 ? `${FENCE}${openCodeLabel}\n` : "";
 
-    /** Whether the page can end right after `line` with `reserve` characters of synthetic markup to spare. */
-    const fits = (line: Line, reserve = 0) => header.length + (line.end - start) + reserve <= limit;
+    // Synthetic lines in front of the page's source text: the fence re-opening the
+    // code block the page starts in, or the header of the table it continues. A
+    // table header that leaves no room for a row behind it is left out.
+    const firstLine = lines[0];
+    const codeHeader = openCodeLabel !== null && firstLine ? `${FENCE}${openCodeLabel}\n` : "";
+    const tableHeaderFits = firstLine !== undefined && tableHeader.length + (firstLine.end - start) <= limit;
+    const prefix = codeHeader || (tableHeaderFits ? tableHeader : "");
+
+    /**
+     * Whether the page can end right after `line` with `reserve` characters of synthetic
+     * markup to spare. Source length and synthetic prefix are budgeted together here,
+     * while page offsets are taken from the lines alone.
+     */
+    const fits = (line: Line, reserve = 0) => prefix.length + (line.end - start) + reserve <= limit;
     const fitsWithClose = (line: Line) => fits(line, FENCE_CLOSE.length);
 
     /** Ends the page after `last`, closing the code block `openLabel` if one is open there. */
     const pageEndingAt = (last: Line, openLabel: string | null): Page => {
-        const content = header + text.slice(start, last.end);
+        const content = prefix + text.slice(start, last.end);
         if (openLabel !== null) {
             return {
                 content: content + FENCE_CLOSE,
@@ -404,11 +458,11 @@ function extractPage(text: string, offset: number, limit: number): Page {
         }
 
         // The first body line is longer than a page: cut it inside the fences.
-        const cutLimit = start + limit - header.length - ELLIPSIS.length - FENCE_CLOSE.length;
+        const cutLimit = start + limit - prefix.length - ELLIPSIS.length - FENCE_CLOSE.length;
         if (firstBodyLine && cutLimit > firstBodyLine.start) {
             const cut = avoidSurrogateSplit(text, cutLimit, firstBodyLine.start);
             return {
-                content: header + text.slice(start, cut) + ELLIPSIS + FENCE_CLOSE,
+                content: prefix + text.slice(start, cut) + ELLIPSIS + FENCE_CLOSE,
                 newOffset: cut,
             };
         }

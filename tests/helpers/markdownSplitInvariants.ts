@@ -35,9 +35,15 @@ export interface PaginationReport {
     violations: string[];
 }
 
-interface SourceRange {
+interface SourceTable {
     start: number;
     end: number;
+    /** Header and separator rows as repeated on continuation pages; `null` without a separator row. */
+    header: string | null;
+    /** Start of the first row below the separator. */
+    dataStart: number;
+    /** Number of rows seen so far. */
+    rows: number;
 }
 
 interface SourceCodeBlock {
@@ -49,16 +55,16 @@ interface SourceCodeBlock {
 }
 
 interface SourceStructure {
-    tables: SourceRange[];
+    tables: SourceTable[];
     codeBlocks: SourceCodeBlock[];
 }
 
 /** Reference scan: locates every table and fenced code block in the full text. */
 function scanSource(text: string): SourceStructure {
-    const tables: SourceRange[] = [];
+    const tables: SourceTable[] = [];
     const codeBlocks: SourceCodeBlock[] = [];
     let openCode: SourceCodeBlock | null = null;
-    let openTable: SourceRange | null = null;
+    let openTable: SourceTable | null = null;
 
     let start = 0;
     while (start < text.length) {
@@ -79,8 +85,14 @@ function scanSource(text: string): SourceStructure {
             codeBlocks.push(openCode);
         } else if (trimmed.startsWith("|")) {
             if (!openTable) {
-                openTable = { start, end: start };
+                openTable = { start, end: start, header: null, dataStart: text.length, rows: 0 };
                 tables.push(openTable);
+            }
+            openTable.rows++;
+            // The second row makes the first one a header if it is a separator like | --- | :-: |
+            if (openTable.rows === 2 && /^\|[\s|:-]*-[\s|:-]*$/.test(line.trim())) {
+                openTable.header = `${text.slice(openTable.start, start + line.length)}\n`;
+                openTable.dataStart = next;
             }
             openTable.end = start + line.length;
         } else {
@@ -143,7 +155,16 @@ export function checkPagination(text: string, limit: number, firstPageLimit: num
         // A page that starts or ends inside a code block must re-open or close it.
         const labelAtStart = openLabelAt(page.offset);
         const endsInCode = openLabelAt(page.newOffset) !== null;
-        const header = labelAtStart === null ? "" : `${FENCE}${labelAtStart}\n`;
+        // A page that starts on a row below a table's header must repeat that header,
+        // unless the header leaves no room for the row.
+        const atLineStart = page.offset === 0 || text[page.offset - 1] === "\n";
+        const table = source.tables.find(
+            (t) => page.offset >= t.dataStart && page.offset > t.start && page.offset < t.end,
+        );
+        const firstRowLength = text.slice(page.offset).split(/\r?\n/, 1)[0]?.length ?? 0;
+        const tableHeader =
+            atLineStart && table?.header && table.header.length + firstRowLength <= page.limit ? table.header : "";
+        const header = labelAtStart === null ? tableHeader : `${FENCE}${labelAtStart}\n`;
         const close = endsInCode ? FENCE_CLOSE : "";
         const bodies = endsInCode ? [slice.replace(/\r?\n$/, "")] : [slice, slice.trimEnd()];
         const candidates = bodies.flatMap((body) =>
@@ -156,7 +177,7 @@ export function checkPagination(text: string, limit: number, firstPageLimit: num
         if (!structured) return;
 
         if (page.content.trim() === "") fail("content is blank");
-        if (!page.content.startsWith(header)) fail("missing code block re-opening header");
+        if (!page.content.startsWith(header)) fail("missing code block re-opening line or repeated table header");
         if (!page.content.endsWith(close)) fail("missing synthetic closing fence");
         if (!fencesAreBalanced(page.content)) fail("unbalanced code fences");
 

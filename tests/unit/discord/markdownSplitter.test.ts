@@ -424,6 +424,62 @@ describe("splitMarkdown — tables", () => {
     });
 });
 
+describe("splitMarkdown — repeated table header", () => {
+    const header = "| # | name |\n| --- | :-: |";
+    const rows = Array.from({ length: 8 }, (_, i) => `| ${i} | row ${i} |`);
+    const table = `${header}\n${rows.join("\n")}`;
+
+    it("repeats the header and separator rows on every further page of a split table", () => {
+        // 26 chars of header, 13 per row: three rows fit behind the header on each page
+        expect(paginate(table, 68)).toEqual([
+            `${header}\n${rows.slice(0, 3).join("\n")}`,
+            `${header}\n${rows.slice(3, 6).join("\n")}`,
+            `${header}\n${rows.slice(6).join("\n")}`,
+        ]);
+    });
+
+    it("counts the repeated header toward the limit but not toward the offset", () => {
+        const page1 = splitMarkdown(table, 0, 68);
+        // Page 1 holds the real header: its offset is exactly the source consumed
+        expect(page1.newOffset).toBe(`${header}\n${rows.slice(0, 3).join("\n")}\n`.length);
+
+        const page2 = splitMarkdown(table, page1.newOffset, 68);
+        expect(page2.content.length).toBeLessThanOrEqual(68);
+        // Page 2 shows 27 synthetic chars, yet only advances by its three source rows
+        expect(page2.newOffset - page1.newOffset).toBe(`${rows.slice(3, 6).join("\n")}\n`.length);
+        expect(table.slice(page2.newOffset)).toBe(rows.slice(6).join("\n"));
+    });
+
+    it("continues with the text after the table on the same page", () => {
+        const pages = paginate(`${table}\nclosing words`, 68);
+        expect(pages.at(-1)).toBe(`${header}\n${rows.slice(6).join("\n")}\nclosing words`);
+    });
+
+    it("does not repeat anything for a table without a separator row", () => {
+        const plainRows = Array.from({ length: 10 }, (_, i) => `| row ${i} |`);
+        expect(paginate(plainRows.join("\n"), 30)[1]).toBe(plainRows.slice(3, 6).join("\n"));
+    });
+
+    it("leaves the header out when it would leave no room for a row", () => {
+        const wideHeader = `| ${chars(30)} |\n| --- |`;
+        const wideRows = Array.from({ length: 4 }, (_, i) => `| ${chars(30)}${i} |`);
+        // Header (42) plus one row (35) exceeds the limit, so pages fall back to bare rows
+        const pages = paginate(`${wideHeader}\n${wideRows.join("\n")}`, 72);
+        expect(pages[0]).toBe(wideHeader);
+        expect(pages[1]).toBe(wideRows.slice(0, 2).join("\n"));
+    });
+
+    it("does not treat pipe lines inside a code block as a table to continue", () => {
+        const text = `${FENCE}\n| a |\n| - |\n| 1 |\n| 2 |\n| 3 |\n| 4 |\n${FENCE}`;
+        for (const page of paginate(text, 24)) expect(page.startsWith(`${FENCE}\n`)).toBe(true);
+    });
+
+    it("repeats the header with CRLF line endings", () => {
+        const crlf = table.replaceAll("\n", "\r\n");
+        expect(paginate(crlf, 72)[1]).toBe(`${header.replace("\n", "\r\n")}\n${rows.slice(3, 6).join("\r\n")}`);
+    });
+});
+
 describe("splitMarkdown — pageCount option", () => {
     it("returns pageCount=1 for text under limit", () => {
         expect(splitMarkdown("short text", 0, 2000, { pageCount: true }).pageCount).toBe(1);
