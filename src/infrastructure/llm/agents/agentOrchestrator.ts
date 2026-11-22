@@ -308,6 +308,8 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     private readonly basePrompt: string;
     /** Whether files found by the website tool are embedded for the model, see {@link flattenToolExchanges}. */
     private readonly embedExternalFiles: boolean;
+    /** Whether only HTTPS URLs may be fetched, see {@link flattenToolExchanges}. */
+    private readonly httpsOnly: boolean;
     /** The tools the tools node can execute, by the name triage calls them with. */
     private readonly tools: ReadonlyMap<string, IModelTool<Record<string, unknown>>>;
     private readonly toolNames: ReadonlySet<string>;
@@ -340,6 +342,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         this.basePrompt = config.file.prompts.basePrompt;
         // Only upload mode resolves the media blocks such files are embedded as
         this.embedExternalFiles = config.file.agent.uploadAttachmentMode === AttachmentMode.upload;
+        this.httpsOnly = config.file.externalContent.httpsOnly;
 
         if (this.searchMode === SearchMode.tavily && !tavilyTool) {
             throw new AppError(
@@ -693,6 +696,7 @@ export class AgentOrchestrator implements IAgentOrchestrator {
             async (span) => {
                 const history = flattenToolExchanges(state.messages, this.logger, {
                     embedExternalFiles: this.embedExternalFiles,
+                    httpsOnly: this.httpsOnly,
                 });
                 span.setAttribute("agent.flattened_tool_exchanges", history.exchangeCount);
                 this.logger.debug(

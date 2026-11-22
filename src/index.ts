@@ -49,6 +49,8 @@ import { InteractionLock } from "./infrastructure/discord/InteractionLock.ts";
 import { RateLimiter } from "./infrastructure/discord/RateLimiter.ts";
 import { HtmlToImageRenderer } from "./infrastructure/exporters/HtmlToImageRenderer.ts";
 import { MarkdownToHtmlRenderer } from "./infrastructure/exporters/MarkdownToHtmlRenderer.ts";
+import { ExternalUrlGuard } from "./infrastructure/http/ExternalUrlGuard.ts";
+import { HttpsUpgrader } from "./infrastructure/http/HttpsUpgrader.ts";
 import { createImpitClient } from "./infrastructure/http/impitClient.ts";
 import { AgentOrchestrator } from "./infrastructure/llm/agents/agentOrchestrator.ts";
 import { ComputationModelProvider } from "./infrastructure/llm/models/computationModel.ts";
@@ -115,17 +117,26 @@ const uploaderRegistry = new GenaiFileUploaderRegistry(
 const chromiumProvider = new ChromiumProvider(logger.child({ module: "browser" }));
 
 // LLM tools
+// Enforces the external content policy on every URL users supply
+const externalUrlGuard = new ExternalUrlGuard(config.file.externalContent);
+// Upgrades user-supplied plain HTTP URLs to HTTPS where possible, before the guard checks them
+const httpsUpgrader = config.file.externalContent.rewriteHttp
+    ? new HttpsUpgrader(logger.child({ module: "http:upgrade" }), externalUrlGuard)
+    : undefined;
+
 // Files found at a URL can only be loaded into the conversation in upload mode
 const isInlineMode = config.file.agent.uploadAttachmentMode === "inline";
-const getWebsiteTool = createGetWebsiteTool(
-    logger.child({ module: "tool:website" }),
-    new BrowserPageFetcher(chromiumProvider, logger.child({ module: "browser:fetch" })),
-    isInlineMode ? undefined : { maxBytes: config.file.agent.maxExternalUrlFileSizeBytes },
-);
-const getVideoCaptionsTool = await createGetVideoCaptionsTool(
-    logger.child({ module: "tool:video" }),
-    config.file.ytDlp,
-);
+const getWebsiteTool = createGetWebsiteTool(logger.child({ module: "tool:website" }), {
+    browserFetcher: new BrowserPageFetcher(chromiumProvider, logger.child({ module: "browser:fetch" })),
+    fileLoading: isInlineMode ? undefined : { maxBytes: config.file.agent.maxExternalUrlFileSizeBytes },
+    urlGuard: externalUrlGuard,
+    httpsUpgrader,
+});
+const getVideoCaptionsTool = await createGetVideoCaptionsTool(logger.child({ module: "tool:video" }), {
+    ...config.file.ytDlp,
+    urlGuard: externalUrlGuard,
+    httpsUpgrader,
+});
 const tavilyTool =
     config.file.agent.searchMode === "tavily" ? createTavilyTool(logger.child({ module: "tool:search" })) : undefined;
 
@@ -204,6 +215,7 @@ const mediaSource = new RoutingMediaSource(
         {
             maxBytes: config.file.agent.maxExternalUrlFileSizeBytes,
             responseTimeoutMs: config.file.attachmentDownloader.timeoutMs,
+            urlGuard: externalUrlGuard,
         },
     ),
     logger.child({ module: "attachments:media-source" }),

@@ -135,6 +135,20 @@ const fileConfigDefaults = {
         /** Which search backend answers requests that need current information. */
         searchMode: SearchMode.google,
     },
+    externalContent: {
+        /**
+         * Only fetch HTTPS URLs from what users supply (website and video captions tools, and
+         * the redirects the website tool follows). Discord media is not affected.
+         */
+        httpsOnly: true,
+        /** Refuse user-supplied URLs whose host resolves to a private, loopback or link-local address. */
+        blockPrivateAddresses: true,
+        /**
+         * Rewrite plain HTTP URLs that users supply to HTTPS when the host serves HTTPS with a
+         * valid certificate. Redirects are not rewritten. Runs before the HTTPS-only check.
+         */
+        rewriteHttp: true,
+    },
     ytDlp: {
         /** Number of proxy rotation retries on bot-detection or 429 responses. */
         retries: 1,
@@ -259,6 +273,14 @@ const fileConfigSchema = z.object({
         })
 
         .prefault(fileConfigDefaults.discord),
+    externalContent: z
+        .object({
+            httpsOnly: z.boolean().prefault(fileConfigDefaults.externalContent.httpsOnly),
+            blockPrivateAddresses: z.boolean().prefault(fileConfigDefaults.externalContent.blockPrivateAddresses),
+            rewriteHttp: z.boolean().prefault(fileConfigDefaults.externalContent.rewriteHttp),
+        })
+
+        .prefault(fileConfigDefaults.externalContent),
     geminiModels: z
         .object({
             /** Whether to include thought tokens in model responses. Useful for debugging. */

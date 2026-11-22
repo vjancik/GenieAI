@@ -9,6 +9,17 @@ export interface OpenedMedia {
     name: string;
 }
 
+/** Media that can no longer be opened, with the reason why. */
+export interface MediaUnavailable {
+    /** Why, phrased to complete "the file could not be loaded: <reason>". */
+    unavailable: string;
+}
+
+/** Narrows the result of {@link IMediaSource.open}. */
+export function isMediaUnavailable(result: OpenedMedia | MediaUnavailable): result is MediaUnavailable {
+    return "unavailable" in result;
+}
+
 /**
  * Port for opening the media a token URL stands for (see `mediaTokenUrl.ts`).
  *
@@ -21,7 +32,7 @@ export interface IMediaSource {
      *
      * @param tokenUrl - A `discord://` token or an external `http(s)://` file URL
      * @param expectedMimeType - The MIME type the media had when it was first seen, when known
-     * @returns The opened media, or `null` when it no longer exists or can no longer be used
+     * @returns The opened media, or why it no longer exists or can no longer be used
      */
-    open(tokenUrl: string, expectedMimeType?: string): Promise<OpenedMedia | null>;
+    open(tokenUrl: string, expectedMimeType?: string): Promise<OpenedMedia | MediaUnavailable>;
 }

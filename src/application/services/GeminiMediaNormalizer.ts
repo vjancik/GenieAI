@@ -12,7 +12,7 @@ import { parseDiscordTokenUrl } from "../helpers/discordTokenUrl.ts";
 import { isDiscordTokenUrl, isExternalFileUrl } from "../helpers/mediaTokenUrl.ts";
 import type { IGeminiFileUploaderRegistry } from "../ports/IGeminiFileUploaderRegistry.ts";
 import type { IGeminiMediaNormalizer } from "../ports/IGeminiMediaNormalizer.ts";
-import type { IMediaSource } from "../ports/IMediaSource.ts";
+import { type IMediaSource, isMediaUnavailable, type MediaUnavailable } from "../ports/IMediaSource.ts";
 import type { OnStatusUpdate } from "../types/AgentStatus.ts";
 import { AgentStatusType } from "../types/AgentStatus.ts";
 import type { Logger } from "../types/Logger.ts";
@@ -53,10 +53,10 @@ function isTokenBlock(block: unknown): block is TokenBlock {
 
 /**
  * Text left in place of an external file that can no longer be fetched. The tool result next
- * to it still says the file was retrieved, so the model has to be told that it is gone.
+ * to it still says the file was retrieved, so the model has to be told that it is gone, and why.
  */
-function unavailableFileNotice(url: string): string {
-    return `[The file at ${url} is no longer available and could not be loaded]`;
+function unavailableFileNotice(url: string, reason: string | undefined): string {
+    return `[The file at ${url} is no longer available and could not be loaded${reason ? `: ${reason}` : ""}]`;
 }
 
 /** Returns true if a block is an already-resolved Gemini fileUri block. */
@@ -167,6 +167,14 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                 // Short-circuit cache hits — populate resolvedUrls directly without a DB query.
                 // Only keys with no cache entry proceed to the DB + upload path.
                 const resolvedUrls = new Map<string, string | null>();
+                // Why each key that resolved to null is unavailable, for the notice left in its place
+                const unavailableReasons = new Map<string, string>();
+                /** Records an upload outcome, mapping unavailable media to a null resolution. */
+                const settle = (key: string, outcome: string | MediaUnavailable): string | null => {
+                    if (typeof outcome === "string") return outcome;
+                    unavailableReasons.set(key, outcome.unavailable);
+                    return null;
+                };
                 const uncachedTokenUrls = new Map<string, string>();
                 const uncachedFileUris = new Set<string>();
 
@@ -188,7 +196,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                 });
 
                 if (uncachedTokenUrls.size === 0 && uncachedFileUris.size === 0) {
-                    return this.applyResolutions(messages, resolvedUrls);
+                    return this.applyResolutions(messages, resolvedUrls, unavailableReasons);
                 }
 
                 // Two focused queries — each handles one block type.
@@ -237,13 +245,16 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                             if (!state) {
                                 // No DB anchor yet — new file, upload for the first time
                                 fireStatus();
-                                return { key, fileUri: await this.uploadNew(key, mimeType, apiKeyId) };
+                                return { key, fileUri: settle(key, await this.uploadNew(key, mimeType, apiKeyId)) };
                             }
                             const { file, upload } = state;
                             if (upload === null) {
                                 // Anchor exists but no upload for this key (new key or trigger-cleaned)
                                 fireStatus();
-                                return { key, fileUri: await this.reupload(key, mimeType, file, null, apiKeyId) };
+                                return {
+                                    key,
+                                    fileUri: settle(key, await this.reupload(key, mimeType, file, null, apiKeyId)),
+                                };
                             }
                             if (now - upload.uploadedAt.getTime() >= this.staleThresholdMs) {
                                 this.logger.info(
@@ -251,7 +262,10 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                                     "Gemini file upload is stale; re-uploading",
                                 );
                                 fireStatus();
-                                return { key, fileUri: await this.reupload(key, mimeType, file, upload, apiKeyId) };
+                                return {
+                                    key,
+                                    fileUri: settle(key, await this.reupload(key, mimeType, file, upload, apiKeyId)),
+                                };
                             }
                             // Fresh upload — use existing fileUri, with remaining TTL so the
                             // cache entry expires at the same time the upload would go stale.
@@ -277,7 +291,10 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                                 );
                             }
                             fireStatus();
-                            return { key, fileUri: await this.reupload(key, undefined, file, upload, apiKeyId) };
+                            return {
+                                key,
+                                fileUri: settle(key, await this.reupload(key, undefined, file, upload, apiKeyId)),
+                            };
                         }
                         // Fresh — no substitution needed, but cache with remaining TTL so future
                         // invocations skip the DB lookup entirely.
@@ -307,7 +324,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
 
                 span.setAttribute("gemini.resolved_count", resolvedUrls.size);
 
-                return this.applyResolutions(messages, resolvedUrls);
+                return this.applyResolutions(messages, resolvedUrls, unavailableReasons);
             },
         );
     }
@@ -316,18 +333,21 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
      * Handles a token URL with no existing DB anchor: opens the media at its origin, uploads it
      * to Gemini, and persists both the anchor and the upload record.
      *
-     * Returns the new Gemini `fileUri`, or `null` if the media is gone.
+     * Returns the new Gemini `fileUri`, or why the media is unavailable.
      */
     private async uploadNew(
         tokenUrl: string,
         expectedMimeType: string | undefined,
         apiKeyId: string,
-    ): Promise<string | null> {
+    ): Promise<string | MediaUnavailable> {
         return Sentry.startSpan({ name: "Upload new Gemini file", op: "gemini.files.upload_new" }, async () => {
             const media = await this.mediaSource.open(tokenUrl, expectedMimeType);
-            if (!media) {
-                this.logger.warn({ tokenUrl }, "Media not available for new upload — dropping block");
-                return null;
+            if (isMediaUnavailable(media)) {
+                this.logger.warn(
+                    { tokenUrl, reason: media.unavailable },
+                    "Media not available for new upload — dropping block",
+                );
+                return media;
             }
 
             const uploader = this.uploaderRegistry.get(apiKeyId);
@@ -402,7 +422,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
      *
      * @param blockKey - The URL found in the content block: a token URL or a Gemini fileUri. Used for logging only.
      *
-     * Returns the new Gemini `fileUri`, or `null` if the media is gone.
+     * Returns the new Gemini `fileUri`, or why the media is unavailable.
      */
     private async reupload(
         blockKey: string,
@@ -410,7 +430,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
         file: GeminiFile,
         existingUpload: GeminiFileUpload | null,
         apiKeyId: string,
-    ): Promise<string | null> {
+    ): Promise<string | MediaUnavailable> {
         return Sentry.startSpan(
             {
                 name: "Re-upload Gemini file",
@@ -428,17 +448,17 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                         { blockKey, tokenUrl, fileId: file.id },
                         "Gemini file anchor does not hold a media token URL — skipping re-upload",
                     );
-                    return null;
+                    return { unavailable: "it predates the current storage format" };
                 }
 
                 const media = await this.mediaSource.open(tokenUrl, expectedMimeType);
 
-                if (!media) {
+                if (isMediaUnavailable(media)) {
                     this.logger.warn(
-                        { blockKey, tokenUrl, fileId: file.id },
+                        { blockKey, tokenUrl, fileId: file.id, reason: media.unavailable },
                         "Media no longer available for re-upload — dropping block",
                     );
-                    return null;
+                    return media;
                 }
 
                 const uploader = this.uploaderRegistry.get(apiKeyId);
@@ -478,7 +498,11 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
      * - String resolution: token block replaced with `{ type:"media", mimeType, fileUri }`.
      * - Unchanged messages are returned as-is (no new object created).
      */
-    private applyResolutions(messages: BaseMessage[], resolved: Map<string, string | null>): BaseMessage[] {
+    private applyResolutions(
+        messages: BaseMessage[],
+        resolved: Map<string, string | null>,
+        unavailableReasons: ReadonlyMap<string, string>,
+    ): BaseMessage[] {
         return messages.map((msg) => {
             if (!Array.isArray(msg.content)) return msg;
 
@@ -494,7 +518,10 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                     } else if (fileUri === null) {
                         // Media deleted — drop block
                         if (isExternalFileUrl(block.url)) {
-                            newBlocks.push({ type: "text", text: unavailableFileNotice(block.url) });
+                            newBlocks.push({
+                                type: "text",
+                                text: unavailableFileNotice(block.url, unavailableReasons.get(block.url)),
+                            });
                         }
                         modified = true;
                     } else {

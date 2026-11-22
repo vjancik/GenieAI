@@ -1,5 +1,5 @@
 import { tool } from "@langchain/core/tools";
-import type { Impit } from "impit";
+import type { ImpitResponse } from "impit";
 import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
 import { z } from "zod";
@@ -9,9 +9,18 @@ import { ToolName } from "../../../application/types/ToolName.ts";
 import type { WebFetchFailure } from "../../../domain/errors/AppError.ts";
 import { ToolError, WebFetchError } from "../../../domain/errors/AppError.ts";
 import type { BrowserPageFetcher } from "../../browser/BrowserPageFetcher.ts";
-import { declaredByteLength, resolveFileMimeType, resolveFileName } from "../../http/externalFile.ts";
+import type { IExternalUrlGuard } from "../../http/ExternalUrlGuard.ts";
+import {
+    declaredByteLength,
+    inferTextContentType,
+    isGenericMimeType,
+    resolveFileMimeType,
+    resolveFileName,
+} from "../../http/externalFile.ts";
+import { type IHttpsUpgrader, upgradeSuppliedUrl } from "../../http/HttpsUpgrader.ts";
 import { createImpitClient, IMPIT_PROFILES, type ImpitProfile } from "../../http/impitClient.ts";
 import { analyzePage, describeProblem } from "../../http/pageAnalysis.ts";
+import { type FetchHop, fetchFollowingRedirects } from "../../http/redirects.ts";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -83,6 +92,22 @@ const TEXTUAL_APPLICATION_MIME_TYPES = new Set([
     "application/yaml",
     "application/x-yaml",
     "application/csv",
+    // Source code types that servers and the MIME database use outside the text/* tree
+    "application/toml",
+    "application/sql",
+    "application/graphql",
+    "application/typescript",
+    "application/x-typescript",
+    "application/x-sh",
+    "application/x-csh",
+    "application/x-httpd-php",
+    "application/x-perl",
+    "application/x-ruby",
+    "application/x-python",
+    "application/x-tex",
+    "application/x-latex",
+    // SVG is XML markup: Gemini does not read it as an image
+    "image/svg+xml",
 ]);
 
 /**
@@ -126,9 +151,16 @@ function decodeHtmlEntities(value: string): string {
  * form's hidden fields (CSRF token, session id, original destination) together
  * with an `agree` value sets the consent cookies and redirects to the real page.
  *
+ * The submission follows its redirects through the same checks as the original request.
+ *
  * @returns The consented page's HTML, or `null` if the form could not be replayed.
  */
-async function acceptConsentForm(impit: Impit, url: string, html: string): Promise<string | null> {
+async function acceptConsentForm(
+    fetchHop: FetchHop<ImpitResponse>,
+    url: string,
+    html: string,
+    urlGuard: IExternalUrlGuard | undefined,
+): Promise<string | null> {
     const form = new URLSearchParams();
     for (const input of html.match(/<input[^>]*>/gi) ?? []) {
         const name = input.match(/name=["']([^"']+)["']/i)?.[1];
@@ -141,11 +173,16 @@ async function acceptConsentForm(impit: Impit, url: string, html: string): Promi
     if ([...form].length === 0) return null;
     form.append("agree", "agree");
 
-    const res = await impit.fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded", referer: url },
-        body: form.toString(),
-    });
+    const { response: res } = await fetchFollowingRedirects(
+        fetchHop,
+        url,
+        {
+            method: "POST",
+            headers: { "content-type": "application/x-www-form-urlencoded", referer: url },
+            body: form.toString(),
+        },
+        urlGuard,
+    );
     if (!res.ok) return null;
 
     const consented = await res.text();
@@ -170,6 +207,24 @@ export type FileLoadingOptions = {
     /** Files declared larger than this are reported as a failure. */
     maxBytes: number;
 };
+
+/** Optional capabilities of the website tool. */
+export interface GetWebsiteToolOptions {
+    /**
+     * Browser fallback for client-rendered pages and JS bot challenges. Without it, such
+     * pages are reported as failures.
+     */
+    browserFetcher?: BrowserPageFetcher;
+    /**
+     * Enables reporting files found at a URL. Without it, files are rejected as unsupported
+     * content, which suits setups that cannot load them.
+     */
+    fileLoading?: FileLoadingOptions;
+    /** Checks each requested URL and redirect hop against the external content policy. */
+    urlGuard?: IExternalUrlGuard;
+    /** Rewrites requested plain HTTP URLs to HTTPS where the host supports it, before the guard sees them. */
+    httpsUpgrader?: IHttpsUpgrader;
+}
 
 /**
  * Result of one fetch attempt.
@@ -213,17 +268,31 @@ function describeFile(headers: Headers, mimeType: string, url: string, fileLoadi
     return { mimeType: fileMimeType, name: resolveFileName(headers, url), sizeBytes };
 }
 
-/** Performs one fetch attempt with a specific browser fingerprint. */
+/** Text that cannot be valid in a text file; its presence marks a binary body. */
+const NUL_CHARACTER = "\u0000";
+
+/**
+ * Performs one fetch attempt with a specific browser fingerprint.
+ *
+ * Redirects are followed hop by hop, each checked by the URL guard before it is requested.
+ */
 async function fetchWithProfile(
     url: string,
     browser: ImpitProfile,
-    fileLoading?: FileLoadingOptions,
+    options: Pick<GetWebsiteToolOptions, "fileLoading" | "urlGuard">,
 ): Promise<FetchOutcome> {
     const impit = createImpitClient(browser, REQUEST_TIMEOUT_MS);
 
     // Lets the request be dropped once the headers show a file, whose body is not wanted here
     const abortController = new AbortController();
-    const res = await impit.fetch(url, { signal: abortController.signal });
+    const fetchHop: FetchHop<ImpitResponse> = (hopUrl, request) =>
+        impit.fetch(hopUrl, { ...request, signal: abortController.signal, redirect: "manual" });
+    const { response: res, url: finalUrl } = await fetchFollowingRedirects(
+        fetchHop,
+        url,
+        { method: "GET" },
+        options.urlGuard,
+    );
     const mimeType = parseMimeType(res.headers.get("content-type")) ?? "";
 
     if (!res.ok) {
@@ -234,29 +303,42 @@ async function fetchWithProfile(
         return { body, contentType: mimeType, status: res.status, ok: false };
     }
 
-    if (!isTextualMimeType(mimeType)) {
+    // A generic type says nothing, so a text or code file extension is trusted instead
+    const contentType = isTextualMimeType(mimeType)
+        ? mimeType
+        : isGenericMimeType(mimeType)
+          ? inferTextContentType(finalUrl)
+          : null;
+
+    if (contentType === null) {
         // Either way the body goes unread, so stop the transfer rather than let it run
         abortController.abort();
-        if (fileLoading === undefined) {
+        if (options.fileLoading === undefined) {
             throw new ToolError(`Unsupported content type "${mimeType}" — only textual responses are supported`);
         }
-        const file = describeFile(res.headers, mimeType, res.url || url, fileLoading);
+        const file = describeFile(res.headers, mimeType, finalUrl, options.fileLoading);
         return { body: "", contentType: file.mimeType, status: res.status, ok: true, file };
     }
 
     const body = await res.text();
 
-    if (HTML_MIME_TYPES.has(mimeType) && CONSENT_FORM_PATTERN.test(body)) {
-        const consented = await acceptConsentForm(impit, res.url, body);
-        if (consented !== null) return { body: consented, contentType: mimeType, status: res.status, ok: true };
+    // The extension can be misleading (`.ts` is also a video container): verify the body is text
+    if (contentType !== mimeType && body.includes(NUL_CHARACTER)) {
+        throw new ToolError(`Unsupported content type "${mimeType}" — the file is binary, not text`);
     }
 
-    return { body, contentType: mimeType, status: res.status, ok: true };
+    if (HTML_MIME_TYPES.has(contentType) && CONSENT_FORM_PATTERN.test(body)) {
+        const consented = await acceptConsentForm(fetchHop, finalUrl, body, options.urlGuard);
+        if (consented !== null) return { body: consented, contentType, status: res.status, ok: true };
+    }
+
+    return { body, contentType, status: res.status, ok: true };
 }
 
 /**
  * Fetches a URL and returns its body as text, enforcing that the Content-Type
- * is textual (see {@link isTextualMimeType}).
+ * is textual (see {@link isTextualMimeType}), or that the URL names a text or source code file
+ * when the Content-Type is generic (see {@link inferTextContentType}).
  *
  * A binary response is rejected with a ToolError, unless `fileLoading` is given and the
  * response is a file the model can read (PDF, image, audio, video): the outcome then
@@ -274,12 +356,15 @@ async function fetchWithProfile(
  * GDPR consent interstitials encountered along the way are accepted
  * automatically (see {@link acceptConsentForm}).
  */
-async function fetchTextBody(url: string, fileLoading?: FileLoadingOptions): Promise<FetchOutcome> {
+async function fetchTextBody(
+    url: string,
+    options: Pick<GetWebsiteToolOptions, "fileLoading" | "urlGuard">,
+): Promise<FetchOutcome> {
     let lastTransportError: unknown;
 
     for (const profile of IMPIT_PROFILES) {
         try {
-            return await fetchWithProfile(url, profile, fileLoading);
+            return await fetchWithProfile(url, profile, options);
         } catch (err) {
             // ToolError means the server answered and we rejected the response;
             // only connection-level failures are worth another fingerprint.
@@ -325,15 +410,20 @@ export function bodyToContent(body: string, contentType: string): string {
     return body;
 }
 
+/**
+ * Fields every result carries: the URL fetched, and the URL as requested when it was
+ * upgraded from plain HTTP to HTTPS before fetching.
+ */
+type WebsiteEntryUrl = { url: string; upgradedFrom?: string };
 /** Successful result for a single URL that served a web page or other text. */
-export type WebsiteResult = { url: string; pageContents: string };
+export type WebsiteResult = WebsiteEntryUrl & { pageContents: string };
 /**
  * Successful result for a single URL that served a file. Carries no content: the file is
  * loaded from the URL when the conversation is sent to the model.
  */
-export type WebsiteFileResult = { url: string; file: FetchedFile };
+export type WebsiteFileResult = WebsiteEntryUrl & { file: FetchedFile };
 /** Error result for a single URL fetch, with a machine-readable reason. */
-export type WebsiteError = { url: string; error: string; reason: WebFetchFailure };
+export type WebsiteError = WebsiteEntryUrl & { error: string; reason: WebFetchFailure };
 /** Union result type returned per URL by the website tool. */
 export type WebsiteResultEntry = WebsiteResult | WebsiteFileResult | WebsiteError;
 
@@ -385,10 +475,10 @@ async function handleErrorResponse(
 async function retrievePage(
     url: string,
     logger: Logger,
-    browserFetcher?: BrowserPageFetcher,
-    fileLoading?: FileLoadingOptions,
+    options: GetWebsiteToolOptions,
 ): Promise<string | FetchedFile> {
-    const { body, contentType, status, ok, file } = await fetchTextBody(url, fileLoading);
+    const { browserFetcher } = options;
+    const { body, contentType, status, ok, file } = await fetchTextBody(url, options);
 
     if (file !== undefined) return file;
 
@@ -471,6 +561,26 @@ function toWebsiteError(url: string, err: unknown): WebsiteError {
 }
 
 /**
+ * Fetches one requested URL into its result entry, upgrading it to HTTPS first when an
+ * upgrader is configured. Failures become error entries rather than rejections.
+ */
+async function fetchEntry(
+    requestedUrl: string,
+    logger: Logger,
+    options: GetWebsiteToolOptions,
+): Promise<WebsiteResultEntry> {
+    const target = await upgradeSuppliedUrl(requestedUrl, options.httpsUpgrader);
+    try {
+        const retrieved = await retrievePage(target.url, logger, options);
+        return typeof retrieved === "string" ? { ...target, pageContents: retrieved } : { ...target, file: retrieved };
+    } catch (err) {
+        const failure = toWebsiteError(target.url, err);
+        logger.warn({ url: target.url, reason: failure.reason, error: failure.error }, "Failed to fetch URL");
+        return { ...target, error: failure.error, reason: failure.reason };
+    }
+}
+
+/**
  * Creates a LangChain tool that fetches one or more URLs and returns their
  * content as a structured array, one entry per URL. HTML pages are converted
  * to Markdown; other textual types are returned verbatim. Files the model can read
@@ -481,39 +591,23 @@ function toWebsiteError(url: string, err: unknown): WebsiteError {
  *
  * Duplicate URLs are deduplicated before fetching.
  *
+ * Plain HTTP URLs are upgraded to HTTPS first where the host supports it (see
+ * {@link IHttpsUpgrader}); such entries carry the requested URL in `upgradedFrom`.
+ * URLs refused by the URL guard (plain HTTP, private addresses) are reported with a reason
+ * stating that the refusal is a fixed policy, so the model does not suggest retrying.
+ *
  * @param logger - Injectable logger for testability
- * @param browserFetcher - Optional browser fallback for client-rendered pages and
- *   JS bot challenges. Without it, such pages are reported as failures.
- * @param fileLoading - Enables reporting files found at a URL. Without it, files are
- *   rejected as unsupported content, which suits setups that cannot load them.
+ * @param options - Optional capabilities, see {@link GetWebsiteToolOptions}
  */
-export function createGetWebsiteTool(
-    logger: Logger,
-    browserFetcher?: BrowserPageFetcher,
-    fileLoading?: FileLoadingOptions,
-) {
+export function createGetWebsiteTool(logger: Logger, options: GetWebsiteToolOptions = {}) {
+    const { fileLoading } = options;
     return tool(
         async ({ urls }): Promise<WebsiteResultEntry[]> => {
             // Deduplicate URLs to avoid redundant fetches
             const unique = [...new Set(urls)];
             logger.debug({ urls: unique }, "Fetching websites");
 
-            const results = await Promise.allSettled(
-                unique.map(async (url): Promise<WebsiteResult | WebsiteFileResult> => {
-                    const retrieved = await retrievePage(url, logger, browserFetcher, fileLoading);
-                    return typeof retrieved === "string" ? { url, pageContents: retrieved } : { url, file: retrieved };
-                }),
-            );
-
-            return results.map((result, i) => {
-                if (result.status === "fulfilled") {
-                    return result.value;
-                }
-                const url = unique[i] ?? "unknown";
-                const failure = toWebsiteError(url, result.reason);
-                logger.warn({ url, reason: failure.reason, error: failure.error }, "Failed to fetch URL");
-                return failure;
-            });
+            return Promise.all(unique.map((url) => fetchEntry(url, logger, options)));
         },
         {
             name: ToolName.GET_WEBSITE,

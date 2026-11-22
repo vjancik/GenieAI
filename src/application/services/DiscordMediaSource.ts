@@ -1,7 +1,7 @@
 import { parseDiscordTokenUrl } from "../helpers/discordTokenUrl.ts";
 import { fetchDiscordTokenMedia } from "../helpers/fetchDiscordTokenMedia.ts";
 import type { IDiscordMediaService } from "../ports/IDiscordMediaService.ts";
-import type { IMediaSource, OpenedMedia } from "../ports/IMediaSource.ts";
+import type { IMediaSource, MediaUnavailable, OpenedMedia } from "../ports/IMediaSource.ts";
 import type { IStreamingAttachmentDownloader } from "../ports/IStreamingAttachmentDownloader.ts";
 import type { Logger } from "../types/Logger.ts";
 
@@ -17,14 +17,14 @@ export class DiscordMediaSource implements IMediaSource {
     ) {}
 
     /**
-     * @returns `null` when the token cannot be parsed or the Discord media was deleted
+     * @returns Why the media is unavailable when the token cannot be parsed or the Discord media was deleted
      * @throws AppError (`ATTACHMENT_DOWNLOAD_FAILED`) when the media exists but cannot be downloaded
      */
-    async open(tokenUrl: string, expectedMimeType?: string): Promise<OpenedMedia | null> {
+    async open(tokenUrl: string, expectedMimeType?: string): Promise<OpenedMedia | MediaUnavailable> {
         const token = parseDiscordTokenUrl(tokenUrl);
         if (!token) {
             this.logger.warn({ tokenUrl }, "Cannot parse discord token URL");
-            return null;
+            return { unavailable: "its Discord reference is malformed" };
         }
 
         const media = await fetchDiscordTokenMedia(this.mediaService, token);
@@ -33,7 +33,7 @@ export class DiscordMediaSource implements IMediaSource {
                 { tokenUrl, kind: token.kind, discordMessageId: token.messageId },
                 "Discord media no longer exists",
             );
-            return null;
+            return { unavailable: "the Discord message or media was deleted" };
         }
 
         const { stream, mimeType, byteLength } = await this.streamingDownloader.downloadStream(media, expectedMimeType);

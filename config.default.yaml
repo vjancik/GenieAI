@@ -54,6 +54,19 @@ ytDlp:
   # Hard cap in milliseconds on a whole captions fetch, including all retries.
   timeoutMs: 300000         # <optional>
 
+# Policy for content fetched from URLs that users supply (website and video captions tools).
+# Discord attachments and embeds are not affected.
+externalContent:
+  # Rewrite plain HTTP URLs that users supply to HTTPS when the host serves HTTPS with a valid
+  # certificate, before the HTTPS-only check applies. Redirects are not rewritten.  <optional, default: true>
+  rewriteHttp: true
+  # Only fetch HTTPS URLs, including every redirect the website tool follows.  <optional, default: true>
+  httpsOnly: true
+  # Refuse URLs whose host resolves to a private, loopback or link-local address (e.g. localhost,
+  # 192.168.x.x, the cloud metadata endpoint), guarding against requests into the bot's own network.
+  # <optional, default: true>
+  blockPrivateAddresses: true
+
 agent:
   # How file attachments are passed to the LLM ("inline" or "upload").
   uploadAttachmentMode: "upload"  # <optional>

@@ -18,7 +18,7 @@ describe("RoutingMediaSource.open", () => {
 
         const opened = await source.open("discord://g/c/m/a", "image/png");
 
-        expect(opened?.name).toBe("discord");
+        expect(opened).toMatchObject({ name: "discord" });
         expect(discord.open).toHaveBeenCalledWith("discord://g/c/m/a", "image/png");
         expect(external.open).not.toHaveBeenCalled();
     });
@@ -28,13 +28,13 @@ describe("RoutingMediaSource.open", () => {
         const external = makeSource("external");
         const source = new RoutingMediaSource(discord, external, testLogger);
 
-        expect((await source.open("HTTPS://example.com/x.pdf"))?.name).toBe("external");
+        expect(await source.open("HTTPS://example.com/x.pdf")).toMatchObject({ name: "external" });
         expect(discord.open).not.toHaveBeenCalled();
     });
 
     test("returns null for a URL of an unknown kind", async () => {
         const source = new RoutingMediaSource(makeSource("discord"), makeSource("external"), testLogger);
 
-        expect(await source.open("ftp://example.com/x.pdf")).toBeNull();
+        expect(await source.open("ftp://example.com/x.pdf")).toMatchObject({ unavailable: expect.any(String) });
     });
 });

@@ -5,24 +5,26 @@ import * as Sentry from "@sentry/bun";
 import { file as bunFile, randomUUIDv7 } from "bun";
 import { isGeminiNativeMimeType } from "../../application/helpers/geminiMimeType.ts";
 import { parseMimeType } from "../../application/helpers/parseMimeType.ts";
-import type { IMediaSource, OpenedMedia } from "../../application/ports/IMediaSource.ts";
+import type { IMediaSource, MediaUnavailable, OpenedMedia } from "../../application/ports/IMediaSource.ts";
 import type { Logger } from "../../application/types/Logger.ts";
-import { declaredByteLength, resolveFileMimeType, resolveFileName } from "../http/externalFile.ts";
+import { WebFetchError } from "../../domain/errors/AppError.ts";
+import type { IExternalUrlGuard } from "../http/ExternalUrlGuard.ts";
+import { declaredByteLength, isGenericMimeType, resolveFileMimeType, resolveFileName } from "../http/externalFile.ts";
 import { IMPIT_PROFILES, type ImpitProfile } from "../http/impitClient.ts";
+import { fetchFollowingRedirects, type HopRequest } from "../http/redirects.ts";
 
 /** The part of an HTTP response this source reads. */
 interface FileResponse {
     ok: boolean;
     status: number;
-    /** The final URL, after redirects. */
-    url: string;
     headers: Headers;
     body: ReadableStream<Uint8Array>;
 }
 
 /** The part of an HTTP client this source uses. */
 interface FileHttpClient {
-    fetch(url: string, init: { signal: AbortSignal }): Promise<FileResponse>;
+    /** Performs a single request; redirects must be returned rather than followed. */
+    fetch(url: string, init: HopRequest & { signal: AbortSignal; redirect: "manual" }): Promise<FileResponse>;
 }
 
 /**
@@ -36,14 +38,20 @@ interface ExternalFileSourceOptions {
     maxBytes: number;
     /** How long to wait for the response headers before giving up on an attempt (ms). */
     responseTimeoutMs: number;
+    /**
+     * Checks the URL and every redirect hop against the external content policy, which may
+     * have changed since the website tool found the file.
+     */
+    urlGuard?: IExternalUrlGuard;
 }
 
-/** A response rejected for a reason another attempt would not change. */
-type Rejection = { rejected: string };
-
-/** Whether a Content-Type names an actual type, rather than being absent or the generic binary one. */
-function isSpecific(mimeType: string | null): boolean {
-    return mimeType !== null && mimeType !== "" && mimeType !== "application/octet-stream";
+/**
+ * Drops the leading "<url>: " of a fetch error message, which the notice shown in place of
+ * the file already names.
+ */
+function withoutUrlPrefix(message: string, url: string): string {
+    const prefix = `${url}: `;
+    return message.startsWith(prefix) ? message.slice(prefix.length) : message;
 }
 
 /**
@@ -95,9 +103,9 @@ export class ImpitExternalFileSource implements IMediaSource {
      * @param url - The file's URL
      * @param expectedMimeType - The type the file had when the website tool found it. Used
      *   when the server does not name a type of its own.
-     * @returns The opened file, or `null` when it cannot be loaded (any more)
+     * @returns The opened file, or why it cannot be loaded (any more)
      */
-    async open(url: string, expectedMimeType?: string): Promise<OpenedMedia | null> {
+    async open(url: string, expectedMimeType?: string): Promise<OpenedMedia | MediaUnavailable> {
         return Sentry.startSpan({ name: "Download external file", op: "http.client.download" }, async (span) => {
             let lastError: unknown;
 
@@ -105,9 +113,9 @@ export class ImpitExternalFileSource implements IMediaSource {
             for (const profile of IMPIT_PROFILES) {
                 try {
                     const opened = await this.openWithProfile(url, profile, expectedMimeType);
-                    if ("rejected" in opened) {
-                        this.logger.warn({ url, reason: opened.rejected }, "External file cannot be loaded");
-                        return null;
+                    if ("unavailable" in opened) {
+                        this.logger.warn({ url, reason: opened.unavailable }, "External file cannot be loaded");
+                        return opened;
                     }
                     span.setAttributes({
                         "attachment.mime_type": opened.mimeType,
@@ -119,63 +127,80 @@ export class ImpitExternalFileSource implements IMediaSource {
                     );
                     return opened;
                 } catch (err) {
+                    // A refused URL or redirect is final: another fingerprint changes nothing
+                    if (err instanceof WebFetchError) {
+                        this.logger.warn({ url, reason: err.reason }, "External file URL refused");
+                        return { unavailable: withoutUrlPrefix(err.message, url) };
+                    }
                     lastError = err;
                 }
             }
 
             this.logger.warn({ url, err: lastError }, "External file could not be reached");
-            return null;
+            return { unavailable: "the server could not be reached" };
         });
     }
 
     /**
      * Performs one download attempt.
      *
+     * Redirects are followed hop by hop, each checked by the URL guard before it is requested.
+     *
+     * @throws WebFetchError when the URL guard refuses the URL or a redirect hop
      * @throws On a transport-level failure, including a timeout waiting for the headers
      */
     private async openWithProfile(
         url: string,
         profile: ImpitProfile,
         expectedMimeType: string | undefined,
-    ): Promise<OpenedMedia | Rejection> {
+    ): Promise<OpenedMedia | MediaUnavailable> {
         const abortController = new AbortController();
-        // Bounds the wait for headers only: the body is given the time its size demands
+        // Bounds the wait for the final headers only: the body is given the time its size demands
         const timeoutId = setTimeout(() => abortController.abort(), this.options.responseTimeoutMs);
 
+        const client = this.createClient(profile);
         let response: FileResponse;
+        let finalUrl: string;
         try {
-            response = await this.createClient(profile).fetch(url, { signal: abortController.signal });
+            ({ response, url: finalUrl } = await fetchFollowingRedirects(
+                (hopUrl, request) =>
+                    client.fetch(hopUrl, { ...request, signal: abortController.signal, redirect: "manual" }),
+                url,
+                { method: "GET" },
+                this.options.urlGuard,
+            ));
         } finally {
             clearTimeout(timeoutId);
         }
 
-        const reject = (reason: string): Rejection => {
+        const reject = (reason: string): MediaUnavailable => {
             // Stop the transfer of a body nobody is going to read
             abortController.abort();
-            return { rejected: reason };
+            return { unavailable: reason };
         };
 
-        if (!response.ok) return reject(`HTTP ${response.status}`);
+        if (!response.ok) return reject(`the server responded with HTTP ${response.status}`);
 
-        const finalUrl = response.url || url;
         const headerMimeType = parseMimeType(response.headers.get("content-type"));
         const mimeType =
             resolveFileMimeType(headerMimeType, finalUrl) ??
             // A server naming no specific type leaves the type the file had before as the best guess
-            (expectedMimeType !== undefined && isGeminiNativeMimeType(expectedMimeType) && !isSpecific(headerMimeType)
+            (expectedMimeType !== undefined &&
+            isGeminiNativeMimeType(expectedMimeType) &&
+            isGenericMimeType(headerMimeType)
                 ? expectedMimeType
                 : null);
-        if (mimeType === null) return reject(`unsupported content type "${headerMimeType ?? "unknown"}"`);
+        if (mimeType === null) return reject(`it is now of an unsupported type ("${headerMimeType ?? "unknown"}")`);
 
         const name = resolveFileName(response.headers, finalUrl);
         const byteLength = declaredByteLength(response.headers);
 
         if (byteLength === null) {
             const spooled = await this.spoolToDisk(response.body);
-            if (spooled === null) return reject("larger than the size limit");
+            if (spooled === null) return reject("it is larger than the size limit");
             return { ...spooled, mimeType, name };
         }
-        if (byteLength > this.options.maxBytes) return reject("larger than the size limit");
+        if (byteLength > this.options.maxBytes) return reject("it is larger than the size limit");
 
         return { stream: response.body, mimeType, byteLength, name };
     }

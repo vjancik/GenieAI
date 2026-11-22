@@ -84,11 +84,25 @@ export type WebFetchFailure =
     | "unreachable"
     | "unsupported-content"
     | "too-large"
+    | "insecure-url"
+    | "private-address"
     | "blocked"
     | "paywalled"
     | "client-rendered"
     | "no-article"
     | "empty";
+
+/**
+ * Failures that fetching the same URL again cannot fix: they stem from a fixed policy or
+ * from what the URL serves, not from a transient condition. A URL that failed this way is
+ * not fetched again in a later turn.
+ */
+export const PERMANENT_WEB_FETCH_FAILURES: ReadonlySet<string> = new Set<WebFetchFailure>([
+    "unsupported-content",
+    "too-large",
+    "insecure-url",
+    "private-address",
+]);
 
 /**
  * Thrown when a web page fetch fails, carrying a machine-readable reason so the

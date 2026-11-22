@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
     declaredByteLength,
+    inferTextContentType,
     resolveFileMimeType,
     resolveFileName,
 } from "../../../src/infrastructure/http/externalFile.ts";
@@ -66,5 +67,38 @@ describe("declaredByteLength", () => {
         expect(declaredByteLength(new Headers({ "content-length": "1024", "content-encoding": "identity" }))).toBe(
             1024,
         );
+    });
+});
+
+describe("inferTextContentType", () => {
+    test.each([
+        "https://example.com/src/main.py",
+        "https://example.com/lib.rs",
+        "https://example.com/a/b/server.go",
+        "https://example.com/config.toml",
+        "https://example.com/run.sh?raw=1",
+        "https://example.com/logo.SVG",
+        "https://example.com/repo/Dockerfile",
+        "https://example.com/repo/.gitignore",
+    ])("recognizes %s as text", (url) => {
+        expect(inferTextContentType(url)).toBe("text/plain");
+    });
+
+    test("reads HTML files as HTML", () => {
+        expect(inferTextContentType("https://example.com/page.htm")).toBe("text/html");
+    });
+
+    test.each(["https://example.com/report.pdf", "https://example.com/archive.zip", "https://example.com/download"])(
+        "does not claim %s",
+        (url) => {
+            expect(inferTextContentType(url)).toBeNull();
+        },
+    );
+});
+
+describe("resolveFileMimeType — SVG", () => {
+    test("never treats SVG as a file, whether declared or inferred", () => {
+        expect(resolveFileMimeType("image/svg+xml", "https://example.com/x")).toBeNull();
+        expect(resolveFileMimeType("application/octet-stream", "https://example.com/logo.svg")).toBeNull();
     });
 });

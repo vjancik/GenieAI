@@ -18,6 +18,8 @@ type ImpitReply = {
 let calls: ImpitCall[] = [];
 /** Constructor options the tool passed to Impit — asserted for the browser preset. */
 let constructorOptions: Record<string, unknown> | undefined;
+/** The redirect mode of each request — the tool must never let Impit follow redirects itself. */
+let redirectModes: (string | undefined)[] = [];
 /** The abort signals the tool passed along with its requests. */
 let signals: AbortSignal[] = [];
 /** Per-test responder; receives each request in order. */
@@ -25,9 +27,10 @@ let respond: (call: ImpitCall) => ImpitReply = () => ({});
 
 function toResponse(reply: ImpitReply, requestUrl: string) {
     const body = reply.body ?? "<html><body><h1>Hello</h1><p>World</p></body></html>";
+    const status = reply.status ?? 200;
     return {
-        ok: reply.ok ?? true,
-        status: reply.status ?? 200,
+        ok: reply.ok ?? (status >= 200 && status < 300),
+        status,
         url: reply.url ?? requestUrl,
         headers: new Headers({ "content-type": reply.contentType ?? "text/html", ...reply.headers }),
         text: async () => body,
@@ -40,7 +43,8 @@ mock.module("impit", () => ({
         constructor(options: Record<string, unknown>) {
             constructorOptions = options;
         }
-        fetch(url: string, init?: { method?: string; body?: string; signal?: AbortSignal }) {
+        fetch(url: string, init?: { method?: string; body?: string; signal?: AbortSignal; redirect?: string }) {
+            redirectModes.push(init?.redirect);
             const call: ImpitCall = { url, method: init?.method ?? "GET", body: init?.body };
             calls.push(call);
             if (init?.signal) signals.push(init.signal);
@@ -55,10 +59,16 @@ async function invokeTool(urls: string[]) {
     return createGetWebsiteTool(testLogger).invoke({ urls });
 }
 
+/** A 302 redirect reply. */
+function redirectTo(location: string): ImpitReply {
+    return { status: 302, headers: { location }, body: "" };
+}
+
 const contentsOf = (entry: unknown) => (entry as { pageContents: string }).pageContents;
 
 beforeEach(() => {
     calls = [];
+    redirectModes = [];
     signals = [];
     constructorOptions = undefined;
     respond = () => ({});
@@ -75,10 +85,11 @@ describe("createGetWebsiteTool", () => {
         expect(contentsOf(result[0])).toContain("World");
     });
 
-    test("requests through Impit's Firefox preset, following redirects", async () => {
+    test("requests through Impit's Firefox preset, following redirects itself", async () => {
         await invokeTool(["https://example.com"]);
 
-        expect(constructorOptions).toMatchObject({ browser: "firefox", followRedirects: true });
+        // Redirects are followed hop by hop by the tool, so that each hop can be checked
+        expect(constructorOptions).toMatchObject({ browser: "firefox", followRedirects: false });
         // Impit's preset supplies the fingerprint headers; only content negotiation is overridden
         expect(constructorOptions?.headers).toEqual({ "accept-language": "en-US,en;q=0.9" });
     });
@@ -184,11 +195,13 @@ describe("consent interstitials", () => {
         respond = (call) =>
             call.method === "POST"
                 ? { body: "<html><body><p>The actual article body</p></body></html>" }
-                : { body: CONSENT_PAGE, url: "https://consent.example.com/collectConsent" };
+                : call.url === "https://news.example.com/story"
+                  ? redirectTo("https://consent.example.com/collectConsent")
+                  : { body: CONSENT_PAGE };
 
         const result = await invokeTool(["https://news.example.com/story"]);
 
-        expect(calls).toHaveLength(2);
+        expect(calls.map((c) => c.method)).toEqual(["GET", "GET", "POST"]);
         expect(contentsOf(result[0])).toContain("The actual article body");
         expect(contentsOf(result[0])).not.toContain("consent");
     });
@@ -197,7 +210,9 @@ describe("consent interstitials", () => {
         respond = (call) =>
             call.method === "POST"
                 ? { body: "<html><body><p>Article</p></body></html>" }
-                : { body: CONSENT_PAGE, url: "https://consent.example.com/collectConsent" };
+                : call.url === "https://news.example.com/story"
+                  ? redirectTo("https://consent.example.com/collectConsent")
+                  : { body: CONSENT_PAGE };
 
         await invokeTool(["https://news.example.com/story"]);
 
@@ -212,7 +227,7 @@ describe("consent interstitials", () => {
     });
 
     test("falls back to the original body when consent submission stays gated", async () => {
-        respond = () => ({ body: CONSENT_PAGE, url: "https://consent.example.com/collectConsent" });
+        respond = () => ({ body: CONSENT_PAGE });
 
         const result = await invokeTool(["https://news.example.com/story"]);
 
@@ -322,7 +337,7 @@ describe("browser escalation", () => {
     async function invokeWithFetcher(urls: string[], fetcher: { fetchRenderedHtml: (u: string) => Promise<string> }) {
         const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
         // TYPE COERCION: test double implements the only method the tool calls
-        return createGetWebsiteTool(testLogger, fetcher as never).invoke({ urls });
+        return createGetWebsiteTool(testLogger, { browserFetcher: fetcher as never }).invoke({ urls });
     }
 
     test("renders a client-rendered shell with the browser", async () => {
@@ -434,7 +449,7 @@ describe("createGetWebsiteTool — files", () => {
     /** Invokes the tool with file loading enabled. */
     async function invokeFileTool(urls: string[]) {
         const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
-        return createGetWebsiteTool(testLogger, undefined, { maxBytes: MAX_BYTES }).invoke({ urls });
+        return createGetWebsiteTool(testLogger, { fileLoading: { maxBytes: MAX_BYTES } }).invoke({ urls });
     }
 
     test("reports a PDF by its metadata, without content", async () => {
@@ -497,6 +512,252 @@ describe("createGetWebsiteTool — files", () => {
         const result = await invokeFileTool(["https://example.com/archive.zip"]);
 
         expect(result[0]).toMatchObject({ reason: "unsupported-content" });
+    });
+});
+
+describe("createGetWebsiteTool — text and code files", () => {
+    test("reads a code file served as octet-stream as text", async () => {
+        respond = () => ({ contentType: "application/octet-stream", body: "def main():\n    pass\n" });
+
+        const result = await invokeTool(["https://example.com/src/main.py"]);
+
+        expect(contentsOf(result[0])).toBe("def main():\n    pass\n");
+    });
+
+    test("reads a non-standard code type as text", async () => {
+        respond = () => ({ contentType: "application/x-sh", body: "#!/bin/sh\necho hi\n" });
+
+        const result = await invokeTool(["https://example.com/run"]);
+
+        expect(contentsOf(result[0])).toContain("echo hi");
+    });
+
+    test("reads SVG as text rather than as an image", async () => {
+        const svg = '<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>';
+        respond = () => ({ contentType: "image/svg+xml", body: svg });
+
+        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+        const result = await createGetWebsiteTool(testLogger, { fileLoading: { maxBytes: 1024 } }).invoke({
+            urls: ["https://example.com/logo.svg"],
+        });
+
+        expect(contentsOf(result[0])).toBe(svg);
+    });
+
+    test("rejects a text extension whose body turns out to be binary", async () => {
+        respond = () => ({ contentType: "application/octet-stream", body: "G\u0000\u0011\u0010" });
+
+        const result = await invokeTool(["https://example.com/stream.ts"]);
+
+        expect(result[0]).toMatchObject({ reason: "unsupported-content" });
+    });
+
+    test("keeps rejecting octet-stream without a known extension", async () => {
+        respond = () => ({ contentType: "application/octet-stream" });
+
+        const result = await invokeTool(["https://example.com/download"]);
+
+        expect(result[0]).toMatchObject({ reason: "unsupported-content" });
+    });
+});
+
+describe("createGetWebsiteTool — redirects and the URL guard", () => {
+    /** A guard refusing plain HTTP URLs and the given hosts, recording every URL it checks. */
+    function makeGuard(blockedHosts: string[] = []) {
+        const checked: string[] = [];
+        const guard = {
+            check: async (url: string) => {
+                checked.push(url);
+                if (url.startsWith("http:")) {
+                    return {
+                        reason: "insecure-url" as const,
+                        description: "only HTTPS URLs are allowed, plain HTTP is not",
+                    };
+                }
+                if (blockedHosts.includes(new URL(url).hostname)) {
+                    return { reason: "private-address" as const, description: "it points to a private address" };
+                }
+                return null;
+            },
+        };
+        return { guard, checked };
+    }
+
+    async function invokeGuarded(urls: string[], guard: ReturnType<typeof makeGuard>["guard"]) {
+        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+        return createGetWebsiteTool(testLogger, { urlGuard: guard }).invoke({ urls });
+    }
+
+    test("never lets Impit follow redirects itself", async () => {
+        await invokeTool(["https://example.com"]);
+
+        expect(redirectModes).toEqual(["manual"]);
+    });
+
+    test("follows a redirect chain hop by hop, checking each hop", async () => {
+        const { guard, checked } = makeGuard();
+        respond = (call) =>
+            call.url === "https://a.example.com/"
+                ? redirectTo("/next")
+                : call.url === "https://a.example.com/next"
+                  ? redirectTo("https://b.example.com/final")
+                  : {};
+
+        const result = await invokeGuarded(["https://a.example.com/"], guard);
+
+        expect(checked).toEqual([
+            "https://a.example.com/",
+            "https://a.example.com/next",
+            "https://b.example.com/final",
+        ]);
+        expect(contentsOf(result[0])).toContain("Hello");
+    });
+
+    test("refuses a plain HTTP URL without requesting it, as a fixed policy", async () => {
+        const { guard } = makeGuard();
+
+        const result = await invokeGuarded(["http://example.com/"], guard);
+
+        expect(calls).toHaveLength(0);
+        expect(result[0]).toMatchObject({ reason: "insecure-url" });
+        expect((result[0] as { error: string }).error).toContain("retrying will not help");
+    });
+
+    test("refuses a redirect to plain HTTP before requesting it", async () => {
+        const { guard } = makeGuard();
+        respond = () => redirectTo("http://example.com/insecure");
+
+        const result = await invokeGuarded(["https://example.com/"], guard);
+
+        expect(calls.map((c) => c.url)).toEqual(["https://example.com/"]);
+        expect(result[0]).toMatchObject({ reason: "insecure-url" });
+        expect((result[0] as { error: string }).error).toContain("redirects to http://example.com/insecure");
+    });
+
+    test("refuses a redirect into a private network", async () => {
+        const { guard } = makeGuard(["internal.local"]);
+        respond = () => redirectTo("https://internal.local/admin");
+
+        const result = await invokeGuarded(["https://example.com/"], guard);
+
+        expect(calls).toHaveLength(1);
+        expect(result[0]).toMatchObject({ reason: "private-address" });
+    });
+
+    test("does not retry a refused URL with the other fingerprint", async () => {
+        const { guard, checked } = makeGuard();
+
+        await invokeGuarded(["http://example.com/"], guard);
+
+        expect(checked).toHaveLength(1);
+    });
+
+    test("gives up on a redirect loop", async () => {
+        respond = (call) => redirectTo(call.url);
+
+        const result = await invokeTool(["https://example.com/loop"]);
+
+        expect(result[0]).toMatchObject({ reason: "unreachable" });
+        expect((result[0] as { error: string }).error).toContain("redirects more than");
+    });
+
+    test("turns a POST answered with 303 into a GET without a body", async () => {
+        const CONSENT_PAGE =
+            '<html><body><form class="consent-form"><input type="hidden" name="t" value="1"></form></body></html>';
+        respond = (call) =>
+            call.method === "POST"
+                ? { status: 303, headers: { location: "https://example.com/article" }, body: "" }
+                : call.url === "https://example.com/article"
+                  ? { body: "<html><body><p>Article</p></body></html>" }
+                  : { body: CONSENT_PAGE };
+
+        const result = await invokeTool(["https://example.com/"]);
+
+        expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+            "GET https://example.com/",
+            "POST https://example.com/",
+            "GET https://example.com/article",
+        ]);
+        expect(calls[2]?.body).toBeUndefined();
+        expect(contentsOf(result[0])).toContain("Article");
+    });
+});
+
+describe("createGetWebsiteTool — HTTPS upgrade", () => {
+    /** An upgrader upgrading only the given URLs, recording every URL it is asked about. */
+    function makeUpgrader(upgradable: Record<string, string>) {
+        const asked: string[] = [];
+        const upgrader = {
+            upgrade: async (url: string) => {
+                asked.push(url);
+                return upgradable[url] ?? url;
+            },
+        };
+        return { upgrader, asked };
+    }
+
+    /** A guard refusing plain HTTP URLs, as the HTTPS-only policy does. */
+    const httpsOnlyGuard = {
+        check: async (url: string) =>
+            url.startsWith("http:")
+                ? { reason: "insecure-url" as const, description: "only HTTPS URLs are allowed, plain HTTP is not" }
+                : null,
+    };
+
+    async function invokeUpgrading(urls: string[], upgrader: ReturnType<typeof makeUpgrader>["upgrader"]) {
+        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+        return createGetWebsiteTool(testLogger, { urlGuard: httpsOnlyGuard, httpsUpgrader: upgrader }).invoke({
+            urls,
+        });
+    }
+
+    test("fetches an upgraded URL over HTTPS and records the URL as requested", async () => {
+        const { upgrader } = makeUpgrader({ "http://example.com/": "https://example.com/" });
+
+        const result = await invokeUpgrading(["http://example.com/"], upgrader);
+
+        expect(calls.map((c) => c.url)).toEqual(["https://example.com/"]);
+        expect(result[0]).toMatchObject({ url: "https://example.com/", upgradedFrom: "http://example.com/" });
+        expect(contentsOf(result[0])).toContain("Hello");
+    });
+
+    test("leaves a URL that could not be upgraded to the HTTPS-only policy", async () => {
+        const { upgrader } = makeUpgrader({});
+
+        const result = await invokeUpgrading(["http://example.com/"], upgrader);
+
+        expect(calls).toHaveLength(0);
+        expect(result[0]).toMatchObject({ url: "http://example.com/", reason: "insecure-url" });
+        expect(result[0]).not.toHaveProperty("upgradedFrom");
+    });
+
+    test("does not upgrade redirects, which the guard still refuses", async () => {
+        const { upgrader, asked } = makeUpgrader({ "http://example.com/": "https://example.com/" });
+        respond = (call) => (call.url === "https://example.com/" ? redirectTo("http://example.com/insecure") : {});
+
+        const result = await invokeUpgrading(["http://example.com/"], upgrader);
+
+        expect(asked).toEqual(["http://example.com/"]);
+        expect(result[0]).toMatchObject({ reason: "insecure-url", upgradedFrom: "http://example.com/" });
+        expect((result[0] as { error: string }).error).toContain("redirects to http://example.com/insecure");
+    });
+
+    test("reports a file found at an upgraded URL by its HTTPS URL, from which it is loaded later", async () => {
+        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+        const { upgrader } = makeUpgrader({ "http://example.com/doc.pdf": "https://example.com/doc.pdf" });
+        respond = () => ({ contentType: "application/pdf", body: "" });
+
+        const result = await createGetWebsiteTool(testLogger, {
+            fileLoading: { maxBytes: 1_000_000 },
+            urlGuard: httpsOnlyGuard,
+            httpsUpgrader: upgrader,
+        }).invoke({ urls: ["http://example.com/doc.pdf"] });
+
+        expect(result[0]).toMatchObject({
+            url: "https://example.com/doc.pdf",
+            upgradedFrom: "http://example.com/doc.pdf",
+            file: { mimeType: "application/pdf" },
+        });
     });
 });
 

@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import pino from "pino";
-import { NoCaptionsError, ToolError } from "../../../src/domain/errors/AppError.ts";
+import { NoCaptionsError, ToolError, WebFetchError } from "../../../src/domain/errors/AppError.ts";
 import type {
     CaptionDownloader,
     CaptionTrack,
@@ -591,6 +591,15 @@ describe("ytDlp.timeoutMs deadline", () => {
 });
 
 describe("toVideoCaptionsError", () => {
+    test("carries the reason of a URL refused by the external content policy", () => {
+        const err = new WebFetchError("insecure-url", "http://v: only HTTPS URLs are allowed — this is a fixed policy");
+        expect(toVideoCaptionsError("http://v", err)).toEqual({
+            url: "http://v",
+            error: "http://v: only HTTPS URLs are allowed — this is a fixed policy",
+            reason: "insecure-url",
+        });
+    });
+
     test("forwards a NoCaptionsError message with title and author", () => {
         const err = new NoCaptionsError("This video has no captions or subtitles available", "My Video", "My Channel");
         expect(toVideoCaptionsError("https://v", err)).toEqual({

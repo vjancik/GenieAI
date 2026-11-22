@@ -45,6 +45,23 @@ describe("parseFileConfig", () => {
         expect(config.agent.nodes.googleSearch.model).toBe("gemini-pro");
     });
 
+    it("defaults the external content policy to HTTPS-only with HTTP rewriting and private addresses blocked", () => {
+        expect(parseFileConfig(VALID_YAML).externalContent).toEqual({
+            httpsOnly: true,
+            blockPrivateAddresses: true,
+            rewriteHttp: true,
+        });
+    });
+
+    it("accepts overrides of the external content policy", () => {
+        const config = parseFileConfig(`${VALID_YAML}\nexternalContent:\n  httpsOnly: false\n`);
+        expect(config.externalContent).toEqual({
+            httpsOnly: false,
+            blockPrivateAddresses: true,
+            rewriteHttp: true,
+        });
+    });
+
     it("defaults searchMode to google and accepts it as an agent-level setting", () => {
         expect(parseFileConfig(VALID_YAML).agent.searchMode).toBe("google");
 

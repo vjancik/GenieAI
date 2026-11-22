@@ -49,6 +49,16 @@ interface FlattenOptions {
      * they are mentioned in text only.
      */
     embedExternalFiles: boolean;
+    /**
+     * Whether only HTTPS URLs may be fetched. Files found over plain HTTP before the policy
+     * was enabled are then mentioned, with the reason, rather than embedded.
+     */
+    httpsOnly: boolean;
+}
+
+/** Whether a URL uses plain HTTP rather than HTTPS. */
+function isPlainHttpUrl(url: string): boolean {
+    return url.toLowerCase().startsWith("http:");
 }
 
 /**
@@ -68,7 +78,12 @@ function formatWebsiteResults(result: unknown, options: FlattenOptions): ToolRes
             parts.push(`Website contents of ${entry.url}:\n${entry.pageContents}`);
         } else if ("file" in entry) {
             const description = `${entry.file.name ?? "file"}, ${entry.file.mimeType}`;
-            if (options.embedExternalFiles) {
+            if (options.embedExternalFiles && options.httpsOnly && isPlainHttpUrl(entry.url)) {
+                parts.push(
+                    `A file was found at ${entry.url} (${description}), but it was not loaded: only HTTPS URLs ` +
+                        "are allowed, plain HTTP is not — this is a fixed policy, retrying will not help.",
+                );
+            } else if (options.embedExternalFiles) {
                 parts.push(`File retrieved from ${entry.url} (${description}):`);
                 parts.push({ type: "media", mimeType: entry.file.mimeType, url: entry.url });
             } else {
@@ -217,7 +232,7 @@ interface FlattenedHistory {
 export function flattenToolExchanges(
     messages: BaseMessage[],
     logger: Logger,
-    options: FlattenOptions = { embedExternalFiles: false },
+    options: FlattenOptions = { embedExternalFiles: false, httpsOnly: false },
 ): FlattenedHistory {
     const flattened: BaseMessage[] = [];
     let exchangeCount = 0;

@@ -70,6 +70,7 @@ const testConfig = {
             },
         },
         ytDlp: { retries: 1, timeoutMs: 300_000 },
+        externalContent: { httpsOnly: true, blockPrivateAddresses: true, rewriteHttp: true },
         cache: { geminiFileUrls: 1000 },
         prompts: { basePrompt: "You are an AI assistant." },
     },

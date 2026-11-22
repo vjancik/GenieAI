@@ -2,6 +2,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { ToolMessage } from "@langchain/core/messages";
 import type { ToolCall } from "@langchain/core/messages/tool";
 import { CONTENT_TOOLS } from "../../../application/types/ToolName.ts";
+import { PERMANENT_WEB_FETCH_FAILURES } from "../../../domain/errors/AppError.ts";
 import { type AnsweringNode, OrchestratorNode } from "./orchestratorNode.ts";
 
 /** Why a {@link TriagePlan} routes where it does, for logging and tracing. */
@@ -34,9 +35,21 @@ export interface TriagePlan {
 }
 
 /**
+ * Whether a content tool result entry settles its URL for good: it succeeded, or it failed for
+ * a reason another fetch cannot fix (see {@link PERMANENT_WEB_FETCH_FAILURES}). Entries from
+ * before failure reasons were recorded count as retryable.
+ */
+function isSettledEntry(entry: object): boolean {
+    if (!("error" in entry)) return true;
+    return "reason" in entry && typeof entry.reason === "string" && PERMANENT_WEB_FETCH_FAILURES.has(entry.reason);
+}
+
+/**
  * Scans the message history for ToolMessages from content-fetching tools and
- * collects all URLs that were successfully fetched (i.e. the result entry has
- * no `error` field).
+ * collects all URLs that are settled: fetched successfully, or refused for good (a fixed
+ * policy such as HTTPS-only, or content that cannot be read). Fetching those again would
+ * only repeat the same result, so triage skips them. A URL upgraded from plain HTTP to HTTPS
+ * is collected under both spellings, as the user and the model may refer to either.
  *
  * Results that aren't a JSON array of entries are skipped rather than rejected: persisted rows
  * may predate the current result shapes, and missing one only costs a redundant fetch.
@@ -59,15 +72,19 @@ export function collectFetchedUrls(messages: BaseMessage[]): Set<string> {
         if (!Array.isArray(entries)) continue;
 
         for (const entry of entries) {
-            // Only collect successful results — entries with an `error` field are failures
+            // Transient failures are left out, so a later turn may try them again
             if (
                 entry !== null &&
                 typeof entry === "object" &&
                 "url" in entry &&
                 typeof entry.url === "string" &&
-                !("error" in entry)
+                isSettledEntry(entry)
             ) {
                 fetched.add(`${msg.name}:${entry.url}`);
+                // An upgraded URL settles the plain HTTP URL the user gave as well
+                if ("upgradedFrom" in entry && typeof entry.upgradedFrom === "string") {
+                    fetched.add(`${msg.name}:${entry.upgradedFrom}`);
+                }
             }
         }
     }

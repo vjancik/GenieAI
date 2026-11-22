@@ -227,6 +227,51 @@ describe("collectFetchedUrls", () => {
         expect(fetched).toEqual(new Set(["get_website:https://b.com"]));
     });
 
+    test("treats URLs refused for good as settled, so they are not fetched again", () => {
+        const fetched = collectFetchedUrls([
+            toolMessage("get_website", [
+                { url: "http://a.com", error: "plain HTTP", reason: "insecure-url" },
+                { url: "https://b.com", error: "private", reason: "private-address" },
+                { url: "https://c.com/big.mp4", error: "too big", reason: "too-large" },
+                { url: "https://d.com/x.zip", error: "zip", reason: "unsupported-content" },
+                { url: "https://e.com", error: "timed out", reason: "timeout" },
+                { url: "https://f.com", error: "blocked", reason: "blocked" },
+            ]),
+            toolMessage("get_video_captions", [{ url: "http://v.com", error: "plain HTTP", reason: "insecure-url" }]),
+        ]);
+
+        expect(fetched).toEqual(
+            new Set([
+                "get_website:http://a.com",
+                "get_website:https://b.com",
+                "get_website:https://c.com/big.mp4",
+                "get_website:https://d.com/x.zip",
+                "get_video_captions:http://v.com",
+            ]),
+        );
+    });
+
+    test("settles the plain HTTP URL a result was upgraded from as well", () => {
+        const fetched = collectFetchedUrls([
+            toolMessage("get_website", [
+                { url: "https://a.com/", upgradedFrom: "http://a.com/", pageContents: "A" },
+                { url: "https://b.com/", upgradedFrom: "http://b.com/", error: "timed out", reason: "timeout" },
+            ]),
+            toolMessage("get_video_captions", [
+                { url: "https://v.com/", upgradedFrom: "http://v.com/", videoCaptions: "V" },
+            ]),
+        ]);
+
+        expect(fetched).toEqual(
+            new Set([
+                "get_website:https://a.com/",
+                "get_website:http://a.com/",
+                "get_video_captions:https://v.com/",
+                "get_video_captions:http://v.com/",
+            ]),
+        );
+    });
+
     test("ignores results of tools that don't fetch URLs", () => {
         const fetched = collectFetchedUrls([
             toolMessage("web_search", [{ url: "https://a.com", title: "A", content: "a" }]),

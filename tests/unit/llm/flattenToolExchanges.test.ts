@@ -259,7 +259,7 @@ describe("flattenToolExchanges — files found by the website tool", () => {
             ]),
         ];
 
-        const result = flattenToolExchanges(messages, testLogger, { embedExternalFiles: true });
+        const result = flattenToolExchanges(messages, testLogger, { embedExternalFiles: true, httpsOnly: false });
 
         expect(result.messages[1]).toBeInstanceOf(HumanMessage);
         expect(result.messages[1]?.content).toEqual([
@@ -270,6 +270,31 @@ describe("flattenToolExchanges — files found by the website tool", () => {
             { type: "media", mimeType: "application/pdf", url: FILE_URL },
             { type: "text", text: "Website contents of https://example.com/b:\nPage B" },
         ]);
+    });
+
+    test("mentions a plain HTTP file with the policy instead of embedding it when HTTPS is required", () => {
+        const httpEntry = { ...fileEntry, url: "http://example.com/report.pdf" };
+        const messages = [toolCallMessage(ToolName.GET_WEBSITE), toolResult(ToolName.GET_WEBSITE, [httpEntry])];
+
+        const text = humanTextAt(
+            flattenToolExchanges(messages, testLogger, { embedExternalFiles: true, httpsOnly: true }).messages,
+            0,
+        );
+
+        expect(text).toContain("http://example.com/report.pdf");
+        expect(text).toContain("only HTTPS URLs are allowed");
+    });
+
+    test("still embeds HTTPS files when HTTPS is required", () => {
+        const messages = [toolCallMessage(ToolName.GET_WEBSITE), toolResult(ToolName.GET_WEBSITE, [fileEntry])];
+
+        const result = flattenToolExchanges(messages, testLogger, { embedExternalFiles: true, httpsOnly: true });
+
+        expect(result.messages[0]?.content).toContainEqual({
+            type: "media",
+            mimeType: "application/pdf",
+            url: FILE_URL,
+        });
     });
 
     test("only mentions the file in text when embedding is disabled", () => {
@@ -285,7 +310,7 @@ describe("flattenToolExchanges — files found by the website tool", () => {
         const tool = toolResult(ToolName.GET_WEBSITE, [fileEntry]);
         const messages = [toolCallMessage(ToolName.GET_WEBSITE), tool];
 
-        flattenToolExchanges(messages, testLogger, { embedExternalFiles: true });
+        flattenToolExchanges(messages, testLogger, { embedExternalFiles: true, httpsOnly: false });
 
         expect(messages[1]).toBe(tool);
         expect(tool.content).toBe(JSON.stringify([fileEntry]));

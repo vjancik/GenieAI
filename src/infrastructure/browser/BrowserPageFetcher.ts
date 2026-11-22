@@ -67,6 +67,15 @@ export class BrowserPageFetcher {
     /**
      * Loads `url` in a browser and returns the rendered HTML.
      *
+     * Callers only escalate to a browser for a URL that already passed the external content
+     * policy (see `ExternalUrlGuard`) during the plain fetch.
+     *
+     * LIMITATION: navigations and redirects inside the browser are not checked against that
+     * policy, as Playwright follows them itself. Improvement options: intercept main-frame
+     * navigation requests with `page.route` and run the guard on each, route the browser
+     * through a filtering egress proxy (the `proxy` context option), or restrict the bot's
+     * network access to public addresses.
+     *
      * @param url - The page to load.
      * @param proxy - Optional per-request proxy; rotating means passing different
      *   settings on the next call, since a live context's proxy cannot change.

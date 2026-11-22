@@ -13,8 +13,6 @@ const CONTENT_HEADERS: Record<string, string> = {
     "accept-language": "en-US,en;q=0.9",
 };
 
-const MAX_REDIRECTS = 20;
-
 /**
  * Browser fingerprints to try, in order.
  *
@@ -66,6 +64,10 @@ function createCookieJar() {
  * Requests go through Impit rather than the platform `fetch`: many publishers reject requests
  * by TLS/HTTP2 fingerprint regardless of how browser-like the headers are.
  *
+ * The client does not follow redirects: callers go through `fetchFollowingRedirects`, which
+ * checks every hop against the external content policy first. The cookie jar still sees
+ * each hop's cookies, as Impit stores them per response.
+ *
  * @param browser - The browser fingerprint to present
  * @param timeoutMs - Deadline for a whole request, body included. `null` disables it, which
  *   a download of unknown duration needs; such a caller must bound the request itself.
@@ -73,8 +75,7 @@ function createCookieJar() {
 export function createImpitClient(browser: ImpitProfile, timeoutMs: number | null): Impit {
     return new Impit({
         browser,
-        followRedirects: true,
-        maxRedirects: MAX_REDIRECTS,
+        followRedirects: false,
         timeout: timeoutMs,
         cookieJar: createCookieJar(),
         headers: CONTENT_HEADERS,

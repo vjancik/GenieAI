@@ -6,12 +6,16 @@
  */
 const GEMINI_NATIVE_MIME_PREFIXES = ["image/", "audio/", "video/"] as const;
 
+/** Types under the native prefixes that Gemini does not read as media: SVG is XML text. */
+const GEMINI_TEXTUAL_EXCEPTIONS = new Set(["image/svg+xml"]);
+
 /**
  * Whether Gemini reads the MIME type as a file in its own right (PDF, image, audio, video),
  * as opposed to the textual types it only accepts as `text/plain`.
  */
 export function isGeminiNativeMimeType(mimeType: string): boolean {
     if (mimeType === "application/pdf") return true;
+    if (GEMINI_TEXTUAL_EXCEPTIONS.has(mimeType)) return false;
     return GEMINI_NATIVE_MIME_PREFIXES.some((prefix) => mimeType.startsWith(prefix));
 }
 

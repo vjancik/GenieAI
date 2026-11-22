@@ -5,7 +5,10 @@ import { isSupportedCaptionFormat } from "../../../application/formatters/captio
 import { type CaptionFormatResult, formatCaptions } from "../../../application/formatters/captions/formatCaptions.ts";
 import type { Logger } from "../../../application/types/Logger.ts";
 import { ToolName } from "../../../application/types/ToolName.ts";
-import { NoCaptionsError, ToolError } from "../../../domain/errors/AppError.ts";
+import type { WebFetchFailure } from "../../../domain/errors/AppError.ts";
+import { NoCaptionsError, ToolError, WebFetchError } from "../../../domain/errors/AppError.ts";
+import type { IExternalUrlGuard } from "../../http/ExternalUrlGuard.ts";
+import { type IHttpsUpgrader, upgradeSuppliedUrl } from "../../http/HttpsUpgrader.ts";
 
 /**
  * Zod schema for a single caption track entry from yt-dlp's info JSON.
@@ -40,13 +43,30 @@ export type YtDlpCaptionEntry = z.infer<typeof CaptionEntrySchema>;
 /** Relevant subset of the yt-dlp --dump-single-json output. */
 export type YtDlpInfoJson = z.infer<typeof InfoJsonSchema>;
 
-/** Successful result for a single video URL captions fetch. */
-export type VideoCaptionsResult = { url: string; videoCaptions: string; title?: string; author?: string };
+/**
+ * Successful result for a single video URL captions fetch. `upgradedFrom` holds the URL as
+ * requested when it was upgraded from plain HTTP to HTTPS before fetching.
+ */
+export type VideoCaptionsResult = {
+    url: string;
+    upgradedFrom?: string;
+    videoCaptions: string;
+    title?: string;
+    author?: string;
+};
 /**
  * Error result for a single video URL captions fetch. `title` and `author` are present
- * when the metadata was retrieved but the video has no usable captions.
+ * when the metadata was retrieved but the video has no usable captions. `reason` is present
+ * when the URL was refused by the external content policy.
  */
-export type VideoCaptionsError = { url: string; error: string; title?: string; author?: string };
+export type VideoCaptionsError = {
+    url: string;
+    upgradedFrom?: string;
+    error: string;
+    title?: string;
+    author?: string;
+    reason?: WebFetchFailure;
+};
 /** Union result type returned per URL by the video captions tool. */
 export type VideoCaptionsResultEntry = VideoCaptionsResult | VideoCaptionsError;
 
@@ -339,6 +359,9 @@ async function verifyDeno(): Promise<void> {
  * @param err - The thrown error
  */
 export function toVideoCaptionsError(url: string, err: unknown): VideoCaptionsError {
+    if (err instanceof WebFetchError) {
+        return { url, error: err.message, reason: err.reason };
+    }
     if (err instanceof NoCaptionsError) {
         return {
             url,
@@ -366,6 +389,42 @@ interface VideoCaptionsToolOptions {
     retries: number;
     /** Hard cap in milliseconds on a whole tool call, including all retries. */
     timeoutMs: number;
+    /**
+     * Checks each video URL against the external content policy before yt-dlp is run.
+     *
+     * LIMITATION: only the URL the user gave is checked. yt-dlp follows redirects and
+     * fetches further URLs by itself, out of reach of the guard. Improvement options: point
+     * `httpProxy` at a filtering egress proxy (e.g. Smokescreen), or restrict the bot's
+     * network access to public addresses.
+     */
+    urlGuard?: IExternalUrlGuard;
+    /** Rewrites requested plain HTTP URLs to HTTPS where the host supports it, before the guard sees them. */
+    httpsUpgrader?: IHttpsUpgrader;
+}
+
+/** Logs why captions could not be fetched for a URL, at a level matching the cause. */
+function logCaptionsFailure(logger: Logger, url: string, reason: unknown): void {
+    if (reason instanceof NoCaptionsError) {
+        logger.info({ url, error: reason.message }, "Video has no usable captions");
+    } else if (reason instanceof WebFetchError) {
+        logger.warn({ url, reason: reason.reason }, "Video URL refused by the external content policy");
+    } else {
+        const error = reason instanceof Error ? reason.message : String(reason);
+        logger.warn({ url, error }, "Failed to fetch video captions");
+    }
+}
+
+/**
+ * Refuses a URL the external content policy does not allow, phrasing a policy refusal so
+ * that the model does not suggest retrying.
+ *
+ * @throws WebFetchError when the URL is refused
+ */
+async function assertUrlAllowed(url: string, urlGuard: IExternalUrlGuard | undefined): Promise<void> {
+    const rejection = await urlGuard?.check(url);
+    if (!rejection) return;
+    const policy = rejection.reason === "unreachable" ? "" : " — this is a fixed policy, retrying will not help";
+    throw new WebFetchError(rejection.reason, `${url}: ${rejection.description}${policy}`);
 }
 
 /**
@@ -403,10 +462,11 @@ function throwIfDeadlineExceeded(deadline: AbortSignal): void {
  * hasn't finished yet resolves to an error entry.
  *
  * @param logger - Injectable logger for testability
- * @param options - Proxy, retry and timeout settings (from the `ytDlp` config section)
+ * @param options - Proxy, retry and timeout settings (from the `ytDlp` config section), and
+ *   the URL guard enforcing the external content policy
  */
 export async function createGetVideoCaptionsTool(logger: Logger, options: VideoCaptionsToolOptions) {
-    const { httpProxy: proxy, retries: proxyRetries, timeoutMs } = options;
+    const { httpProxy: proxy, retries: proxyRetries, timeoutMs, urlGuard, httpsUpgrader } = options;
     if (proxy !== undefined) {
         const scheme = new URL(proxy).protocol;
         if (scheme !== "http:" && scheme !== "https:") {
@@ -422,24 +482,19 @@ export async function createGetVideoCaptionsTool(logger: Logger, options: VideoC
 
             // One deadline shared by all URLs, so the whole call is capped at timeoutMs
             const deadline = AbortSignal.timeout(timeoutMs);
-            const results = await Promise.allSettled(
-                unique.map((url) => extractCaptions(url, logger, deadline, proxy, proxyRetries)),
+            return Promise.all(
+                unique.map(async (requestedUrl): Promise<VideoCaptionsResultEntry> => {
+                    const target = await upgradeSuppliedUrl(requestedUrl, httpsUpgrader);
+                    try {
+                        await assertUrlAllowed(target.url, urlGuard);
+                        const result = await extractCaptions(target.url, logger, deadline, proxy, proxyRetries);
+                        return { ...result, ...target };
+                    } catch (err) {
+                        logCaptionsFailure(logger, target.url, err);
+                        return { ...toVideoCaptionsError(target.url, err), ...target };
+                    }
+                }),
             );
-
-            return results.map((result, i) => {
-                if (result.status === "fulfilled") {
-                    return result.value;
-                }
-                const url = unique[i] ?? "unknown";
-                const entry = toVideoCaptionsError(url, result.reason);
-                if (result.reason instanceof NoCaptionsError) {
-                    logger.info({ url, error: result.reason.message }, "Video has no usable captions");
-                } else {
-                    const error = result.reason instanceof Error ? result.reason.message : String(result.reason);
-                    logger.warn({ url, error }, "Failed to fetch video captions");
-                }
-                return entry;
-            });
         },
         {
             name: ToolName.GET_VIDEO_CAPTIONS,

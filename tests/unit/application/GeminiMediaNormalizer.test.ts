@@ -5,7 +5,7 @@ import type { IChatClientMessageAttachment } from "../../../src/application/port
 import type { IDiscordMediaService } from "../../../src/application/ports/IDiscordMediaService.ts";
 import type { IGeminiFileUploader } from "../../../src/application/ports/IGeminiFileUploader.ts";
 import type { IGeminiFileUploaderRegistry } from "../../../src/application/ports/IGeminiFileUploaderRegistry.ts";
-import type { IMediaSource, OpenedMedia } from "../../../src/application/ports/IMediaSource.ts";
+import type { IMediaSource, MediaUnavailable, OpenedMedia } from "../../../src/application/ports/IMediaSource.ts";
 import type { IStreamingAttachmentDownloader } from "../../../src/application/ports/IStreamingAttachmentDownloader.ts";
 import { DiscordMediaSource } from "../../../src/application/services/DiscordMediaSource.ts";
 import { GeminiMediaNormalizer } from "../../../src/application/services/GeminiMediaNormalizer.ts";
@@ -79,6 +79,7 @@ const testConfig = {
             },
         },
         ytDlp: { retries: 1, timeoutMs: 300_000 },
+        externalContent: { httpsOnly: true, blockPrivateAddresses: true, rewriteHttp: true },
         cache: { geminiFileUrls: 1000 },
         prompts: { basePrompt: "You are an AI assistant." },
     },
@@ -223,10 +224,12 @@ const externalMedia: OpenedMedia = {
  */
 function makeSource(
     mediaService: IDiscordMediaService,
-    external: OpenedMedia | null = externalMedia,
+    external: OpenedMedia | MediaUnavailable = externalMedia,
 ): IMediaSource & { openExternal: ReturnType<typeof mock> } {
     const discordSource = new DiscordMediaSource(mediaService, makeStreamingDownloader(), testLogger);
-    const openExternal = mock(async (_url: string, _mimeType?: string) => external);
+    const openExternal = mock(
+        async (_url: string, _mimeType?: string): Promise<OpenedMedia | MediaUnavailable> => external,
+    );
     return {
         openExternal,
         open: (tokenUrl, expectedMimeType) =>
@@ -711,8 +714,8 @@ describe("GeminiMediaNormalizer.normalize — external file URLs", () => {
         expect(blocks[1]?.fileUri).toBe(GEMINI_URL_NEW);
     });
 
-    test("replaces a file that is gone with a notice naming its URL", async () => {
-        const source = makeSource(makeMediaService(), null);
+    test("replaces a file that is gone with a notice naming its URL and the reason", async () => {
+        const source = makeSource(makeMediaService(), { unavailable: "the server responded with HTTP 404" });
 
         const result = await makeNormalizer(makeRepo(), source).normalize([makeExternalFileMsg()], TEST_API_KEY_ID);
 
@@ -721,6 +724,7 @@ describe("GeminiMediaNormalizer.normalize — external file URLs", () => {
         expect(blocks[1]?.type).toBe("text");
         expect(blocks[1]?.text).toContain(EXTERNAL_URL);
         expect(blocks[1]?.text).toContain("no longer available");
+        expect(blocks[1]?.text).toContain("the server responded with HTTP 404");
     });
 
     test("ignores web URLs on blocks that are not media blocks", async () => {
