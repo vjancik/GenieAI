@@ -1,3 +1,4 @@
+import type { BaseCallbackHandler } from "@langchain/core/callbacks/base";
 import { AIMessage, AIMessageChunk, type BaseMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import type { Span } from "@sentry/core";
@@ -28,6 +29,7 @@ import { httpStatusOf } from "./errors/httpStatusOf.ts";
 import { isKeyRotationError } from "./errors/isKeyRotationError.ts";
 import { isModelFallbackError } from "./errors/isModelFallbackError.ts";
 import { toModelFailureError } from "./errors/toModelFailureError.ts";
+import type { IInputTokenBudgetGuard } from "./tokenBudget/InputTokenBudgetGuard.ts";
 import { filterHistoryForInlineSize } from "./utils/inlineAttachmentFilter.ts";
 import { concatMessageChunks, normalizeContent } from "./utils/langchainUtils.ts";
 
@@ -63,16 +65,18 @@ function isDegradedOutcome(outcome: ModelCallOutcome): boolean {
  * The trade-off is that `timeoutMs` bounds the entire response rather than the first chunk.
  *
  * `signal` cancels the request early, e.g. when a parallel call's answer is no longer needed.
+ * `callbacks` are added to the model's own for this call only (e.g. the input token budget check).
  */
 async function invokeModel(
     model: IInvokableModel,
     messages: BaseMessage[],
-    options: { timeoutMs: number; signal?: AbortSignal; span?: Span },
+    options: { timeoutMs: number; signal?: AbortSignal; span?: Span; callbacks?: BaseCallbackHandler[] },
 ): Promise<ModelCallOutcome> {
     const invokedAt = Date.now();
     const response = await model.invoke(messages, {
         timeout: options.timeoutMs,
         ...(options.signal && { signal: options.signal }),
+        ...(options.callbacks && { callbacks: options.callbacks }),
     });
     options.span?.setAttribute("llm.response_time_ms", Date.now() - invokedAt);
 
@@ -202,6 +206,8 @@ interface KeyAttemptContext {
     isPaid: boolean;
     timeoutMs: number;
     span: Span;
+    /** Per-call callbacks for every model call of the attempt; undefined when none apply. */
+    callbacks: BaseCallbackHandler[] | undefined;
 }
 
 /** Why parallel execution settled on the answer it returned; recorded on the Sentry span. */
@@ -242,6 +248,7 @@ interface ResilientModelInvokerOptions {
 /**
  * Implements resilient LLM invocation with key rotation, retry, fallback, and
  * pre-invocation message preparation (Gemini file refresh + inline attachment filtering).
+ * When an input token budget guard is wired, every model call is checked against it before it is sent.
  *
  * Extracted from {@link AgentOrchestrator} so that invocation policy is independently
  * testable and the orchestrator nodes become thin wrappers that prepare messages and delegate.
@@ -253,6 +260,7 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
         private readonly options: ResilientModelInvokerOptions,
         private readonly logger: Logger,
         private readonly fileRefreshService?: IGeminiMediaNormalizer,
+        private readonly inputTokenBudgetGuard?: IInputTokenBudgetGuard,
     ) {}
 
     invokeWithFreeKeys(
@@ -309,6 +317,7 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
      *
      * @throws {@link AllFreeKeysExhaustedError} if `isPaid` is false and every key is rejected or rate-limited
      * @throws {@link AllPaidKeysExhaustedError} if `isPaid` is true and every key is rejected or rate-limited
+     * @throws {@link InputTokenBudgetExceededError} if a budget guard is configured and the input exceeds it
      * @throws For failures that neither rotation nor fallback resolve, the last evaluated model
      *         error immediately, mapped to `ModelOverloadedError` / `ModelTimeoutError`
      *         where applicable (see {@link toModelFailureError})
@@ -329,6 +338,8 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
             },
             async (span) => {
                 const timeoutMs = options.timeoutMs ?? this.options.globalTimeoutMs;
+                // One budget check per invocation, so retries and fallback calls reuse a single count
+                const budgetCheck = this.inputTokenBudgetGuard?.forRequest();
                 let lastErr: unknown;
 
                 for (let attempt = 0; attempt < keyProvider.keyCount; attempt++) {
@@ -349,6 +360,7 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
                             isPaid,
                             timeoutMs,
                             span,
+                            callbacks: budgetCheck && [budgetCheck.handlerFor(key)],
                         },
                     );
 
@@ -446,10 +458,10 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
         messages: BaseMessage[],
         context: KeyAttemptContext,
     ): Promise<KeyAttemptOutcome> {
-        const { timeoutMs, span } = context;
+        const { timeoutMs, span, callbacks } = context;
 
         try {
-            return succeeded(await invokeModel(model, messages, { timeoutMs, span }), false);
+            return succeeded(await invokeModel(model, messages, { timeoutMs, span, callbacks }), false);
         } catch (err) {
             if (isKeyRotationError(err)) {
                 this.warnKeyUnusable(context, "main model", err);
@@ -465,7 +477,7 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
         }
 
         try {
-            return succeeded(await invokeModel(fallbackModel, messages, { timeoutMs, span }), true);
+            return succeeded(await invokeModel(fallbackModel, messages, { timeoutMs, span, callbacks }), true);
         } catch (fallbackErr) {
             if (isKeyRotationError(fallbackErr)) {
                 this.warnKeyUnusable(context, "fallback model", fallbackErr);
@@ -497,12 +509,14 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
         mainGracePeriodMs: number,
         context: KeyAttemptContext,
     ): Promise<KeyAttemptOutcome> {
-        const { timeoutMs, span } = context;
+        const { timeoutMs, span, callbacks } = context;
         const mainAbort = new AbortController();
         const fallbackAbort = new AbortController();
 
-        const mainCall = settle(invokeModel(model, messages, { timeoutMs, signal: mainAbort.signal }));
-        const fallbackCall = settle(invokeModel(fallbackModel, messages, { timeoutMs, signal: fallbackAbort.signal }));
+        const mainCall = settle(invokeModel(model, messages, { timeoutMs, signal: mainAbort.signal, callbacks }));
+        const fallbackCall = settle(
+            invokeModel(fallbackModel, messages, { timeoutMs, signal: fallbackAbort.signal, callbacks }),
+        );
 
         const first = await Promise.race([
             mainCall.then((result) => ({ isMain: true, result }) as const),

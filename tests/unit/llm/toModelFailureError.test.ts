@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
     extractDisplayMessage,
     getDeclaredRetryable,
+    InputTokenBudgetExceededError,
     ModelNoCandidatesError,
     ModelOverloadedError,
     ModelPromptBlockedError,
@@ -134,5 +135,11 @@ describe("isModelFallbackError", () => {
 
     test("is false for a 400", () => {
         expect(isModelFallbackError(Object.assign(new Error("Bad Request"), { statusCode: 400 }))).toBe(false);
+    });
+
+    test("is false for an exceeded input token budget, even when its message contains 503", () => {
+        const err = new InputTokenBudgetExceededError(150_300, 100_000);
+        expect(err.message).toContain("503");
+        expect(isModelFallbackError(err)).toBe(false);
     });
 });

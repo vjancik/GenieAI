@@ -307,6 +307,12 @@ const fileConfigSchema = z.object({
             .positive()
 
             .prefault(fileConfigDefaults.agent.maxExternalUrlFileSizeMB),
+        /**
+         * Largest input in tokens a single model call may send, counted by the Gemini tokenizer
+         * right before the call. Larger inputs are rejected with a message to the user. Optional,
+         * no default: when unset, inputs are not counted or limited.
+         */
+        maxInputTokens: z.number().int().positive().optional(),
         fallbackExecutionMode: z
             .string()
             .transform((v) => v.toLowerCase())

@@ -75,6 +75,11 @@ agent:
   # Maximum size in MB of a file (PDF, image, audio, video) loaded from a URL in the user's message.
   # Files from URLs are only loaded in "upload" attachment mode.
   maxExternalUrlFileSizeMB: 500  # <optional>
+  # Largest input in tokens a single model call may send, including the conversation history,
+  # attachments, system prompt and tools. Counted with the Gemini countTokens API right before each
+  # call, which adds a round trip to every call; larger inputs are rejected with a message to the
+  # user. Positive integer.  <optional, default: unset = no limit, inputs are not counted>
+  # maxInputTokens: 200000
   # How fallback models run alongside main models ("sequential" or "parallel").  <optional, default: "sequential">
   #   sequential: the fallback model is invoked only after the main model fails with a 503 or timeout.
   #   parallel:   both models are invoked at once. The main model's answer is preferred; a successful

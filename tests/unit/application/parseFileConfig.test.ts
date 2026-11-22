@@ -69,6 +69,22 @@ describe("parseFileConfig", () => {
         expect(tavily.agent.searchMode).toBe("tavily");
     });
 
+    it("leaves the input token budget disabled by default", () => {
+        expect(parseFileConfig(VALID_YAML).agent.maxInputTokens).toBeUndefined();
+    });
+
+    it("accepts an input token budget", () => {
+        const yaml = VALID_YAML.replace("agent:\n", "agent:\n  maxInputTokens: 200000\n");
+        expect(parseFileConfig(yaml).agent.maxInputTokens).toBe(200_000);
+    });
+
+    it.each([
+        ["a zero maxInputTokens", "maxInputTokens: 0"],
+        ["a fractional maxInputTokens", "maxInputTokens: 1.5"],
+    ])("rejects %s", (_label, line) => {
+        expect(() => parseFileConfig(VALID_YAML.replace("agent:\n", `agent:\n  ${line}\n`))).toThrow(ConfigError);
+    });
+
     it("accepts fallbackModel being absent", () => {
         const yaml = `
 agent:

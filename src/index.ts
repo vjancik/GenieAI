@@ -63,6 +63,8 @@ import {
 } from "./infrastructure/llm/models/triageModel.ts";
 import { ResilientModelInvoker } from "./infrastructure/llm/ResilientModelInvoker.ts";
 import { RoundRobinKeyProvider } from "./infrastructure/llm/RoundRobinKeyProvider.ts";
+import { GeminiTokenCounter } from "./infrastructure/llm/tokenBudget/GeminiTokenCounter.ts";
+import { InputTokenBudgetGuard } from "./infrastructure/llm/tokenBudget/InputTokenBudgetGuard.ts";
 import { createGetVideoCaptionsTool } from "./infrastructure/llm/tools/getVideoCaptionsTool.ts";
 import { createGetWebsiteTool } from "./infrastructure/llm/tools/getWebsiteTool.ts";
 import { createTavilyTool } from "./infrastructure/llm/tools/tavilySearchTool.ts";
@@ -231,6 +233,17 @@ const geminiMediaNormalizer = new GeminiMediaNormalizer(
 );
 
 // Resilient invoker — owns key rotation, Gemini file normalization, attachment filtering, and fallback policy
+// Input token budget: inputs are only counted when a budget is configured
+const { maxInputTokens } = config.file.agent;
+const inputTokenBudgetGuard =
+    maxInputTokens === undefined
+        ? undefined
+        : new InputTokenBudgetGuard(
+              new GeminiTokenCounter(),
+              maxInputTokens,
+              logger.child({ module: "llm:input-token-budget" }),
+          );
+
 const resilientInvoker = new ResilientModelInvoker(
     freeKeyProvider,
     paidKeyProvider,
@@ -242,6 +255,7 @@ const resilientInvoker = new ResilientModelInvoker(
     },
     logger.child({ module: "llm:resilient-invoker" }),
     isInlineMode ? undefined : geminiMediaNormalizer,
+    inputTokenBudgetGuard,
 );
 
 // Orchestrator

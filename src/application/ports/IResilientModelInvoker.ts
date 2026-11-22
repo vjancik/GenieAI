@@ -82,6 +82,7 @@ export interface IResilientModelInvoker {
      * @throws {ModelTimeoutError} if the last evaluated model call timed out or was aborted
      * @throws {ModelNoCandidatesError} if the last evaluated model call returned no candidates
      * @throws {ModelPromptBlockedError} if the last evaluated model call had its prompt blocked
+     * @throws {InputTokenBudgetExceededError} if the input exceeds the configured input token budget
      */
     invokeWithFreeKeys(
         getModel: (key: GeminiApiKey) => IInvokableModel,
@@ -99,6 +100,7 @@ export interface IResilientModelInvoker {
      * @throws {ModelTimeoutError} if the last evaluated model call timed out or was aborted
      * @throws {ModelNoCandidatesError} if the last evaluated model call returned no candidates
      * @throws {ModelPromptBlockedError} if the last evaluated model call had its prompt blocked
+     * @throws {InputTokenBudgetExceededError} if the input exceeds the configured input token budget
      */
     invokeWithPaidKeys(
         getModel: (key: GeminiApiKey) => IInvokableModel,

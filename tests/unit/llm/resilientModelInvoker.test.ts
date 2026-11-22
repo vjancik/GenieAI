@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import type { BaseCallbackHandler } from "@langchain/core/callbacks/base";
 import { AIMessage, AIMessageChunk, type BaseMessage } from "@langchain/core/messages";
 import { sleep } from "bun";
 import pino from "pino";
@@ -6,10 +7,12 @@ import { AttachmentMode, FallbackExecutionMode } from "../../../src/application/
 import { extractContent } from "../../../src/application/helpers/langchainMessageTransformers.ts";
 import type { IInvokableModel } from "../../../src/application/ports/IResilientModelInvoker.ts";
 import type { IRoundRobinKeyProvider } from "../../../src/application/ports/IRoundRobinKeyProvider.ts";
+import type { ITokenCounter } from "../../../src/application/ports/ITokenCounter.ts";
 import type { GeminiApiKey } from "../../../src/domain/entities/GeminiApiKey.ts";
 import {
     AllFreeKeysExhaustedError,
     AllPaidKeysExhaustedError,
+    InputTokenBudgetExceededError,
     ModelNoCandidatesError,
     ModelOverloadedError,
     ModelPromptBlockedError,
@@ -17,6 +20,10 @@ import {
 } from "../../../src/domain/errors/AppError.ts";
 import { FinishReason } from "../../../src/domain/value-objects/FinishReason.ts";
 import { ResilientModelInvoker } from "../../../src/infrastructure/llm/ResilientModelInvoker.ts";
+import {
+    type IInputTokenBudgetGuard,
+    InputTokenBudgetGuard,
+} from "../../../src/infrastructure/llm/tokenBudget/InputTokenBudgetGuard.ts";
 
 const logger = pino({ level: "silent" });
 
@@ -61,6 +68,7 @@ function makeInvoker(
     freeProvider = makeSingleKeyProvider(),
     paidProvider = makeSingleKeyProvider("paid"),
     fallbackExecutionMode: FallbackExecutionMode = FallbackExecutionMode.sequential,
+    inputTokenBudgetGuard?: IInputTokenBudgetGuard,
 ) {
     return new ResilientModelInvoker(
         freeProvider,
@@ -72,6 +80,8 @@ function makeInvoker(
             fallbackExecutionMode,
         },
         logger,
+        undefined,
+        inputTokenBudgetGuard,
     );
 }
 
@@ -1109,5 +1119,122 @@ describe("ResilientModelInvoker — provider rejections", () => {
 
         expect(thrown).toBeInstanceOf(ModelPromptBlockedError);
         expect(provider.advanceCount).toBe(0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Input token budget
+// ---------------------------------------------------------------------------
+
+/**
+ * Model stub that, like `ChatGoogle`, fires the `google-request-*` event at its per-call callbacks
+ * before sending the request, then fails with `outcome` or answers with it. `sent` counts the
+ * requests that got past the callbacks.
+ */
+function makeEventFiringModel(outcome: AIMessage | Error) {
+    const stub = {
+        sent: 0,
+        invoke: mock(async (_messages: BaseMessage[], options?: unknown) => {
+            const callbacks = (options as { callbacks?: BaseCallbackHandler[] } | undefined)?.callbacks ?? [];
+            for (const handler of callbacks) {
+                await handler.handleCustomEvent?.(
+                    "google-request-GenerateContentApiHandler",
+                    { url: "https://example.test/v1beta/models/gemini-test:generateContent", headers: {}, body: {} },
+                    "run-id",
+                );
+            }
+            stub.sent++;
+            if (outcome instanceof Error) throw outcome;
+            return outcome;
+        }),
+        stream: mock(async (): Promise<AsyncIterable<AIMessageChunk>> => {
+            throw new Error("stream() is not used");
+        }),
+    };
+    return stub;
+}
+
+function makeBudgetGuard(inputTokens: number, maxInputTokens = 100) {
+    const counter = { countTokens: mock(async () => inputTokens) } satisfies ITokenCounter;
+    return { counter, guard: new InputTokenBudgetGuard(counter, maxInputTokens, logger) };
+}
+
+describe("ResilientModelInvoker — input token budget", () => {
+    test("throws before sending, without trying the fallback model or another key", async () => {
+        const { guard } = makeBudgetGuard(1_000);
+        const provider = makeTwoKeyProvider();
+        const main = makeEventFiringModel(new AIMessage("main"));
+        const fallback = makeEventFiringModel(new AIMessage("fallback"));
+        const invoker = makeInvoker(provider, undefined, FallbackExecutionMode.sequential, guard);
+
+        const thrown = await invoker
+            .invokeWithFreeKeys(
+                () => main,
+                () => fallback,
+                [],
+            )
+            .catch((e: unknown) => e);
+
+        expect(thrown).toBeInstanceOf(InputTokenBudgetExceededError);
+        expect(main.sent).toBe(0);
+        expect(fallback.invoke).not.toHaveBeenCalled();
+        expect(provider.advanceCount).toBe(0);
+    });
+
+    test("stops both models in parallel execution with a single count", async () => {
+        const { counter, guard } = makeBudgetGuard(1_000);
+        const main = makeEventFiringModel(new AIMessage("main"));
+        const fallback = makeEventFiringModel(new AIMessage("fallback"));
+        const invoker = makeInvoker(makeSingleKeyProvider(), undefined, FallbackExecutionMode.parallel, guard);
+
+        const thrown = await invoker
+            .invokeWithFreeKeys(
+                () => main,
+                () => fallback,
+                [],
+                { mainGracePeriodMs: 0 },
+            )
+            .catch((e: unknown) => e);
+
+        expect(thrown).toBeInstanceOf(InputTokenBudgetExceededError);
+        expect(main.sent + fallback.sent).toBe(0);
+        expect(counter.countTokens).toHaveBeenCalledTimes(1);
+    });
+
+    test("counts once per invocation across key rotation", async () => {
+        const { counter, guard } = makeBudgetGuard(10);
+        const provider = makeTwoKeyProvider();
+        const rejected = makeEventFiringModel(makeKeyRejectedError(429));
+        const accepted = makeEventFiringModel(new AIMessage("answer"));
+        const invoker = makeInvoker(provider, undefined, FallbackExecutionMode.sequential, guard);
+
+        const { result } = await invoker.invokeWithFreeKeys(
+            (key) => (key.id === "k1" ? rejected : accepted),
+            undefined,
+            [],
+        );
+
+        expect(result.text).toBe("answer");
+        expect(rejected.sent + accepted.sent).toBe(2);
+        expect(counter.countTokens).toHaveBeenCalledTimes(1);
+    });
+
+    test("counts again for each invocation", async () => {
+        const { counter, guard } = makeBudgetGuard(10);
+        const model = makeEventFiringModel(new AIMessage("answer"));
+        const invoker = makeInvoker(makeSingleKeyProvider(), undefined, FallbackExecutionMode.sequential, guard);
+
+        await invoker.invokeWithFreeKeys(() => model, undefined, []);
+        await invoker.invokeWithFreeKeys(() => model, undefined, []);
+
+        expect(counter.countTokens).toHaveBeenCalledTimes(2);
+    });
+
+    test("passes no callbacks when no guard is configured", async () => {
+        const model = makeEventFiringModel(new AIMessage("answer"));
+
+        await makeInvoker().invokeWithFreeKeys(() => model, undefined, []);
+
+        expect(model.invoke.mock.calls[0]?.[1]).not.toHaveProperty("callbacks");
     });
 });

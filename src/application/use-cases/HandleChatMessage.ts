@@ -1,7 +1,12 @@
 import { type BaseMessage, HumanMessage } from "@langchain/core/messages";
 import * as Sentry from "@sentry/bun";
 import type { MessageInteractionType, PersistedChatMessage } from "../../domain/entities/Message.ts";
-import { findDisplayableError, getDeclaredRetryable, ModelPromptBlockedError } from "../../domain/errors/AppError.ts";
+import {
+    findDisplayableError,
+    getDeclaredRetryable,
+    InputTokenBudgetExceededError,
+    ModelPromptBlockedError,
+} from "../../domain/errors/AppError.ts";
 import type { IMessagePageRepository } from "../../domain/ports/IMessagePageRepository.ts";
 import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
 import type { FinishReason } from "../../domain/value-objects/FinishReason.ts";
@@ -48,7 +53,7 @@ const MESSAGE_LENGTH_LIMIT = 2000;
  * Failures that are an expected outcome rather than a fault in the bot (e.g. user content
  * tripping the provider's filters). They are logged as warnings and not reported to Sentry.
  */
-const WARN_ONLY_ERRORS = [ModelPromptBlockedError] as const;
+const WARN_ONLY_ERRORS = [ModelPromptBlockedError, InputTokenBudgetExceededError] as const;
 
 function isWarnOnlyError(err: unknown): boolean {
     return WARN_ONLY_ERRORS.some((ErrorClass) => err instanceof ErrorClass);

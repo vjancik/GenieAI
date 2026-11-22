@@ -185,6 +185,50 @@ export class GeminiUploadHttpError extends AppError {
     }
 }
 
+/**
+ * Thrown when a Gemini `countTokens` request is answered with a non-OK HTTP response or an
+ * unexpected body. Carries the response's `status` (null for a malformed body) so callers can
+ * classify the failure without parsing the message.
+ */
+export class TokenCountError extends AppError {
+    /**
+     * @param message - Description of what went wrong
+     * @param status  - HTTP status code of the failed response, or null when the response was OK but malformed
+     * @param body    - Raw response body, kept for diagnostics
+     */
+    constructor(
+        message: string,
+        public readonly status: number | null,
+        public readonly body: string,
+    ) {
+        super("TOKEN_COUNT_FAILED", message);
+    }
+}
+
+/**
+ * Thrown before a model call is sent when its input exceeds the configured `agent.maxInputTokens`
+ * budget. Not retryable: resending the same input exceeds the budget again, and so does replying
+ * to the failed message, which resends the whole reply chain.
+ */
+export class InputTokenBudgetExceededError extends AppError {
+    /** Declared for {@link getDeclaredRetryable}, overriding the default that failures are retryable. */
+    readonly retryable = false;
+
+    constructor(
+        public readonly inputTokens: number,
+        public readonly maxInputTokens: number,
+    ) {
+        super(
+            "INPUT_TOKEN_BUDGET_EXCEEDED",
+            `Model input of ${inputTokens} tokens exceeds the input token budget of ${maxInputTokens}`,
+            undefined,
+            "The request has surpassed the configured token limit and won't be processed. Replying to this message " +
+                "would resend it, so try again in a new message with fewer or smaller attachments, or as a reply to " +
+                "an earlier message in a shorter conversation.",
+        );
+    }
+}
+
 /** Thrown when an LLM produces an invalid or unexpected response (e.g. tool calls from a user-facing model). */
 export class LlmError extends AppError {
     constructor(message: string, cause?: unknown) {
