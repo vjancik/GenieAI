@@ -291,6 +291,8 @@ const htmlToImage = new HtmlToImageRenderer(chromiumProvider);
 // Discord gateway
 const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpdater" }));
 const discordClientBot = new DiscordClientBot(discordClient.client);
+// One limiter shared by chat messages and the Summarize command so both draw on the same per-user budget
+const messageRateLimiter = new RateLimiter(config.file.discord.rateLimits);
 const handleChatMessageUseCase = new HandleChatMessageUseCase(
     agentOrchestrator,
     messageRepository,
@@ -300,6 +302,7 @@ const handleChatMessageUseCase = new HandleChatMessageUseCase(
     config.file.discord.previousBotId,
     messagePageRepository,
     config.file.discord.retries,
+    messageRateLimiter,
     discordChatMessageService,
     config.file.discord.enableInDMs,
     isInlineMode ? inlineMediaNormalizer : undefined,
@@ -333,6 +336,7 @@ const handleSummarizeUseCase = new HandleSummarizeUseCase(
     messageRepository,
     discordClientBot,
     logger.child({ module: "use-case:summarize" }),
+    messageRateLimiter,
     config.file.discord.enableInDMs,
 );
 const handleExportUseCase = new HandleExportUseCase(
@@ -346,10 +350,6 @@ const handleExportUseCase = new HandleExportUseCase(
     interactionLock,
 );
 
-const rateLimiter = new RateLimiter([
-    { windowMs: 3_000, limit: 3 },
-    { windowMs: 60_000, limit: 10 },
-]);
 const discordGateway = new DiscordGateway(
     discordClient,
     handleChatMessageUseCase,
@@ -359,7 +359,6 @@ const discordGateway = new DiscordGateway(
     handleSummarizeUseCase,
     handleExportUseCase,
     handleSourcesUseCase,
-    rateLimiter,
 );
 
 // Graceful shutdown

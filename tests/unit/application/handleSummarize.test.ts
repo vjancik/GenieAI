@@ -6,6 +6,7 @@ import type {
     IChatClientContextMenuInteraction,
     IChatClientMessage,
 } from "../../../src/application/ports/chat/IChatClient.ts";
+import type { IRateLimiter, RateLimitResult } from "../../../src/application/ports/IRateLimiter.ts";
 import type { HandleChatMessageUseCase } from "../../../src/application/use-cases/HandleChatMessage.ts";
 import { HandleSummarizeUseCase } from "../../../src/application/use-cases/HandleMessageSummarize.ts";
 import type { IMessageRepository } from "../../../src/domain/ports/IMessageRepository.ts";
@@ -133,8 +134,15 @@ function makeBot(userId = BOT_USER_ID): IChatClientBot {
     return { userId };
 }
 
+function makeRateLimiter(allowed = true): IRateLimiter {
+    return {
+        check: mock((): RateLimitResult => (allowed ? { allowed: true } : { allowed: false, retryAfterMs: 1_000 })),
+    };
+}
+
 function makeUseCase(
     overrides: {
+        rateLimiter?: IRateLimiter;
         handleChatMessage?: HandleChatMessageUseCase;
         messageRepo?: IMessageRepository;
         bot?: IChatClientBot;
@@ -145,6 +153,7 @@ function makeUseCase(
         overrides.messageRepo ?? makeMessageRepo(),
         overrides.bot ?? makeBot(),
         logger,
+        overrides.rateLimiter ?? makeRateLimiter(),
     );
 }
 
@@ -153,6 +162,41 @@ function makeUseCase(
 // ---------------------------------------------------------------------------
 
 describe("HandleSummarizeUseCase", () => {
+    it("checks the rate limit against the invoker and proceeds when allowed", async () => {
+        const handleChatMessage = makeHandleChatMessageUseCase();
+        const rateLimiter = makeRateLimiter();
+        const useCase = makeUseCase({ handleChatMessage, rateLimiter });
+        const interaction = makeContextMenuInteraction({ userId: "invoker-9", targetAuthorId: "author-1" });
+
+        await useCase.execute(interaction);
+
+        expect(rateLimiter.check).toHaveBeenCalledWith("invoker-9");
+        expect(handleChatMessage.invokeAgentAndReply).toHaveBeenCalled();
+    });
+
+    it("replies ephemerally and skips the agent when the invoker is rate limited", async () => {
+        const handleChatMessage = makeHandleChatMessageUseCase();
+        const useCase = makeUseCase({ handleChatMessage, rateLimiter: makeRateLimiter(false) });
+        const interaction = makeContextMenuInteraction({});
+
+        await useCase.execute(interaction);
+
+        expect(interaction.reply).toHaveBeenCalledWith(
+            expect.objectContaining({ content: expect.stringContaining("too many messages"), isEphemeral: true }),
+        );
+        expect(handleChatMessage.invokeAgentAndReply).not.toHaveBeenCalled();
+    });
+
+    it("does not consume rate limit budget when the bot cannot send in the target channel", async () => {
+        const rateLimiter = makeRateLimiter();
+        const useCase = makeUseCase({ rateLimiter });
+        const interaction = { ...makeContextMenuInteraction({}), canSendMessageInTargetChannel: false };
+
+        await useCase.execute(interaction);
+
+        expect(rateLimiter.check).not.toHaveBeenCalled();
+    });
+
     // 32
     it("self-reply: passes ephemeralInstructionMessage 'Summarize this in English' when invoker === target author", async () => {
         const handleChatMessage = makeHandleChatMessageUseCase();

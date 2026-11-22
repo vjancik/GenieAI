@@ -12,6 +12,7 @@ import type {
     IChatClientMessageAttachment,
 } from "../../../src/application/ports/chat/IChatClient.ts";
 import type { IAgentOrchestrator } from "../../../src/application/ports/IAgentOrchestrator.ts";
+import type { IRateLimiter, RateLimitResult } from "../../../src/application/ports/IRateLimiter.ts";
 import type { StatusMessageUpdater } from "../../../src/application/services/StatusMessageUpdater.ts";
 import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
 import type { Logger } from "../../../src/application/types/Logger.ts";
@@ -126,8 +127,15 @@ function makeStatusUpdater(): StatusMessageUpdater {
     } as unknown as StatusMessageUpdater;
 }
 
+function makeRateLimiter(allowed = true): IRateLimiter {
+    return {
+        check: mock((): RateLimitResult => (allowed ? { allowed: true } : { allowed: false, retryAfterMs: 1_000 })),
+    };
+}
+
 function makeUseCase(
     overrides: {
+        rateLimiter?: IRateLimiter;
         orchestrator?: IAgentOrchestrator;
         messageRepo?: IMessageRepository;
         messagePageRepo?: IMessagePageRepository;
@@ -147,6 +155,7 @@ function makeUseCase(
         overrides.previousBotId,
         overrides.messagePageRepo ?? makePageRepo(),
         overrides.retries ?? 0,
+        overrides.rateLimiter ?? makeRateLimiter(),
     );
 }
 
@@ -160,7 +169,7 @@ describe("HandleChatMessageUseCase.execute", () => {
         const useCase = makeUseCase({ orchestrator });
         const msg = makeMessage({ id: "msg-1", isAuthorBot: true });
 
-        await useCase.execute({ message: msg, shutdownPending: false, isRateLimited: false });
+        await useCase.execute({ message: msg, shutdownPending: false });
 
         expect(msg.reply).not.toHaveBeenCalled();
         expect(orchestrator.process).not.toHaveBeenCalled();
@@ -171,7 +180,7 @@ describe("HandleChatMessageUseCase.execute", () => {
         const useCase = makeUseCase({ orchestrator });
         const msg = makeMessage({ id: "msg-1", content: "just a normal message" });
 
-        await useCase.execute({ message: msg, shutdownPending: false, isRateLimited: false });
+        await useCase.execute({ message: msg, shutdownPending: false });
 
         expect(msg.reply).not.toHaveBeenCalled();
         expect(orchestrator.process).not.toHaveBeenCalled();
@@ -182,7 +191,7 @@ describe("HandleChatMessageUseCase.execute", () => {
         const useCase = makeUseCase({ orchestrator });
         const msg = makeMessage({ id: "msg-1", content: "hey", hasExplicitMention: () => true });
 
-        await useCase.execute({ message: msg, shutdownPending: false, isRateLimited: false });
+        await useCase.execute({ message: msg, shutdownPending: false });
 
         expect(orchestrator.process).toHaveBeenCalled();
     });
@@ -192,7 +201,7 @@ describe("HandleChatMessageUseCase.execute", () => {
         const useCase = makeUseCase({ messageRepo });
         const msg = makeMessage({ id: "msg-1", content: "!ai hello" });
 
-        await useCase.execute({ message: msg, shutdownPending: true, isRateLimited: false });
+        await useCase.execute({ message: msg, shutdownPending: true });
 
         expect(messageRepo.saveBotPlaceholderMessage).toHaveBeenCalled();
         expect(msg.reply).toHaveBeenCalledWith(
@@ -202,13 +211,61 @@ describe("HandleChatMessageUseCase.execute", () => {
 
     it("sends rate limit reply and saves to DB when rate limited", async () => {
         const messageRepo = makeMessageRepo();
-        const useCase = makeUseCase({ messageRepo });
+        const orchestrator = makeOrchestrator();
+        const rateLimiter = makeRateLimiter(false);
+        const useCase = makeUseCase({ messageRepo, orchestrator, rateLimiter });
+        const msg = makeMessage({ id: "msg-1", content: "!ai hello", authorId: "user-rl" });
+
+        await useCase.execute({ message: msg, shutdownPending: false });
+
+        expect(rateLimiter.check).toHaveBeenCalledWith("user-rl");
+        expect(msg.reply).toHaveBeenCalledWith(
+            expect.objectContaining({ content: expect.stringContaining("too many messages") }),
+        );
+        expect(messageRepo.saveBotPlaceholderMessage).toHaveBeenCalled();
+        expect(orchestrator.process).not.toHaveBeenCalled();
+    });
+
+    it("does not consult the rate limiter for messages without a mention or command", async () => {
+        const rateLimiter = makeRateLimiter();
+        const useCase = makeUseCase({ rateLimiter });
+        const msg = makeMessage({ id: "msg-1", content: "just chatting" });
+
+        await useCase.execute({ message: msg, shutdownPending: false });
+
+        expect(rateLimiter.check).not.toHaveBeenCalled();
+    });
+
+    it("does not consult the rate limiter for bot-authored messages", async () => {
+        const rateLimiter = makeRateLimiter();
+        const useCase = makeUseCase({ rateLimiter });
+        const msg = makeMessage({ id: "msg-1", content: "!ai hello", isAuthorBot: true });
+
+        await useCase.execute({ message: msg, shutdownPending: false });
+
+        expect(rateLimiter.check).not.toHaveBeenCalled();
+    });
+
+    it("does not consume rate limit budget while a shutdown is pending", async () => {
+        const rateLimiter = makeRateLimiter();
+        const useCase = makeUseCase({ rateLimiter });
         const msg = makeMessage({ id: "msg-1", content: "!ai hello" });
 
-        await useCase.execute({ message: msg, shutdownPending: false, isRateLimited: true });
+        await useCase.execute({ message: msg, shutdownPending: true });
 
-        expect(msg.reply).toHaveBeenCalled();
-        expect(messageRepo.saveBotPlaceholderMessage).toHaveBeenCalled();
+        expect(rateLimiter.check).not.toHaveBeenCalled();
+    });
+
+    it("skips the rate limiter when bypassRateLimit is set", async () => {
+        const orchestrator = makeOrchestrator();
+        const rateLimiter = makeRateLimiter(false);
+        const useCase = makeUseCase({ orchestrator, rateLimiter });
+        const msg = makeMessage({ id: "msg-1", content: "!ai hello" });
+
+        await useCase.execute({ message: msg, shutdownPending: false, bypassRateLimit: true });
+
+        expect(rateLimiter.check).not.toHaveBeenCalled();
+        expect(orchestrator.process).toHaveBeenCalled();
     });
 
     it("injects synthetic greeting when content is empty, no attachments, and no reply reference", async () => {
@@ -222,7 +279,7 @@ describe("HandleChatMessageUseCase.execute", () => {
             hasExplicitMention: () => true,
         });
 
-        await useCase.execute({ message: msg, shutdownPending: false, isRateLimited: false });
+        await useCase.execute({ message: msg, shutdownPending: false });
 
         // The orchestrator should receive history with a human message containing "introduce yourself"
         const processCall = (orchestrator.process as ReturnType<typeof mock>).mock.calls[0];
@@ -242,7 +299,7 @@ describe("HandleChatMessageUseCase.execute", () => {
             hasExplicitMention: () => true,
         });
 
-        await useCase.execute({ message: msg, shutdownPending: false, isRateLimited: false });
+        await useCase.execute({ message: msg, shutdownPending: false });
 
         // orchestrator.process is called — attachment handling didn't prevent it
         expect(orchestrator.process).toHaveBeenCalled();
@@ -407,7 +464,7 @@ describe("HandleChatMessageUseCase — blocked prompts", () => {
         const thinkingMsg = makeMessage({ id: "thinking", authorId: BOT_USER_ID, isAuthorBot: true });
         const msg = makeMessage({ id: "user-msg", content: "!ai hello", reply: mock(async () => thinkingMsg) });
 
-        await useCase.execute({ message: msg, shutdownPending: false, isRateLimited: false });
+        await useCase.execute({ message: msg, shutdownPending: false });
 
         const reply = (msg.reply as ReturnType<typeof mock>).mock.calls.at(-1)?.[0] as {
             content: string;
@@ -459,7 +516,7 @@ describe("HandleChatMessageUseCase — response footers", () => {
             reply: mock(async () => thinkingMsg),
         });
 
-        await useCase.execute({ message: msg, shutdownPending: false, isRateLimited: false });
+        await useCase.execute({ message: msg, shutdownPending: false });
 
         const calls = (msg.reply as ReturnType<typeof mock>).mock.calls;
         const lastCall = calls.at(-1)?.[0] as { content: string } | undefined;
@@ -588,7 +645,7 @@ describe("HandleChatMessageUseCase — empty responses", () => {
         const thinkingMsg = makeMessage({ id: "thinking", authorId: BOT_USER_ID, isAuthorBot: true });
         const msg = makeMessage({ id: "user-msg", content: "!ai hello", reply: mock(async () => thinkingMsg) });
 
-        await useCase.execute({ message: msg, shutdownPending: false, isRateLimited: false });
+        await useCase.execute({ message: msg, shutdownPending: false });
 
         const reply = (msg.reply as ReturnType<typeof mock>).mock.calls.at(-1)?.[0] as {
             content: string;

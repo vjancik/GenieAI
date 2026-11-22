@@ -9,7 +9,6 @@ import type { HandleSourcesUseCase } from "../../../src/application/use-cases/Ha
 import type { HandleSummarizeUseCase } from "../../../src/application/use-cases/HandleMessageSummarize.ts";
 import type { DiscordClient } from "../../../src/infrastructure/discord/DiscordClient.ts";
 import { DiscordGateway } from "../../../src/infrastructure/discord/DiscordGateway.ts";
-import { RateLimiter } from "../../../src/infrastructure/discord/RateLimiter.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -121,7 +120,6 @@ function makeGateway(
         handleSummarize?: HandleSummarizeUseCase;
         handleExport?: HandleExportUseCase;
         handleSources?: HandleSourcesUseCase;
-        rateLimiter?: RateLimiter;
     } = {},
 ): DiscordGateway {
     const discordClient = makeDiscordClient();
@@ -136,7 +134,6 @@ function makeGateway(
         overrides.handleSummarize ?? makeHandleSummarizeUseCase(),
         overrides.handleExport ?? makeHandleExportUseCase(),
         overrides.handleSources ?? makeHandleSourcesUseCase(),
-        overrides.rateLimiter ?? new RateLimiter([{ windowMs: 60_000, limit: 100 }]),
     );
 }
 
@@ -153,25 +150,6 @@ describe("DiscordGateway.handleMessageCreate", () => {
         await gateway.handleMessageCreate(message);
 
         expect(handleChatMessage.execute).toHaveBeenCalled();
-    });
-
-    it("marks isRateLimited true when rate limit is exceeded", async () => {
-        const handleChatMessage = makeHandleChatMessageUseCase();
-        // Rate limiter with limit=1 so the second call is blocked
-        const rateLimiter = new RateLimiter([{ windowMs: 60_000, limit: 1 }]);
-        const gateway = makeGateway({ handleChatMessage, rateLimiter });
-        const message = makeMessage({ id: "msg-rl", authorId: "user-rl" });
-
-        // First call consumes the budget
-        await gateway.handleMessageCreate(message);
-        // Second call should be rate-limited
-        await gateway.handleMessageCreate(message);
-
-        const calls = (handleChatMessage.execute as ReturnType<typeof mock>).mock.calls as unknown as [
-            { isRateLimited: boolean },
-        ][];
-        const secondCallArg = calls[1]?.[0];
-        expect(secondCallArg?.isRateLimited).toBe(true);
     });
 
     it("passes retriesLeft through to the use case", async () => {

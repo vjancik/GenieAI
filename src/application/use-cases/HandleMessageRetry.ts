@@ -223,7 +223,7 @@ export class HandleRetryUseCase {
                         await this.handleChatMessage.execute({
                             message: originalMessage,
                             shutdownPending: false,
-                            isRateLimited: false,
+                            bypassRateLimit: true,
                             retriesLeft,
                             interactionType: "message_create",
                         });

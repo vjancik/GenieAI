@@ -88,6 +88,13 @@ describe("RateLimiter", () => {
         expect(limiter.check("u1").allowed).toBe(false);
     });
 
+    it("allows every call when no windows are configured", () => {
+        const limiter = new RateLimiter([]);
+        for (let i = 0; i < 100; i++) {
+            expect(limiter.check("u1")).toEqual({ allowed: true });
+        }
+    });
+
     it("denies when short window is exhausted even if long window has capacity", () => {
         const limiter = new RateLimiter([
             { windowMs: 3_000, limit: 3 },

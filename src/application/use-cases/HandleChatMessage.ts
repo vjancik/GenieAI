@@ -35,6 +35,7 @@ import type {
 import type { IAgentOrchestrator } from "../ports/IAgentOrchestrator.ts";
 import type { IChatMessageService } from "../ports/IChatMessageService.ts";
 import type { IInlineMediaNormalizer } from "../ports/IInlineMediaNormalizer.ts";
+import type { IRateLimiter } from "../ports/IRateLimiter.ts";
 import type { StatusMessageUpdater } from "../services/StatusMessageUpdater.ts";
 import {
     DM_GUILD_TOKEN,
@@ -48,6 +49,10 @@ import type { Logger } from "../types/Logger.ts";
 
 /** Discord's maximum message length in characters. */
 const MESSAGE_LENGTH_LIMIT = 2000;
+
+/** Reply sent to a user who has exceeded the per-user message rate limit. */
+export const RATE_LIMITED_NOTICE =
+    "Hi! It seems you have sent too many messages at once recently. Please wait a while before sending more.";
 
 /**
  * Failures that are an expected outcome rather than a fault in the bot (e.g. user content
@@ -97,6 +102,8 @@ export class HandleChatMessageUseCase {
         private readonly previousBotId: string | undefined,
         private readonly messagePageRepo: IMessagePageRepository,
         private readonly retries: number,
+        /** Per-author limiter consulted only for messages that pass the relevance guards. */
+        private readonly rateLimiter: IRateLimiter,
         private readonly chatMessageService?: IChatMessageService,
         private readonly enableInDMs: boolean = false,
         /** Required in inline attachment mode: resolves discord:// token URLs to base64 data blocks. */
@@ -110,16 +117,20 @@ export class HandleChatMessageUseCase {
      * wrapped in a Sentry span. Runs guards, builds agent input, invokes the agent,
      * and delivers the bot reply. Returns early (having already replied) for bot
      * authors, unknown intent without a mention, shutdown, or rate limit.
+     *
+     * The rate limiter is consulted only after the bot-author, DM and mention/command guards and
+     * the shutdown check, so messages the bot ignores never consume a user's budget.
      */
     async execute(params: {
         message: IChatClientMessage;
         shutdownPending: boolean;
-        isRateLimited: boolean;
+        /** Skip the per-author rate limit (e.g. a Retry button re-running an already-admitted message). */
+        bypassRateLimit?: boolean;
         /** Retries remaining for this response. Undefined on a fresh message. */
         retriesLeft?: number | null;
         interactionType?: MessageInteractionType;
     }): Promise<void> {
-        const { message, shutdownPending, isRateLimited, retriesLeft, interactionType } = params;
+        const { message, shutdownPending, bypassRateLimit, retriesLeft, interactionType } = params;
 
         // Ignore all bot messages (including our own) to prevent feedback loops
         if (message.isAuthorBot) return;
@@ -160,11 +171,8 @@ export class HandleChatMessageUseCase {
                     return;
                 }
 
-                if (isRateLimited) {
-                    const rateLimitReply = await message.reply({
-                        content:
-                            "Hi! It seems you have sent too many messages at once recently. Please wait a while before sending more.",
-                    });
+                if (!bypassRateLimit && !this.rateLimiter.check(message.authorId).allowed) {
+                    const rateLimitReply = await message.reply({ content: RATE_LIMITED_NOTICE });
                     await this.messageRepo.saveBotPlaceholderMessage({
                         discordMessageId: rateLimitReply.id,
                         repliesToDiscordId: message.id,

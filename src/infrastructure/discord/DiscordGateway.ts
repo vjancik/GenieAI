@@ -21,7 +21,6 @@ import { DiscordClientButtonInteraction } from "./adapters/DiscordClientButtonIn
 import { DiscordClientContextMenuInteraction } from "./adapters/DiscordClientContextMenuInteraction.ts";
 import { DiscordClientMessage } from "./adapters/DiscordClientMessage.ts";
 import type { DiscordClient } from "./DiscordClient.ts";
-import type { RateLimiter } from "./RateLimiter.ts";
 
 /**
  * Manages Discord event dispatching for incoming messages and button interactions.
@@ -53,7 +52,6 @@ export class DiscordGateway {
         private readonly handleSummarizeUseCase: HandleSummarizeUseCase,
         private readonly handleExportUseCase: HandleExportUseCase,
         private readonly handleSourcesUseCase: HandleSourcesUseCase,
-        private readonly rateLimiter: RateLimiter,
     ) {
         this.client = discordClient.client;
         this.registerEventHandlers();
@@ -145,12 +143,9 @@ export class DiscordGateway {
     }
 
     async handleMessageCreate(message: IChatClientMessage, retriesLeft?: number | null): Promise<void> {
-        const rateLimit = this.rateLimiter.check(message.authorId);
-
         await this.handleChatMessageUseCase.execute({
             message,
             shutdownPending: this.shutdownPending,
-            isRateLimited: !rateLimit.allowed,
             retriesLeft,
             interactionType: "message_create",
         });

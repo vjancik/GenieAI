@@ -43,6 +43,13 @@ discord:
   retries: 3       # <optional>
   # Whether the bot responds to messages and commands in Direct Message channels.
   enableInDMs: false       # <optional>
+  # Per-user sliding-window limits on bot requests: @mentions, prefix commands and the Summarize command.
+  # A message is allowed only when every window has capacity left. Set to [] to disable rate limiting.
+  rateLimits:              # <optional>
+    - windowMs: 3000       # 3 seconds
+      limit: 3
+    - windowMs: 60000      # 1 minute
+      limit: 10
   # Discord user ID of a previous bot version treated as own-bot messages.
 # previousBotId: ""        # <optional>
 

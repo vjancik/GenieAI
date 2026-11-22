@@ -8,9 +8,10 @@ import type {
     IChatClientContextMenuInteraction,
     IChatClientMessage,
 } from "../ports/chat/IChatClient.ts";
+import type { IRateLimiter } from "../ports/IRateLimiter.ts";
 import { DM_GUILD_TOKEN } from "../shared/tokens.ts";
 import type { Logger } from "../types/Logger.ts";
-import type { HandleChatMessageUseCase } from "./HandleChatMessage.ts";
+import { type HandleChatMessageUseCase, RATE_LIMITED_NOTICE } from "./HandleChatMessage.ts";
 
 /**
  * Application use case: handles the Summarize message context menu command.
@@ -25,6 +26,7 @@ export class HandleSummarizeUseCase {
      * @param messageRepo - Repository for checking whether a message already exists in the DB
      * @param bot - Chat client bot adapter for reading the current bot user ID
      * @param logger - Logger instance
+     * @param rateLimiter - Per-user message limiter, shared with chat messages so both draw on one budget
      * @param enableInDMs - Whether the bot is allowed to respond in Direct Message channels
      */
     constructor(
@@ -32,6 +34,7 @@ export class HandleSummarizeUseCase {
         private readonly messageRepo: IMessageRepository,
         private readonly bot: IChatClientBot,
         private readonly logger: Logger,
+        private readonly rateLimiter: IRateLimiter,
         private readonly enableInDMs: boolean = false,
     ) {}
 
@@ -71,6 +74,14 @@ export class HandleSummarizeUseCase {
                         content: "*I don't have permission to send messages in this channel.*",
                         isEphemeral: true,
                     });
+                    return;
+                }
+
+                // Charged to the invoker, not the target author — the invoker is the one triggering
+                // the model call. Checked after the cheap rejections so those never consume budget.
+                if (!this.rateLimiter.check(interaction.userId).allowed) {
+                    this.logger.info({ invokerUserId: interaction.userId }, "Summarize command rate limited");
+                    await interaction.reply({ content: RATE_LIMITED_NOTICE, isEphemeral: true });
                     return;
                 }
 

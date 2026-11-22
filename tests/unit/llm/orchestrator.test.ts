@@ -32,7 +32,7 @@ const testConfig = {
             fileStaleBeforeExpiryMinutes: 15,
             fileStaleBeforeExpiryMs: 15 * 60 * 1000,
         },
-        discord: { chainLimit: 100, retries: 3, enableInDMs: false },
+        discord: { chainLimit: 100, retries: 3, enableInDMs: false, rateLimits: [] },
         geminiModels: { includeThoughts: false },
         agent: {
             uploadAttachmentMode: "upload" as const,

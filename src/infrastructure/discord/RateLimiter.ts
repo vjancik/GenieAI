@@ -1,3 +1,5 @@
+import type { IRateLimiter, RateLimitResult, RateLimitWindow } from "../../application/ports/IRateLimiter.ts";
+
 /**
  * Sliding-window rate limiter keyed by an arbitrary string (e.g. Discord user ID).
  *
@@ -8,22 +10,14 @@
  * Old timestamps are pruned lazily on each `check` call. Additionally, a periodic cleanup
  * sweeps the entire map once an hour to evict keys whose timestamps have all expired,
  * preventing unbounded memory growth from long-inactive users.
+ *
+ * An empty window list disables limiting: every call is allowed and nothing is recorded.
  */
-
-/** A single rate-limit window: max `limit` calls within `windowMs` milliseconds. */
-export interface RateLimitWindow {
-    /** Duration of the sliding window in milliseconds. */
-    windowMs: number;
-    /** Maximum number of calls allowed within the window. */
-    limit: number;
-}
-
-export type RateLimitResult = { allowed: true } | { allowed: false; retryAfterMs: number };
 
 /** Interval between full map sweeps to evict fully-expired keys. */
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
-export class RateLimiter {
+export class RateLimiter implements IRateLimiter {
     /** Per-key list of call timestamps (epoch ms) — pruned lazily on each check. */
     private readonly timestamps = new Map<string, number[]>();
 
@@ -47,6 +41,9 @@ export class RateLimiter {
      * @param key - Identifier for the caller (e.g. Discord user ID)
      */
     check(key: string): RateLimitResult {
+        // No windows configured — limiting is disabled, so skip recording timestamps entirely
+        if (this.windows.length === 0) return { allowed: true };
+
         const now = Date.now();
         const history = this.timestamps.get(key) ?? [];
 
@@ -84,6 +81,7 @@ export class RateLimiter {
      * Called on a fixed interval — not needed for correctness, only for memory hygiene.
      */
     private cleanup(): void {
+        if (this.windows.length === 0) return;
         const now = Date.now();
         const maxWindowMs = Math.max(...this.windows.map((w) => w.windowMs));
         const cutoff = now - maxWindowMs;

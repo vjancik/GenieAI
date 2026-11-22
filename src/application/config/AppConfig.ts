@@ -1,6 +1,7 @@
 import { file } from "bun";
 import { z } from "zod";
 import { ConfigError } from "../../domain/errors/AppError.ts";
+import type { RateLimitWindow } from "../ports/IRateLimiter.ts";
 import type { Logger } from "../types/Logger.ts";
 import { THINKING_LEVELS } from "../types/ThinkingLevel.ts";
 
@@ -74,6 +75,15 @@ export const BASE_PROMPT_DEFAULT =
     "Your answer should be shorter than 1500 characters.\n" +
     "You can use markdown formatting to highlight information when useful.";
 
+/**
+ * Default per-user message rate limits: 3 per 3 seconds and 10 per minute.
+ * Declared outside the `as const` defaults so it stays a mutable array, which zod's `prefault` requires.
+ */
+const DEFAULT_RATE_LIMITS: RateLimitWindow[] = [
+    { windowMs: 3_000, limit: 3 },
+    { windowMs: 60_000, limit: 10 },
+];
+
 const fileConfigDefaults = {
     prompts: {
         basePrompt: BASE_PROMPT_DEFAULT,
@@ -108,6 +118,11 @@ const fileConfigDefaults = {
         retries: 3,
         /** Whether the bot responds to messages and commands in Direct Message channels. */
         enableInDMs: false,
+        /**
+         * Per-user sliding-window limits on messages addressed to the bot. A message is allowed
+         * only when every window has capacity left. An empty list disables rate limiting.
+         */
+        rateLimits: DEFAULT_RATE_LIMITS,
     },
     geminiModels: {
         /** Whether to include thought tokens in model responses. Useful for debugging. */
@@ -160,6 +175,13 @@ const fileConfigDefaults = {
 // ---------------------------------------------------------------------------
 // File config schema
 // ---------------------------------------------------------------------------
+
+const rateLimitWindowSchema = z.object({
+    /** Duration of the sliding window in milliseconds. */
+    windowMs: z.number().int().positive(),
+    /** Maximum number of messages allowed within the window. */
+    limit: z.number().int().positive(),
+});
 
 const agentModelSchema = z.object({
     model: z.string(),
@@ -269,6 +291,7 @@ const fileConfigSchema = z.object({
             chainLimit: z.number().int().positive().prefault(fileConfigDefaults.discord.chainLimit),
             retries: z.number().int().nonnegative().prefault(fileConfigDefaults.discord.retries),
             enableInDMs: z.boolean().prefault(fileConfigDefaults.discord.enableInDMs),
+            rateLimits: z.array(rateLimitWindowSchema).prefault(fileConfigDefaults.discord.rateLimits),
             previousBotId: z.string().optional(),
         })
 

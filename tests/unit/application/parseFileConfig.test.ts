@@ -62,6 +62,27 @@ describe("parseFileConfig", () => {
         });
     });
 
+    it("defaults discord rate limits to 3 per 3 s and 10 per minute", () => {
+        expect(parseFileConfig(VALID_YAML).discord.rateLimits).toEqual([
+            { windowMs: 3_000, limit: 3 },
+            { windowMs: 60_000, limit: 10 },
+        ]);
+    });
+
+    it("accepts custom discord rate limits, including an empty list", () => {
+        const custom = parseFileConfig(
+            `${VALID_YAML}\ndiscord:\n  rateLimits:\n    - windowMs: 3600000\n      limit: 50\n`,
+        );
+        expect(custom.discord.rateLimits).toEqual([{ windowMs: 3_600_000, limit: 50 }]);
+        expect(parseFileConfig(`${VALID_YAML}\ndiscord:\n  rateLimits: []\n`).discord.rateLimits).toEqual([]);
+    });
+
+    it("throws ConfigError for a non-positive rate limit", () => {
+        expect(() =>
+            parseFileConfig(`${VALID_YAML}\ndiscord:\n  rateLimits:\n    - windowMs: 1000\n      limit: 0\n`),
+        ).toThrow(ConfigError);
+    });
+
     it("defaults searchMode to google and accepts it as an agent-level setting", () => {
         expect(parseFileConfig(VALID_YAML).agent.searchMode).toBe("google");
 

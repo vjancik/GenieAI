@@ -43,6 +43,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
                 chainLimit: 100,
                 retries: 3,
                 enableInDMs: false,
+                rateLimits: [],
             },
             geminiModels: { includeThoughts: false },
             agent: {

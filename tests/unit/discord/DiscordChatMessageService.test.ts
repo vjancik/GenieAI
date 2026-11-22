@@ -8,7 +8,7 @@ import type { DiscordClient } from "../../../src/infrastructure/discord/DiscordC
 const testLogger = pino({ level: "silent" });
 
 const testFileConfig = {
-    discord: { chainLimit: 100, retries: 3, enableInDMs: false },
+    discord: { chainLimit: 100, retries: 3, enableInDMs: false, rateLimits: [] },
 };
 
 const BOT_USER_ID = "bot-user-id";
