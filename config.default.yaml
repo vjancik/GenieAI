@@ -59,6 +59,9 @@ agent:
   uploadAttachmentMode: "upload"  # <optional>
   # Maximum total size in MB for inline attachments per message and across conversation history.
   maxInlineAttachmentSizeMB: 100  # <optional>
+  # Maximum size in MB of a file (PDF, image, audio, video) loaded from a URL in the user's message.
+  # Files from URLs are only loaded in "upload" attachment mode.
+  maxExternalUrlFileSizeMB: 500  # <optional>
   # How fallback models run alongside main models ("sequential" or "parallel").  <optional, default: "sequential">
   #   sequential: the fallback model is invoked only after the main model fails with a 503 or timeout.
   #   parallel:   both models are invoked at once. The main model's answer is preferred; a successful

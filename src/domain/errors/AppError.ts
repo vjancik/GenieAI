@@ -83,6 +83,7 @@ export type WebFetchFailure =
     | "timeout"
     | "unreachable"
     | "unsupported-content"
+    | "too-large"
     | "blocked"
     | "paywalled"
     | "client-rendered"

@@ -125,6 +125,11 @@ const fileConfigDefaults = {
          * inline attachment data across the entire conversation history.
          */
         maxInlineAttachmentSizeMB: 100,
+        /**
+         * Maximum size in MB of a file loaded from a URL in the user's message.
+         * Only applies in "upload" attachment mode, the only mode that loads such files.
+         */
+        maxExternalUrlFileSizeMB: 500,
         /** How fallback models are run alongside main models ("sequential" or "parallel"). */
         fallbackExecutionMode: FallbackExecutionMode.sequential,
         /** Which search backend answers requests that need current information. */
@@ -274,6 +279,12 @@ const fileConfigSchema = z.object({
             .positive()
 
             .prefault(fileConfigDefaults.agent.maxInlineAttachmentSizeMB),
+        maxExternalUrlFileSizeMB: z
+            .number()
+            .int()
+            .positive()
+
+            .prefault(fileConfigDefaults.agent.maxExternalUrlFileSizeMB),
         fallbackExecutionMode: z
             .string()
             .transform((v) => v.toLowerCase())
@@ -410,6 +421,8 @@ function applyEnvOverrides(fileConfig: FileConfig, overrides: EnvOverrideFile): 
 type FileAgentConfigWithComputed = FileConfig["agent"] & {
     /** `maxInlineAttachmentSizeMB` converted to bytes. */
     maxInlineAttachmentSizeBytes: number;
+    /** `maxExternalUrlFileSizeMB` converted to bytes. */
+    maxExternalUrlFileSizeBytes: number;
 };
 
 /**
@@ -558,6 +571,7 @@ function applyComputedValues(config: EnvConfig & { file: FileConfig }): AppConfi
     // existing nested objects in place, avoiding unnecessary spreads/copies.
     const out = config as AppConfig;
     out.file.agent.maxInlineAttachmentSizeBytes = config.file.agent.maxInlineAttachmentSizeMB * 1024 * 1024;
+    out.file.agent.maxExternalUrlFileSizeBytes = config.file.agent.maxExternalUrlFileSizeMB * 1024 * 1024;
     out.file.geminiFileApi.fileStaleBeforeExpiryMs = config.file.geminiFileApi.fileStaleBeforeExpiryMinutes * 60 * 1000;
     return out;
 }

@@ -5,21 +5,21 @@ import type { GeminiFileUpload } from "../entities/GeminiFileUpload.ts";
  * Port interface for persisting Gemini file anchors and per-key upload records.
  *
  * Manages two related tables:
- * - `gemini_files`: permanent anchors with Discord context (never deleted)
+ * - `gemini_files`: permanent anchors holding the media's token URL (never deleted)
  * - `gemini_file_uploads`: ephemeral per-key upload tracking (cleaned by trigger)
  *
- * The two-table design ensures that Discord context (needed to re-download and
+ * The two-table design ensures that the token URL (needed to re-download and
  * re-upload) is never lost when stale upload rows are purged by the trigger.
  */
 export interface IGeminiFileRepository {
     /**
-     * Looks up gemini_files anchors by their stable `original_gemini_url` (discord:// token URLs)
+     * Looks up gemini_files anchors by their stable `original_gemini_url` (media token URLs)
      * and LEFT JOINs the upload record for the given API key.
      *
      * Used for the token block path in normalization — the common case.
      * Upload is null when no record exists for the given API key.
      *
-     * @param originalUrls - discord:// stable anchor keys from token blocks
+     * @param originalUrls - stable anchor keys from token blocks
      * @param apiKeyId - The API key whose upload record to join
      * @returns Map keyed by `original_gemini_url`
      */
@@ -47,7 +47,7 @@ export interface IGeminiFileRepository {
     ): Promise<Map<string, { file: GeminiFile; upload: GeminiFileUpload | null }>>;
 
     /**
-     * Batch-saves permanent file anchors with Discord metadata.
+     * Batch-saves permanent file anchors. `messageId` is null for external files.
      *
      * ON CONFLICT (original_gemini_url) DO UPDATE SET id = gemini_files.id (no-op)
      * ensures `.returning()` always yields all rows — including pre-existing ones —

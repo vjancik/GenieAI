@@ -1,0 +1,1 @@
+ALTER TABLE "gemini_files" ALTER COLUMN "message_id" DROP NOT NULL;

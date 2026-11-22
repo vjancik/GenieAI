@@ -4,12 +4,22 @@ import pino from "pino";
 const testLogger = pino({ level: "silent" });
 
 type ImpitCall = { url: string; method: string; body?: string };
-type ImpitReply = { ok?: boolean; status?: number; contentType?: string; body?: string; url?: string };
+type ImpitReply = {
+    ok?: boolean;
+    status?: number;
+    contentType?: string;
+    body?: string;
+    url?: string;
+    /** Extra response headers, e.g. content-length. */
+    headers?: Record<string, string>;
+};
 
 /** Records every request the tool makes through Impit, across all tests. */
 let calls: ImpitCall[] = [];
 /** Constructor options the tool passed to Impit — asserted for the browser preset. */
 let constructorOptions: Record<string, unknown> | undefined;
+/** The abort signals the tool passed along with its requests. */
+let signals: AbortSignal[] = [];
 /** Per-test responder; receives each request in order. */
 let respond: (call: ImpitCall) => ImpitReply = () => ({});
 
@@ -19,7 +29,7 @@ function toResponse(reply: ImpitReply, requestUrl: string) {
         ok: reply.ok ?? true,
         status: reply.status ?? 200,
         url: reply.url ?? requestUrl,
-        headers: new Headers({ "content-type": reply.contentType ?? "text/html" }),
+        headers: new Headers({ "content-type": reply.contentType ?? "text/html", ...reply.headers }),
         text: async () => body,
     };
 }
@@ -30,9 +40,10 @@ mock.module("impit", () => ({
         constructor(options: Record<string, unknown>) {
             constructorOptions = options;
         }
-        fetch(url: string, init?: { method?: string; body?: string }) {
+        fetch(url: string, init?: { method?: string; body?: string; signal?: AbortSignal }) {
             const call: ImpitCall = { url, method: init?.method ?? "GET", body: init?.body };
             calls.push(call);
+            if (init?.signal) signals.push(init.signal);
             return Promise.resolve(toResponse(respond(call), url));
         }
     },
@@ -48,6 +59,7 @@ const contentsOf = (entry: unknown) => (entry as { pageContents: string }).pageC
 
 beforeEach(() => {
     calls = [];
+    signals = [];
     constructorOptions = undefined;
     respond = () => ({});
 });
@@ -413,6 +425,78 @@ describe("failure reporting", () => {
 
         expect(result[0]).toMatchObject({ reason: "paywalled" });
         expect((result[0] as { error: string }).error).toContain("paywall");
+    });
+});
+
+describe("createGetWebsiteTool — files", () => {
+    const MAX_BYTES = 10 * 1024 * 1024;
+
+    /** Invokes the tool with file loading enabled. */
+    async function invokeFileTool(urls: string[]) {
+        const { createGetWebsiteTool } = await import("../../../src/infrastructure/llm/tools/getWebsiteTool.ts");
+        return createGetWebsiteTool(testLogger, undefined, { maxBytes: MAX_BYTES }).invoke({ urls });
+    }
+
+    test("reports a PDF by its metadata, without content", async () => {
+        respond = () => ({ contentType: "application/pdf; qs=0.001", headers: { "content-length": "13264" } });
+
+        const result = await invokeFileTool(["https://example.com/docs/report.pdf"]);
+
+        expect(result[0]).toEqual({
+            url: "https://example.com/docs/report.pdf",
+            file: { mimeType: "application/pdf", name: "report.pdf", sizeBytes: 13264 },
+        });
+    });
+
+    test("stops the transfer once the headers show a file", async () => {
+        respond = () => ({ contentType: "image/png" });
+
+        await invokeFileTool(["https://example.com/image.png"]);
+
+        expect(signals).toHaveLength(1);
+        expect(signals[0]?.aborted).toBe(true);
+    });
+
+    test("leaves the transfer of a web page running", async () => {
+        await invokeFileTool(["https://example.com"]);
+
+        expect(signals[0]?.aborted).toBe(false);
+    });
+
+    test("infers the type from the URL when the server only says octet-stream", async () => {
+        respond = () => ({ contentType: "application/octet-stream" });
+
+        const result = await invokeFileTool(["https://example.com/clip.mp4?download=1"]);
+
+        expect(result[0]).toMatchObject({ file: { mimeType: "video/mp4", name: "clip.mp4", sizeBytes: null } });
+    });
+
+    test("prefers the Content-Disposition file name", async () => {
+        respond = () => ({
+            contentType: "application/pdf",
+            headers: { "content-disposition": 'attachment; filename="Annual Report.pdf"' },
+        });
+
+        const result = await invokeFileTool(["https://example.com/download?id=5"]);
+
+        expect(result[0]).toMatchObject({ file: { name: "Annual Report.pdf" } });
+    });
+
+    test("rejects a file declared larger than the limit", async () => {
+        respond = () => ({ contentType: "video/mp4", headers: { "content-length": String(MAX_BYTES + 1) } });
+
+        const result = await invokeFileTool(["https://example.com/big.mp4"]);
+
+        expect(result[0]).toMatchObject({ reason: "too-large" });
+        expect((result[0] as { error: string }).error).toContain("10.0 MB limit");
+    });
+
+    test("still rejects binary types the model cannot read", async () => {
+        respond = () => ({ contentType: "application/zip" });
+
+        const result = await invokeFileTool(["https://example.com/archive.zip"]);
+
+        expect(result[0]).toMatchObject({ reason: "unsupported-content" });
     });
 });
 

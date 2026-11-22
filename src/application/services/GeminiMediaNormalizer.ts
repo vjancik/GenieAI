@@ -9,18 +9,19 @@ import type { IGeminiFileRepository } from "../../domain/ports/IGeminiFileReposi
 import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
 import type { AppConfig } from "../config/AppConfig.ts";
 import { parseDiscordTokenUrl } from "../helpers/discordTokenUrl.ts";
-import { fetchDiscordTokenMedia } from "../helpers/fetchDiscordTokenMedia.ts";
-import type { IDiscordMediaService } from "../ports/IDiscordMediaService.ts";
+import { isDiscordTokenUrl, isExternalFileUrl } from "../helpers/mediaTokenUrl.ts";
 import type { IGeminiFileUploaderRegistry } from "../ports/IGeminiFileUploaderRegistry.ts";
 import type { IGeminiMediaNormalizer } from "../ports/IGeminiMediaNormalizer.ts";
-import type { IStreamingAttachmentDownloader } from "../ports/IStreamingAttachmentDownloader.ts";
+import type { IMediaSource } from "../ports/IMediaSource.ts";
 import type { OnStatusUpdate } from "../types/AgentStatus.ts";
 import { AgentStatusType } from "../types/AgentStatus.ts";
 import type { Logger } from "../types/Logger.ts";
 
 /**
- * A content block with a `url` field holding a discord:// token URL.
- * `mimeType` is always present on media token blocks — verified via HEAD request at build time.
+ * A content block whose `url` field holds a media token URL: a `discord://` token, or the
+ * `http(s)://` URL of a file the website tool found.
+ * `mimeType` is always present on media token blocks: verified via HEAD request at build time
+ * for Discord media, and taken from the response headers for external files.
  */
 type TokenBlock = Record<string, unknown> & { type: string; url: string; mimeType: string };
 
@@ -29,16 +30,33 @@ type TokenBlock = Record<string, unknown> & { type: string; url: string; mimeTyp
  */
 type FileUriBlock = Record<string, unknown> & { type: string; mimeType: string; fileUri: string };
 
-/** Returns true if a block is an unresolved discord:// token URL block. Throws if mimeType is missing. */
+/**
+ * Returns true if a block is an unresolved media token URL block.
+ *
+ * External URLs are only recognized on `media` blocks, so that other block types carrying a
+ * web URL are never mistaken for a file to upload.
+ *
+ * @throws Error when a Discord token block is missing its mimeType
+ */
 function isTokenBlock(block: unknown): block is TokenBlock {
     const b = block as Record<string, unknown>;
-    if (typeof block !== "object" || block === null || typeof b.url !== "string" || !b.url.startsWith("discord://")) {
-        return false;
+    if (typeof block !== "object" || block === null || typeof b.url !== "string") return false;
+
+    if (isDiscordTokenUrl(b.url)) {
+        if (typeof b.mimeType !== "string") {
+            throw new Error(`Programmatic Error - Discord token block is missing mimeType: ${b.url}`);
+        }
+        return true;
     }
-    if (typeof b.mimeType !== "string") {
-        throw new Error(`Programmatic Error - Discord token block is missing mimeType: ${b.url}`);
-    }
-    return true;
+    return b.type === "media" && typeof b.mimeType === "string" && isExternalFileUrl(b.url);
+}
+
+/**
+ * Text left in place of an external file that can no longer be fetched. The tool result next
+ * to it still says the file was retrieved, so the model has to be told that it is gone.
+ */
+function unavailableFileNotice(url: string): string {
+    return `[The file at ${url} is no longer available and could not be loaded]`;
 }
 
 /** Returns true if a block is an already-resolved Gemini fileUri block. */
@@ -55,27 +73,28 @@ function isFileUriBlock(block: unknown): block is FileUriBlock {
  * Unified service that resolves and refreshes Gemini media blocks in LangChain message histories.
  *
  * Handles two block shapes:
- * - `{ type:"media", url:"discord://..." }` — token blocks written by `AgentMessageBuilder`.
+ * - `{ type:"media", url:"discord://..." }` — token blocks written by `AgentMessageBuilder`,
+ *   and `{ type:"media", url:"https://..." }` — blocks for files the website tool found.
  *   Resolved to a fresh Gemini `fileUri` via find-or-upload logic keyed by the token URL.
  * - `{ type:"media", fileUri:"https://..." }` — already-resolved blocks from pre-refactor
  *   histories or from a previous agent turn in the same execution. Validated against the DB
- *   for freshness; stale or missing uploads are re-uploaded from Discord.
+ *   for freshness; stale or missing uploads are re-uploaded from the media's origin.
  *
  * Both block types share the same DB anchor record (`gemini_files.original_gemini_url` as
  * the stable key) and the same staleness/reupload logic, so the normalizer runs once per
  * invocation and covers the full history regardless of how blocks were originally written.
  *
  * Algorithm per token block:
- * - **Not in DB**: download from Discord → upload to Gemini → insert anchor + upload record
+ * - **Not in DB**: download from the origin → upload to Gemini → insert anchor + upload record
  * - **In DB, upload fresh for this key**: use existing `fileUri`
  * - **In DB, upload stale or missing for this key**: re-download → re-upload → upsert record
- * - **Discord media deleted**: drop the block (warn, do not throw)
+ * - **Media gone from its origin**: drop the block; an external file leaves a notice in its place
  *
  * Algorithm per fileUri block (legacy or same-session):
- * - **Not in DB**: cannot re-upload without Discord context — pass through as-is with a warning
+ * - **Not in DB**: cannot re-upload without the token URL — pass through as-is with a warning
  * - **In DB, upload fresh for this key**: pass through unchanged
  * - **In DB, upload stale or missing for this key**: re-download → re-upload → substitute new URI
- * - **Discord media deleted**: drop the block (warn, do not throw)
+ * - **Media gone from its origin**: drop the block (warn, do not throw)
  *
  * Gemini files are project-scoped — a file uploaded with key A is inaccessible from key B —
  * so `apiKeyId` is provided per `normalize()` call and drives all upload/lookup decisions.
@@ -100,8 +119,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
         private readonly geminiFileRepo: IGeminiFileRepository,
         private readonly messageRepo: IMessageRepository,
         private readonly uploaderRegistry: IGeminiFileUploaderRegistry,
-        private readonly streamingDownloader: IStreamingAttachmentDownloader,
-        private readonly mediaService: IDiscordMediaService,
+        private readonly mediaSource: IMediaSource,
         private readonly logger: Logger,
         config: Pick<AppConfig, "file">,
     ) {
@@ -115,7 +133,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
     }
 
     /**
-     * Resolves all `discord://` token URL blocks in `messages` to Gemini `fileUri` blocks.
+     * Resolves all media token URL blocks in `messages` to Gemini `fileUri` blocks.
      * Messages with no token blocks pass through unchanged.
      */
     async normalize(
@@ -243,7 +261,7 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
 
                         // kind === "fileUri"
                         if (!state) {
-                            // No DB anchor — pre-refactor block, cannot re-upload without Discord context.
+                            // No DB anchor — pre-refactor block, cannot re-upload without the token URL.
                             this.logger.warn(
                                 { fileUri: key, apiKeyId },
                                 "Gemini fileUri block has no DB anchor — cannot validate freshness, passing through",
@@ -295,64 +313,47 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
     }
 
     /**
-     * Handles a token URL with no existing DB anchor: resolves the token, downloads
-     * the media from Discord, uploads to Gemini, and persists both the anchor and
-     * the upload record.
+     * Handles a token URL with no existing DB anchor: opens the media at its origin, uploads it
+     * to Gemini, and persists both the anchor and the upload record.
      *
-     * Returns the new Gemini `fileUri`, or `null` if the Discord media is gone.
+     * Returns the new Gemini `fileUri`, or `null` if the media is gone.
      */
     private async uploadNew(
         tokenUrl: string,
-        acceptMimeType: string | undefined,
+        expectedMimeType: string | undefined,
         apiKeyId: string,
     ): Promise<string | null> {
         return Sentry.startSpan({ name: "Upload new Gemini file", op: "gemini.files.upload_new" }, async () => {
-            const token = parseDiscordTokenUrl(tokenUrl);
-            if (!token) {
-                this.logger.warn({ tokenUrl }, "Cannot parse discord token URL for new upload — dropping block");
+            const media = await this.mediaSource.open(tokenUrl, expectedMimeType);
+            if (!media) {
+                this.logger.warn({ tokenUrl }, "Media not available for new upload — dropping block");
                 return null;
             }
 
-            // Fetch fresh CDN URL from Discord
-            const fetched = await fetchDiscordTokenMedia(this.mediaService, token);
-
-            if (!fetched) {
-                this.logger.warn({ tokenUrl }, "Discord media not found for new upload — dropping block");
-                return null;
-            }
-
-            const { stream, mimeType, byteLength } = await this.streamingDownloader.downloadStream(
-                fetched,
-                acceptMimeType,
-            );
             const uploader = this.uploaderRegistry.get(apiKeyId);
             const uploaded = await uploader.uploadStream(
-                stream,
+                media.stream,
                 `files/${randomUUIDv7()}`,
-                mimeType,
-                fetched.name,
-                byteLength ?? fetched.size,
+                media.mimeType,
+                media.name,
+                media.byteLength,
             );
 
-            // messageId FK: look up the messages row UUID from the discord snowflake encoded in the token
-            const messageId = await this.messageRepo.getIdByDiscordMessageId({
-                discordMessageId: token.messageId,
-                channelId: token.channelId,
-                guildId: token.guildId,
-            });
-
-            if (!messageId) {
+            const anchor = await this.resolveAnchorMessage(tokenUrl);
+            if (anchor === undefined) {
                 // Message row not found — can't satisfy FK. Log and skip persisting anchor,
                 // but still return the uploaded fileUri so this request succeeds.
                 this.logger.warn(
-                    { tokenUrl, discordMessageId: token.messageId },
+                    { tokenUrl },
                     "messages row not found for discord token — Gemini file anchor not persisted",
                 );
                 return uploaded.geminiUrl;
             }
 
             // The token URL is the whole anchor: it is all that is needed to find the media again
-            const [savedFile] = await this.geminiFileRepo.saveFiles([{ originalGeminiUrl: tokenUrl, messageId }]);
+            const [savedFile] = await this.geminiFileRepo.saveFiles([
+                { originalGeminiUrl: tokenUrl, messageId: anchor },
+            ]);
 
             await this.geminiFileRepo.upsertUpload({
                 // biome-ignore lint/style/noNonNullAssertion: saveFiles always returns index-aligned results
@@ -370,19 +371,42 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
     }
 
     /**
+     * Determines the `messages` row a new anchor belongs to.
+     *
+     * A Discord token is owned by the message it was posted in. An external file is owned by no
+     * message: its anchor is keyed by the URL alone and shared by every conversation fetching it.
+     *
+     * @returns The row's UUID, `null` for an external file, or `undefined` when the message a
+     *   Discord token points at has no row
+     */
+    private async resolveAnchorMessage(tokenUrl: string): Promise<string | null | undefined> {
+        if (!isDiscordTokenUrl(tokenUrl)) return null;
+
+        const token = parseDiscordTokenUrl(tokenUrl);
+        if (!token) return undefined;
+
+        const messageId = await this.messageRepo.getIdByDiscordMessageId({
+            discordMessageId: token.messageId,
+            channelId: token.channelId,
+            guildId: token.guildId,
+        });
+        return messageId ?? undefined;
+    }
+
+    /**
      * Re-downloads and re-uploads a file whose anchor exists but whose upload record is
      * missing (new key / trigger-cleaned) or stale (approaching Gemini TTL).
      *
-     * The media is located by parsing the anchor's own `discord://` token URL rather than
-     * `blockKey`, which is a Gemini fileUri when the block was already resolved earlier.
+     * The media is located through the anchor's own token URL rather than `blockKey`, which is
+     * a Gemini fileUri when the block was already resolved earlier.
      *
      * @param blockKey - The URL found in the content block: a token URL or a Gemini fileUri. Used for logging only.
      *
-     * Returns the new Gemini `fileUri`, or `null` if the Discord media is gone.
+     * Returns the new Gemini `fileUri`, or `null` if the media is gone.
      */
     private async reupload(
         blockKey: string,
-        acceptMimeType: string | undefined,
+        expectedMimeType: string | undefined,
         file: GeminiFile,
         existingUpload: GeminiFileUpload | null,
         apiKeyId: string,
@@ -395,36 +419,35 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
             },
             async () => {
                 const tokenUrl = file.originalGeminiUrl;
-                const token = parseDiscordTokenUrl(tokenUrl);
-                if (!token) {
+
+                // Anchors created before token URLs existed hold the first Gemini upload URI
+                // and belong to a message. Only an anchor without a message is an external
+                // file, so such a legacy web URL must not be fetched as one.
+                if (isExternalFileUrl(tokenUrl) && file.messageId !== null) {
                     this.logger.error(
                         { blockKey, tokenUrl, fileId: file.id },
-                        "Gemini file anchor does not hold a valid discord token URL — skipping re-upload",
+                        "Gemini file anchor does not hold a media token URL — skipping re-upload",
                     );
                     return null;
                 }
 
-                const attachment = await fetchDiscordTokenMedia(this.mediaService, token);
+                const media = await this.mediaSource.open(tokenUrl, expectedMimeType);
 
-                if (!attachment) {
+                if (!media) {
                     this.logger.warn(
-                        { tokenUrl, kind: token.kind, discordMessageId: token.messageId },
-                        "Discord media no longer exists — dropping block",
+                        { blockKey, tokenUrl, fileId: file.id },
+                        "Media no longer available for re-upload — dropping block",
                     );
                     return null;
                 }
 
-                const { stream, mimeType, byteLength } = await this.streamingDownloader.downloadStream(
-                    attachment,
-                    acceptMimeType,
-                );
                 const uploader = this.uploaderRegistry.get(apiKeyId);
                 const uploaded = await uploader.uploadStream(
-                    stream,
+                    media.stream,
                     `files/${randomUUIDv7()}`,
-                    mimeType,
-                    attachment.name,
-                    byteLength ?? attachment.size,
+                    media.mimeType,
+                    media.name,
+                    media.byteLength,
                 );
 
                 // Delete the old Gemini file best-effort (may already be expired)
@@ -450,7 +473,8 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
     /**
      * Returns a new message array with token URL blocks replaced by resolved `fileUri` blocks.
      *
-     * - `null` resolution: block is dropped (media deleted).
+     * - `null` resolution: block is dropped (media deleted). An external file leaves a notice
+     *   in its place, as the tool result beside it still claims the file was retrieved.
      * - String resolution: token block replaced with `{ type:"media", mimeType, fileUri }`.
      * - Unchanged messages are returned as-is (no new object created).
      */
@@ -469,6 +493,9 @@ export class GeminiMediaNormalizer implements IGeminiMediaNormalizer {
                         newBlocks.push(block);
                     } else if (fileUri === null) {
                         // Media deleted — drop block
+                        if (isExternalFileUrl(block.url)) {
+                            newBlocks.push({ type: "text", text: unavailableFileNotice(block.url) });
+                        }
                         modified = true;
                     } else {
                         // Replace token with resolved fileUri block

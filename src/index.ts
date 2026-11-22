@@ -15,9 +15,11 @@
 import * as Sentry from "@sentry/bun";
 import { ConfigProvider } from "./application/config/AppConfig.ts";
 import { sanitizeForLog } from "./application/helpers/errorHelpers.ts";
+import { DiscordMediaSource } from "./application/services/DiscordMediaSource.ts";
 import { GeminiApiKeySyncService } from "./application/services/GeminiApiKeySync.ts";
 import { GeminiMediaNormalizer } from "./application/services/GeminiMediaNormalizer.ts";
 import { InlineMediaNormalizer } from "./application/services/InlineMediaNormalizer.ts";
+import { RoutingMediaSource } from "./application/services/RoutingMediaSource.ts";
 import { StatusMessageUpdater } from "./application/services/StatusMessageUpdater.ts";
 import { HandleChatMessageUseCase } from "./application/use-cases/HandleChatMessage.ts";
 import { HandleExportUseCase } from "./application/use-cases/HandleMessageExport.ts";
@@ -28,6 +30,7 @@ import { HandleSummarizeUseCase } from "./application/use-cases/HandleMessageSum
 import { FetchAttachmentDownloader } from "./infrastructure/attachments/FetchAttachmentDownloader.ts";
 import { FetchStreamingAttachmentDownloader } from "./infrastructure/attachments/FetchStreamingAttachmentDownloader.ts";
 import { GenaiFileUploaderRegistry } from "./infrastructure/attachments/GenaiFileUploaderRegistry.ts";
+import { ImpitExternalFileSource } from "./infrastructure/attachments/ImpitExternalFileSource.ts";
 import { BrowserPageFetcher } from "./infrastructure/browser/BrowserPageFetcher.ts";
 import { ChromiumProvider } from "./infrastructure/browser/ChromiumProvider.ts";
 import { createDb } from "./infrastructure/db/connection.ts";
@@ -46,6 +49,7 @@ import { InteractionLock } from "./infrastructure/discord/InteractionLock.ts";
 import { RateLimiter } from "./infrastructure/discord/RateLimiter.ts";
 import { HtmlToImageRenderer } from "./infrastructure/exporters/HtmlToImageRenderer.ts";
 import { MarkdownToHtmlRenderer } from "./infrastructure/exporters/MarkdownToHtmlRenderer.ts";
+import { createImpitClient } from "./infrastructure/http/impitClient.ts";
 import { AgentOrchestrator } from "./infrastructure/llm/agents/agentOrchestrator.ts";
 import { ComputationModelProvider } from "./infrastructure/llm/models/computationModel.ts";
 import { GeneralModelProvider } from "./infrastructure/llm/models/generalModel.ts";
@@ -111,9 +115,12 @@ const uploaderRegistry = new GenaiFileUploaderRegistry(
 const chromiumProvider = new ChromiumProvider(logger.child({ module: "browser" }));
 
 // LLM tools
+// Files found at a URL can only be loaded into the conversation in upload mode
+const isInlineMode = config.file.agent.uploadAttachmentMode === "inline";
 const getWebsiteTool = createGetWebsiteTool(
     logger.child({ module: "tool:website" }),
     new BrowserPageFetcher(chromiumProvider, logger.child({ module: "browser:fetch" })),
+    isInlineMode ? undefined : { maxBytes: config.file.agent.maxExternalUrlFileSizeBytes },
 );
 const getVideoCaptionsTool = await createGetVideoCaptionsTool(
     logger.child({ module: "tool:video" }),
@@ -183,17 +190,33 @@ const inlineMediaNormalizer = new InlineMediaNormalizer(
     logger.child({ module: "attachments:inline-normalizer" }),
 );
 
+// Opens the media behind a token URL, wherever it lives: on Discord or on the web
+const mediaSource = new RoutingMediaSource(
+    new DiscordMediaSource(
+        discordMediaService,
+        streamingDownloader,
+        logger.child({ module: "attachments:discord-source" }),
+    ),
+    new ImpitExternalFileSource(
+        // No request deadline: a download takes as long as its size demands
+        (browser) => createImpitClient(browser, null),
+        logger.child({ module: "attachments:external-source" }),
+        {
+            maxBytes: config.file.agent.maxExternalUrlFileSizeBytes,
+            responseTimeoutMs: config.file.attachmentDownloader.timeoutMs,
+        },
+    ),
+    logger.child({ module: "attachments:media-source" }),
+);
+
 const geminiMediaNormalizer = new GeminiMediaNormalizer(
     geminiFileRepository,
     messageRepository,
     uploaderRegistry,
-    streamingDownloader,
-    discordMediaService,
+    mediaSource,
     logger.child({ module: "attachments:gemini-normalizer" }),
     config,
 );
-
-const isInlineMode = config.file.agent.uploadAttachmentMode === "inline";
 
 // Resilient invoker — owns key rotation, Gemini file normalization, attachment filtering, and fallback policy
 const resilientInvoker = new ResilientModelInvoker(

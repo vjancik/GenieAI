@@ -11,6 +11,7 @@ import { TavilySearchResultSchema } from "../tools/tavilySearchTool.ts";
 const WebsiteResultsSchema = z.array(
     z.union([
         z.object({ url: z.string(), pageContents: z.string() }),
+        z.object({ url: z.string(), file: z.object({ mimeType: z.string(), name: z.string().optional() }) }),
         z.object({ url: z.string(), error: z.string() }),
     ]),
 );
@@ -32,22 +33,53 @@ const FALLBACK_LABEL = "Retrieved context:";
 const SECTION_SEPARATOR = "\n\n";
 
 /**
- * Renders a parsed tool result as plain text, or returns null when the result does not match
- * the tool's expected shape (the caller then falls back to the raw content).
+ * A media block standing in for a file on the web. Its `url` is a media token: the Gemini media
+ * normalizer loads the file from it before the message reaches the model.
  */
-type ToolResultFormatter = (result: unknown) => string | null;
+type ExternalFileBlock = { type: "media"; mimeType: string; url: string };
 
-function formatWebsiteResults(result: unknown): string | null {
+/** A piece of a rendered tool result: plain text, or a file to load into the conversation. */
+type ToolResultPart = string | ExternalFileBlock;
+
+/** How tool results are rendered. */
+interface FlattenOptions {
+    /**
+     * Whether files found by the website tool are embedded as media blocks for the model to
+     * read. Requires a setup that resolves such blocks (upload attachment mode); without it
+     * they are mentioned in text only.
+     */
+    embedExternalFiles: boolean;
+}
+
+/**
+ * Renders a parsed tool result as text, interleaved with file blocks where the result holds
+ * files, or returns null when the result does not match the tool's expected shape (the caller
+ * then falls back to the raw content).
+ */
+type ToolResultFormatter = (result: unknown, options: FlattenOptions) => ToolResultPart[] | null;
+
+function formatWebsiteResults(result: unknown, options: FlattenOptions): ToolResultPart[] | null {
     const parsed = WebsiteResultsSchema.safeParse(result);
     if (!parsed.success) return null;
-    return parsed.data
-        .map((entry) =>
-            "pageContents" in entry
-                ? `Website contents of ${entry.url}:\n${entry.pageContents}`
-                : // Website error messages already lead with the URL
-                  `Failed to retrieve website contents: ${entry.error}`,
-        )
-        .join(SECTION_SEPARATOR);
+
+    const parts: ToolResultPart[] = [];
+    for (const entry of parsed.data) {
+        if ("pageContents" in entry) {
+            parts.push(`Website contents of ${entry.url}:\n${entry.pageContents}`);
+        } else if ("file" in entry) {
+            const description = `${entry.file.name ?? "file"}, ${entry.file.mimeType}`;
+            if (options.embedExternalFiles) {
+                parts.push(`File retrieved from ${entry.url} (${description}):`);
+                parts.push({ type: "media", mimeType: entry.file.mimeType, url: entry.url });
+            } else {
+                parts.push(`A file was found at ${entry.url} (${description}), but its contents could not be loaded.`);
+            }
+        } else {
+            // Website error messages already lead with the URL
+            parts.push(`Failed to retrieve website contents: ${entry.error}`);
+        }
+    }
+    return parts;
 }
 
 /** Describes a video by its title and author when known, always including the URL. */
@@ -56,24 +88,22 @@ function describeVideo({ url, title, author }: { url: string; title?: string; au
     return `"${title}"${author === undefined ? "" : ` by ${author}`} (${url})`;
 }
 
-function formatVideoCaptionsResults(result: unknown): string | null {
+function formatVideoCaptionsResults(result: unknown): ToolResultPart[] | null {
     const parsed = VideoCaptionsResultsSchema.safeParse(result);
     if (!parsed.success) return null;
-    return parsed.data
-        .map((entry) =>
-            "videoCaptions" in entry
-                ? `Video captions of ${describeVideo(entry)}:\n${entry.videoCaptions}`
-                : `Failed to retrieve video captions of ${describeVideo(entry)}: ${entry.error}`,
-        )
-        .join(SECTION_SEPARATOR);
+    return parsed.data.map((entry) =>
+        "videoCaptions" in entry
+            ? `Video captions of ${describeVideo(entry)}:\n${entry.videoCaptions}`
+            : `Failed to retrieve video captions of ${describeVideo(entry)}: ${entry.error}`,
+    );
 }
 
-function formatWebSearchResults(result: unknown): string | null {
+function formatWebSearchResults(result: unknown): ToolResultPart[] | null {
     const parsed = WebSearchResultsSchema.safeParse(result);
     if (!parsed.success) return null;
-    if (parsed.data.length === 0) return "Web search context:\nThe web search returned no results.";
+    if (parsed.data.length === 0) return ["Web search context:\nThe web search returned no results."];
     const sources = parsed.data.map((entry, i) => `[${i + 1}] ${entry.title} (${entry.url})\n${entry.content}`);
-    return `Web search context:\n${sources.join(SECTION_SEPARATOR)}`;
+    return [`Web search context:\n${sources.join(SECTION_SEPARATOR)}`];
 }
 
 /** Exhaustive over {@link ToolName}, so a newly added tool must define how its results are rendered. */
@@ -97,13 +127,13 @@ function parseToolContent(content: ToolMessage["content"]): unknown {
 }
 
 /**
- * Renders a single ToolMessage as plain text. Unknown tools and results that don't match their
- * tool's shape are forwarded verbatim under a neutral label, so no retrieved context is lost.
+ * Renders a single ToolMessage. Unknown tools and results that don't match their tool's shape
+ * are forwarded verbatim under a neutral label, so no retrieved context is lost.
  */
-function formatToolMessage(message: ToolMessage, logger: Logger): string {
+function formatToolMessage(message: ToolMessage, logger: Logger, options: FlattenOptions): ToolResultPart[] {
     const formatted =
         message.name !== undefined && isToolName(message.name)
-            ? TOOL_RESULT_FORMATTERS[message.name](parseToolContent(message.content))
+            ? TOOL_RESULT_FORMATTERS[message.name](parseToolContent(message.content), options)
             : null;
     if (formatted !== null) return formatted;
 
@@ -112,7 +142,40 @@ function formatToolMessage(message: ToolMessage, logger: Logger): string {
         "Unrecognized tool result in history, forwarding its raw content",
     );
     const raw = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
-    return `${FALLBACK_LABEL}\n${raw}`;
+    return [`${FALLBACK_LABEL}\n${raw}`];
+}
+
+/**
+ * Builds the HumanMessage that replaces a tool exchange.
+ *
+ * Without files the content is a single string. With files it is a block array, in which
+ * each run of consecutive text parts forms one text block, so a file sits right after the
+ * text introducing it.
+ */
+function toHumanMessage(parts: ToolResultPart[]): HumanMessage {
+    if (parts.every((part) => typeof part === "string")) {
+        return new HumanMessage(parts.join(SECTION_SEPARATOR));
+    }
+
+    const blocks: ({ type: "text"; text: string } | ExternalFileBlock)[] = [];
+    let textRun: string[] = [];
+    const flushText = () => {
+        if (textRun.length === 0) return;
+        blocks.push({ type: "text", text: textRun.join(SECTION_SEPARATOR) });
+        textRun = [];
+    };
+
+    for (const part of parts) {
+        if (typeof part === "string") {
+            textRun.push(part);
+            continue;
+        }
+        flushText();
+        blocks.push(part);
+    }
+    flushText();
+
+    return new HumanMessage({ content: blocks });
 }
 
 /** Result of {@link flattenToolExchanges}. */
@@ -126,6 +189,11 @@ interface FlattenedHistory {
 /**
  * Rewrites every tool exchange in a message history into a plain HumanMessage holding the
  * rendered tool results, so the model never sees a past function call.
+ *
+ * A file found by the website tool has no content in its tool result. It is rendered as a
+ * media block holding the file's URL instead, which is how the file enters the conversation:
+ * the block is rebuilt from the persisted tool result on every turn, and resolved to an
+ * upload right before the model call.
  *
  * WORKAROUND: Gemini Flash models tend to hallucinate tool calls when the history contains
  * earlier tool calls, even with a never-callable tool bound and VALIDATED calling mode.
@@ -142,10 +210,15 @@ interface FlattenedHistory {
  *
  * @param messages - The history to rewrite; never mutated
  * @param logger - Used to report tool results that had to be forwarded unformatted
+ * @param options - How tool results are rendered, see {@link FlattenOptions}
  * @throws AppError (`ORCHESTRATOR_INVALID_TOOL_HISTORY`) when an AIMessage's tool call count
  *   does not match the number of ToolMessages after it, or a ToolMessage has no preceding call
  */
-export function flattenToolExchanges(messages: BaseMessage[], logger: Logger): FlattenedHistory {
+export function flattenToolExchanges(
+    messages: BaseMessage[],
+    logger: Logger,
+    options: FlattenOptions = { embedExternalFiles: false },
+): FlattenedHistory {
     const flattened: BaseMessage[] = [];
     let exchangeCount = 0;
     let i = 0;
@@ -182,9 +255,7 @@ export function flattenToolExchanges(messages: BaseMessage[], logger: Logger): F
             );
         }
 
-        flattened.push(
-            new HumanMessage(toolMessages.map((tm) => formatToolMessage(tm, logger)).join(SECTION_SEPARATOR)),
-        );
+        flattened.push(toHumanMessage(toolMessages.flatMap((tm) => formatToolMessage(tm, logger, options))));
         exchangeCount++;
     }
 

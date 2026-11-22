@@ -12,35 +12,38 @@ import { geminiFiles, geminiFileUploads, messages } from "../schema.ts";
 /**
  * Prepared statement for {@link PgGeminiFileRepository.findByOriginalUrl}.
  *
- * Looks up gemini_files by original_gemini_url (discord:// token URLs) and LEFT JOINs
+ * Looks up gemini_files by original_gemini_url (media token URLs) and LEFT JOINs
  * the upload record for the specified API key.
  */
 function buildFindByOriginalUrlStmt(db: Db) {
-    return db
-        .select({
-            fileId: geminiFiles.id,
-            fileOriginalGeminiUrl: geminiFiles.originalGeminiUrl,
-            fileMessageId: geminiFiles.messageId,
-            msgDiscordMessageId: messages.discordMessageId,
-            msgChannelId: messages.channelId,
-            uploadId: geminiFileUploads.id,
-            uploadGeminiFileId: geminiFileUploads.geminiFileId,
-            uploadApiKeyId: geminiFileUploads.apiKeyId,
-            uploadGeminiFileName: geminiFileUploads.geminiFileName,
-            uploadGeminiUrl: geminiFileUploads.geminiUrl,
-            uploadUploadedAt: geminiFileUploads.uploadedAt,
-        })
-        .from(geminiFiles)
-        .innerJoin(messages, eq(messages.id, geminiFiles.messageId))
-        .leftJoin(
-            geminiFileUploads,
-            and(
-                eq(geminiFileUploads.geminiFileId, geminiFiles.id),
-                eq(geminiFileUploads.apiKeyId, sql.placeholder("apiKeyId")),
-            ),
-        )
-        .where(eq(geminiFiles.originalGeminiUrl, sql`ANY(${sql.placeholder("originalUrls")})`))
-        .prepare("gemini_file_find_by_original_url");
+    return (
+        db
+            .select({
+                fileId: geminiFiles.id,
+                fileOriginalGeminiUrl: geminiFiles.originalGeminiUrl,
+                fileMessageId: geminiFiles.messageId,
+                msgDiscordMessageId: messages.discordMessageId,
+                msgChannelId: messages.channelId,
+                uploadId: geminiFileUploads.id,
+                uploadGeminiFileId: geminiFileUploads.geminiFileId,
+                uploadApiKeyId: geminiFileUploads.apiKeyId,
+                uploadGeminiFileName: geminiFileUploads.geminiFileName,
+                uploadGeminiUrl: geminiFileUploads.geminiUrl,
+                uploadUploadedAt: geminiFileUploads.uploadedAt,
+            })
+            .from(geminiFiles)
+            // LEFT JOIN: anchors of external files belong to no message
+            .leftJoin(messages, eq(messages.id, geminiFiles.messageId))
+            .leftJoin(
+                geminiFileUploads,
+                and(
+                    eq(geminiFileUploads.geminiFileId, geminiFiles.id),
+                    eq(geminiFileUploads.apiKeyId, sql.placeholder("apiKeyId")),
+                ),
+            )
+            .where(eq(geminiFiles.originalGeminiUrl, sql`ANY(${sql.placeholder("originalUrls")})`))
+            .prepare("gemini_file_find_by_original_url")
+    );
 }
 
 // Looks anchors up by a resolved Gemini URL, for fileUri blocks carried over from an earlier
@@ -63,46 +66,49 @@ function buildFindByOriginalUrlStmt(db: Db) {
  * caller can key the result map by the URL it searched for.
  */
 function buildFindByUploadUrlStmt(db: Db) {
-    return db
-        .select({
-            fileId: geminiFiles.id,
-            fileOriginalGeminiUrl: geminiFiles.originalGeminiUrl,
-            fileMessageId: geminiFiles.messageId,
-            msgDiscordMessageId: messages.discordMessageId,
-            msgChannelId: messages.channelId,
-            uploadId: geminiFileUploads.id,
-            uploadGeminiFileId: geminiFileUploads.geminiFileId,
-            uploadApiKeyId: geminiFileUploads.apiKeyId,
-            uploadGeminiFileName: geminiFileUploads.geminiFileName,
-            uploadGeminiUrl: geminiFileUploads.geminiUrl,
-            uploadUploadedAt: geminiFileUploads.uploadedAt,
-            // Scalar subquery: retrieve the matched URL from the any-key upload row so the
-            // caller can key the result map by the URL it searched for, independent of
-            // whether the current-key LEFT JOIN found a record.
-            matchedGeminiUrl: sql<string>`(
+    return (
+        db
+            .select({
+                fileId: geminiFiles.id,
+                fileOriginalGeminiUrl: geminiFiles.originalGeminiUrl,
+                fileMessageId: geminiFiles.messageId,
+                msgDiscordMessageId: messages.discordMessageId,
+                msgChannelId: messages.channelId,
+                uploadId: geminiFileUploads.id,
+                uploadGeminiFileId: geminiFileUploads.geminiFileId,
+                uploadApiKeyId: geminiFileUploads.apiKeyId,
+                uploadGeminiFileName: geminiFileUploads.geminiFileName,
+                uploadGeminiUrl: geminiFileUploads.geminiUrl,
+                uploadUploadedAt: geminiFileUploads.uploadedAt,
+                // Scalar subquery: retrieve the matched URL from the any-key upload row so the
+                // caller can key the result map by the URL it searched for, independent of
+                // whether the current-key LEFT JOIN found a record.
+                matchedGeminiUrl: sql<string>`(
                 SELECT u.gemini_url FROM gemini_file_uploads u
                 WHERE u.gemini_file_id = ${geminiFiles.id}
                   AND u.gemini_url = ANY(${sql.placeholder("geminiUrls")})
                 LIMIT 1
             )`,
-        })
-        .from(geminiFiles)
-        .innerJoin(messages, eq(messages.id, geminiFiles.messageId))
-        .leftJoin(
-            geminiFileUploads,
-            and(
-                eq(geminiFileUploads.geminiFileId, geminiFiles.id),
-                eq(geminiFileUploads.apiKeyId, sql.placeholder("apiKeyId")),
-            ),
-        )
-        .where(
-            sql`EXISTS (
+            })
+            .from(geminiFiles)
+            // LEFT JOIN: anchors of external files belong to no message
+            .leftJoin(messages, eq(messages.id, geminiFiles.messageId))
+            .leftJoin(
+                geminiFileUploads,
+                and(
+                    eq(geminiFileUploads.geminiFileId, geminiFiles.id),
+                    eq(geminiFileUploads.apiKeyId, sql.placeholder("apiKeyId")),
+                ),
+            )
+            .where(
+                sql`EXISTS (
                 SELECT 1 FROM gemini_file_uploads u
                 WHERE u.gemini_file_id = ${geminiFiles.id}
                   AND u.gemini_url = ANY(${sql.placeholder("geminiUrls")})
             )`,
-        )
-        .prepare("gemini_file_find_by_upload_url");
+            )
+            .prepare("gemini_file_find_by_upload_url")
+    );
 }
 
 /**
@@ -136,9 +142,9 @@ function buildUpsertUploadStmt(db: Db) {
 type UploadStateRow = {
     fileId: string;
     fileOriginalGeminiUrl: string;
-    fileMessageId: string;
-    msgDiscordMessageId: string;
-    msgChannelId: string;
+    fileMessageId: string | null;
+    msgDiscordMessageId: string | null;
+    msgChannelId: string | null;
     uploadId: string | null;
     uploadGeminiFileId: string | null;
     uploadApiKeyId: string | null;
@@ -179,7 +185,7 @@ function buildFileAndUpload(row: UploadStateRow): { file: GeminiFile; upload: Ge
  * PostgreSQL implementation of {@link IGeminiFileRepository} using Drizzle ORM.
  *
  * Manages two tables:
- * - `gemini_files` — permanent anchors, one row per Discord attachment ever uploaded.
+ * - `gemini_files` — permanent anchors, one row per media item ever uploaded.
  *   Rows are never deleted (except via ON DELETE CASCADE from the messages FK).
  * - `gemini_file_uploads` — ephemeral per-(file, api_key) upload tracking.
  *   Rows are cleaned by a BEFORE INSERT trigger when they exceed 48h.

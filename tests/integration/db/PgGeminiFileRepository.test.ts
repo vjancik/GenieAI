@@ -441,3 +441,52 @@ describe("PgGeminiFileRepository.saveFiles", () => {
         expect(uploadRows).toHaveLength(1);
     });
 });
+
+describe("PgGeminiFileRepository — external file anchors", () => {
+    const EXTERNAL_URL = "https://example.com/papers/report.pdf";
+
+    test("saves an anchor owned by no message", async () => {
+        const [saved] = await repo.saveFiles([{ originalGeminiUrl: EXTERNAL_URL, messageId: null }]);
+
+        expect(saved?.id).toBeDefined();
+        const rows = await db.select().from(geminiFiles).where(eq(geminiFiles.originalGeminiUrl, EXTERNAL_URL));
+        expect(rows[0]?.messageId).toBeNull();
+    });
+
+    test("findByOriginalUrl returns an anchor owned by no message, with null message fields", async () => {
+        const key = await keyRepo.upsert({ apiKey: "ext-key", isPaid: false });
+        const [saved] = await repo.saveFiles([{ originalGeminiUrl: EXTERNAL_URL, messageId: null }]);
+        // biome-ignore lint/style/noNonNullAssertion: saveFiles returns index-aligned results
+        await repo.upsertUpload(uploadPayload({ geminiFileId: saved!.id, apiKeyId: key.id }));
+
+        const result = await repo.findByOriginalUrl([EXTERNAL_URL], key.id);
+
+        const entry = result.get(EXTERNAL_URL);
+        expect(entry?.file).toMatchObject({
+            originalGeminiUrl: EXTERNAL_URL,
+            messageId: null,
+            discordMessageId: null,
+            discordChannelId: null,
+        });
+        expect(entry?.upload?.apiKeyId).toBe(key.id);
+    });
+
+    test("findByUploadUrl finds an anchor owned by no message", async () => {
+        const key = await keyRepo.upsert({ apiKey: "ext-key-2", isPaid: false });
+        const [saved] = await repo.saveFiles([{ originalGeminiUrl: EXTERNAL_URL, messageId: null }]);
+        const geminiUrl = "https://generativelanguage.googleapis.com/v1beta/files/ext";
+        // biome-ignore lint/style/noNonNullAssertion: saveFiles returns index-aligned results
+        await repo.upsertUpload(uploadPayload({ geminiFileId: saved!.id, apiKeyId: key.id, geminiUrl }));
+
+        const result = await repo.findByUploadUrl([geminiUrl], key.id);
+
+        expect(result.get(geminiUrl)?.file.originalGeminiUrl).toBe(EXTERNAL_URL);
+    });
+
+    test("one anchor per URL is shared across saves", async () => {
+        const [first] = await repo.saveFiles([{ originalGeminiUrl: EXTERNAL_URL, messageId: null }]);
+        const [second] = await repo.saveFiles([{ originalGeminiUrl: EXTERNAL_URL, messageId: null }]);
+
+        expect(second?.id).toBe(first?.id);
+    });
+});

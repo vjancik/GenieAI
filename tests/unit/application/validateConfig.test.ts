@@ -49,6 +49,8 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
                 uploadAttachmentMode: AttachmentMode.upload,
                 maxInlineAttachmentSizeMB: 100,
                 maxInlineAttachmentSizeBytes: 100 * 1024 * 1024,
+                maxExternalUrlFileSizeMB: 500,
+                maxExternalUrlFileSizeBytes: 500 * 1024 * 1024,
                 fallbackExecutionMode: FallbackExecutionMode.sequential,
                 searchMode: SearchMode.google,
                 nodes: {

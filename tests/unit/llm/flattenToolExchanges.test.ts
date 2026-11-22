@@ -243,3 +243,51 @@ describe("flattenToolExchanges", () => {
         expect(() => flattenToolExchanges(messages, testLogger)).toThrow(AppError);
     });
 });
+
+describe("flattenToolExchanges — files found by the website tool", () => {
+    const FILE_URL = "https://example.com/report.pdf";
+    const fileEntry = { url: FILE_URL, file: { mimeType: "application/pdf", name: "report.pdf", sizeBytes: 100 } };
+
+    test("embeds the file as a media block right after the text introducing it", () => {
+        const messages = [
+            new HumanMessage("summarize these"),
+            toolCallMessage(ToolName.GET_WEBSITE),
+            toolResult(ToolName.GET_WEBSITE, [
+                { url: "https://example.com/a", pageContents: "Page A" },
+                fileEntry,
+                { url: "https://example.com/b", pageContents: "Page B" },
+            ]),
+        ];
+
+        const result = flattenToolExchanges(messages, testLogger, { embedExternalFiles: true });
+
+        expect(result.messages[1]).toBeInstanceOf(HumanMessage);
+        expect(result.messages[1]?.content).toEqual([
+            {
+                type: "text",
+                text: `Website contents of https://example.com/a:\nPage A\n\nFile retrieved from ${FILE_URL} (report.pdf, application/pdf):`,
+            },
+            { type: "media", mimeType: "application/pdf", url: FILE_URL },
+            { type: "text", text: "Website contents of https://example.com/b:\nPage B" },
+        ]);
+    });
+
+    test("only mentions the file in text when embedding is disabled", () => {
+        const messages = [toolCallMessage(ToolName.GET_WEBSITE), toolResult(ToolName.GET_WEBSITE, [fileEntry])];
+
+        const text = humanTextAt(flattenToolExchanges(messages, testLogger).messages, 0);
+
+        expect(text).toContain(FILE_URL);
+        expect(text).toContain("could not be loaded");
+    });
+
+    test("leaves the original tool messages untouched", () => {
+        const tool = toolResult(ToolName.GET_WEBSITE, [fileEntry]);
+        const messages = [toolCallMessage(ToolName.GET_WEBSITE), tool];
+
+        flattenToolExchanges(messages, testLogger, { embedExternalFiles: true });
+
+        expect(messages[1]).toBe(tool);
+        expect(tool.content).toBe(JSON.stringify([fileEntry]));
+    });
+});

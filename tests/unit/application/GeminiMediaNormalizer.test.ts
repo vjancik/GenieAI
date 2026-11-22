@@ -5,7 +5,9 @@ import type { IChatClientMessageAttachment } from "../../../src/application/port
 import type { IDiscordMediaService } from "../../../src/application/ports/IDiscordMediaService.ts";
 import type { IGeminiFileUploader } from "../../../src/application/ports/IGeminiFileUploader.ts";
 import type { IGeminiFileUploaderRegistry } from "../../../src/application/ports/IGeminiFileUploaderRegistry.ts";
+import type { IMediaSource, OpenedMedia } from "../../../src/application/ports/IMediaSource.ts";
 import type { IStreamingAttachmentDownloader } from "../../../src/application/ports/IStreamingAttachmentDownloader.ts";
+import { DiscordMediaSource } from "../../../src/application/services/DiscordMediaSource.ts";
 import { GeminiMediaNormalizer } from "../../../src/application/services/GeminiMediaNormalizer.ts";
 import type { GeminiFile } from "../../../src/domain/entities/GeminiFile.ts";
 import type { GeminiFileUpload } from "../../../src/domain/entities/GeminiFileUpload.ts";
@@ -45,6 +47,8 @@ const testConfig = {
             uploadAttachmentMode: "upload" as const,
             maxInlineAttachmentSizeMB: 100,
             maxInlineAttachmentSizeBytes: 100 * 1024 * 1024,
+            maxExternalUrlFileSizeMB: 500,
+            maxExternalUrlFileSizeBytes: 500 * 1024 * 1024,
             fallbackExecutionMode: "sequential" as const,
             searchMode: "google" as const,
             nodes: {
@@ -203,6 +207,45 @@ function makeMediaService(
     };
 }
 
+/** URL of a file on the web, as found by the website tool. */
+const EXTERNAL_URL = "https://example.com/papers/report.pdf";
+
+const externalMedia: OpenedMedia = {
+    stream: new ReadableStream(),
+    mimeType: "application/pdf",
+    byteLength: 2048,
+    name: "report.pdf",
+};
+
+/**
+ * Media source covering both token kinds: Discord tokens go through the real
+ * DiscordMediaSource over the given mocks, external URLs yield `external`.
+ */
+function makeSource(
+    mediaService: IDiscordMediaService,
+    external: OpenedMedia | null = externalMedia,
+): IMediaSource & { openExternal: ReturnType<typeof mock> } {
+    const discordSource = new DiscordMediaSource(mediaService, makeStreamingDownloader(), testLogger);
+    const openExternal = mock(async (_url: string, _mimeType?: string) => external);
+    return {
+        openExternal,
+        open: (tokenUrl, expectedMimeType) =>
+            tokenUrl.startsWith("discord://")
+                ? discordSource.open(tokenUrl, expectedMimeType)
+                : openExternal(tokenUrl, expectedMimeType),
+    };
+}
+
+/** A HumanMessage as flattenToolExchanges builds it for a file the website tool found. */
+function makeExternalFileMsg(url = EXTERNAL_URL): HumanMessage {
+    return new HumanMessage({
+        content: [
+            { type: "text", text: `File retrieved from ${url} (report.pdf, application/pdf):` },
+            { type: "media", mimeType: "application/pdf", url },
+        ],
+    });
+}
+
 /** Returns a Date representing a timestamp that is `hours` hours in the past. */
 function hoursAgo(hours: number): Date {
     return new Date(Date.now() - hours * 60 * 60 * 1000);
@@ -221,8 +264,7 @@ describe("GeminiMediaNormalizer.normalize", () => {
             makeRepo(),
             makeMessageRepo(),
             makeRegistry(makeUploader()),
-            makeStreamingDownloader(),
-            makeMediaService(),
+            makeSource(makeMediaService()),
             testLogger,
             testConfig,
         );
@@ -240,8 +282,7 @@ describe("GeminiMediaNormalizer.normalize", () => {
             makeRepo([{ file, upload }]),
             makeMessageRepo(),
             makeRegistry(makeUploader()),
-            makeStreamingDownloader(),
-            makeMediaService(),
+            makeSource(makeMediaService()),
             testLogger,
             testConfig,
         );
@@ -264,8 +305,7 @@ describe("GeminiMediaNormalizer.normalize", () => {
             makeRepo([{ file, upload }]),
             makeMessageRepo(),
             makeRegistry(uploader),
-            makeStreamingDownloader(),
-            makeMediaService(),
+            makeSource(makeMediaService()),
             testLogger,
             testConfig,
         );
@@ -286,8 +326,7 @@ describe("GeminiMediaNormalizer.normalize", () => {
             repo,
             makeMessageRepo(),
             makeRegistry(makeUploader()),
-            makeStreamingDownloader(),
-            makeMediaService(),
+            makeSource(makeMediaService()),
             testLogger,
             testConfig,
         );
@@ -311,8 +350,7 @@ describe("GeminiMediaNormalizer.normalize", () => {
             makeRepo([{ file, upload }]),
             makeMessageRepo(),
             makeRegistry(uploader),
-            makeStreamingDownloader(),
-            makeMediaService(),
+            makeSource(makeMediaService()),
             testLogger,
             testConfig,
         );
@@ -329,8 +367,7 @@ describe("GeminiMediaNormalizer.normalize", () => {
             makeRepo([{ file, upload }]),
             makeMessageRepo(),
             makeRegistry(makeUploader()),
-            makeStreamingDownloader(),
-            makeMediaService(null),
+            makeSource(makeMediaService(null)),
             testLogger,
             testConfig,
         );
@@ -359,8 +396,7 @@ describe("GeminiMediaNormalizer.normalize", () => {
             repo,
             makeMessageRepo(),
             makeRegistry(uploader),
-            makeStreamingDownloader(),
-            makeMediaService(),
+            makeSource(makeMediaService()),
             testLogger,
             testConfig,
         );
@@ -391,8 +427,7 @@ describe("GeminiMediaNormalizer.normalize", () => {
             repo,
             makeMessageRepo(),
             makeRegistry(uploader),
-            makeStreamingDownloader(),
-            makeMediaService(),
+            makeSource(makeMediaService()),
             testLogger,
             testConfig,
         );
@@ -414,8 +449,7 @@ describe("GeminiMediaNormalizer.normalize", () => {
             repo,
             makeMessageRepo(null), // no message row → can't satisfy FK, skip anchor insert
             makeRegistry(uploader),
-            makeStreamingDownloader(),
-            makeMediaService(),
+            makeSource(makeMediaService()),
             testLogger,
             testConfig,
         );
@@ -434,8 +468,7 @@ describe("GeminiMediaNormalizer.normalize", () => {
             makeRepo(),
             makeMessageRepo(),
             makeRegistry(makeUploader()),
-            makeStreamingDownloader(),
-            makeMediaService(),
+            makeSource(makeMediaService()),
             testLogger,
             testConfig,
         );
@@ -451,8 +484,7 @@ describe("GeminiMediaNormalizer.normalize", () => {
             makeRepo(),
             makeMessageRepo(),
             makeRegistry(makeUploader()),
-            makeStreamingDownloader(),
-            makeMediaService(),
+            makeSource(makeMediaService()),
             testLogger,
             testConfig,
         );
@@ -471,8 +503,7 @@ describe("GeminiMediaNormalizer.normalize", () => {
             makeRepo([{ file, upload }]),
             makeMessageRepo(),
             makeRegistry(makeUploader()),
-            makeStreamingDownloader(),
-            makeMediaService(),
+            makeSource(makeMediaService()),
             testLogger,
             testConfig,
         );
@@ -490,8 +521,7 @@ describe("GeminiMediaNormalizer.normalize", () => {
             makeRepo(),
             makeMessageRepo(),
             makeRegistry(makeUploader()),
-            makeStreamingDownloader(),
-            makeMediaService(),
+            makeSource(makeMediaService()),
             testLogger,
             testConfig,
         );
@@ -515,8 +545,7 @@ describe("GeminiMediaNormalizer — locating media from the anchor's token URL",
             makeRepo([{ file, upload }]),
             makeMessageRepo(),
             makeRegistry(makeUploader(GEMINI_URL_NEW)),
-            makeStreamingDownloader(),
-            mediaService,
+            makeSource(mediaService),
             testLogger,
             testConfig,
         );
@@ -562,8 +591,7 @@ describe("GeminiMediaNormalizer — locating media from the anchor's token URL",
             repo,
             makeMessageRepo(),
             makeRegistry(makeUploader(GEMINI_URL_NEW)),
-            makeStreamingDownloader(),
-            mediaService,
+            makeSource(mediaService),
             testLogger,
             testConfig,
         );
@@ -607,5 +635,103 @@ describe("GeminiMediaNormalizer — locating media from the anchor's token URL",
         expect(mediaService.fetchAttachment).not.toHaveBeenCalled();
         expect(mediaService.fetchEmbedMedia).not.toHaveBeenCalled();
         expect(blocks).toHaveLength(0);
+    });
+});
+
+describe("GeminiMediaNormalizer.normalize — external file URLs", () => {
+    function makeNormalizer(repo: IGeminiFileRepository, source: IMediaSource, uploader = makeUploader()) {
+        return new GeminiMediaNormalizer(
+            repo,
+            makeMessageRepo(),
+            makeRegistry(uploader),
+            source,
+            testLogger,
+            testConfig,
+        );
+    }
+
+    test("uploads a new external file and anchors it by URL, owned by no message", async () => {
+        const repo = makeRepo();
+        const source = makeSource(makeMediaService());
+        const uploader = makeUploader();
+
+        const result = await makeNormalizer(repo, source, uploader).normalize([makeExternalFileMsg()], TEST_API_KEY_ID);
+
+        expect(source.openExternal).toHaveBeenCalledWith(EXTERNAL_URL, "application/pdf");
+        expect(uploader.uploadStream).toHaveBeenCalledWith(
+            externalMedia.stream,
+            expect.stringMatching(/^files\//),
+            "application/pdf",
+            "report.pdf",
+            2048,
+        );
+        expect(repo.saveFiles).toHaveBeenCalledWith([{ originalGeminiUrl: EXTERNAL_URL, messageId: null }]);
+        expect(repo.upsertUpload).toHaveBeenCalledTimes(1);
+
+        const blocks = (result[0] as HumanMessage).content as Record<string, unknown>[];
+        expect(blocks[0]).toMatchObject({ type: "text" });
+        expect(blocks[1]).toEqual({ type: "media", mimeType: "application/pdf", fileUri: GEMINI_URL_NEW });
+    });
+
+    test("reuses a fresh upload without fetching the file again", async () => {
+        const file = makeFile({
+            originalGeminiUrl: EXTERNAL_URL,
+            messageId: null,
+            discordMessageId: null,
+            discordChannelId: null,
+        });
+        const source = makeSource(makeMediaService());
+
+        const result = await makeNormalizer(makeRepo([{ file, upload: makeUpload() }]), source).normalize(
+            [makeExternalFileMsg()],
+            TEST_API_KEY_ID,
+        );
+
+        expect(source.openExternal).not.toHaveBeenCalled();
+        const blocks = (result[0] as HumanMessage).content as Record<string, unknown>[];
+        expect(blocks[1]?.fileUri).toBe(GEMINI_URL);
+    });
+
+    test("re-fetches the file from its URL once the upload is stale", async () => {
+        const file = makeFile({
+            originalGeminiUrl: EXTERNAL_URL,
+            messageId: null,
+            discordMessageId: null,
+            discordChannelId: null,
+        });
+        const repo = makeRepo([{ file, upload: makeUpload({ uploadedAt: hoursAgo(47.5) }) }]);
+        const source = makeSource(makeMediaService());
+
+        const result = await makeNormalizer(repo, source).normalize([makeExternalFileMsg()], TEST_API_KEY_ID);
+
+        expect(source.openExternal).toHaveBeenCalledWith(EXTERNAL_URL, "application/pdf");
+        expect(repo.saveFiles).not.toHaveBeenCalled();
+        expect(repo.upsertUpload).toHaveBeenCalledTimes(1);
+        const blocks = (result[0] as HumanMessage).content as Record<string, unknown>[];
+        expect(blocks[1]?.fileUri).toBe(GEMINI_URL_NEW);
+    });
+
+    test("replaces a file that is gone with a notice naming its URL", async () => {
+        const source = makeSource(makeMediaService(), null);
+
+        const result = await makeNormalizer(makeRepo(), source).normalize([makeExternalFileMsg()], TEST_API_KEY_ID);
+
+        const blocks = (result[0] as HumanMessage).content as Record<string, unknown>[];
+        expect(blocks).toHaveLength(2);
+        expect(blocks[1]?.type).toBe("text");
+        expect(blocks[1]?.text).toContain(EXTERNAL_URL);
+        expect(blocks[1]?.text).toContain("no longer available");
+    });
+
+    test("ignores web URLs on blocks that are not media blocks", async () => {
+        const source = makeSource(makeMediaService());
+        const messages = [
+            new HumanMessage({ content: [{ type: "image_url", image_url: EXTERNAL_URL, url: EXTERNAL_URL }] }),
+        ];
+
+        const result = await makeNormalizer(makeRepo(), source).normalize(messages, TEST_API_KEY_ID);
+
+        expect(result).toBe(messages);
+        expect(source.openExternal).not.toHaveBeenCalled();
     });
 });

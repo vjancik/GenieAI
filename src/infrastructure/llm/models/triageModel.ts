@@ -84,7 +84,7 @@ export function buildTriageSystemPrompt(searchMode: SearchMode, isSearchRequeste
         `Call at most one route tool (${routeTools.join(", ")}) to pick the agent that answers the request, ` +
         "which it does with the retrieved data. When you call no route tool, the general-purpose agent answers.\n" +
         "Rules:\n" +
-        `- If the message contains web page URLs to analyze: call ${ToolName.GET_WEBSITE}\n` +
+        `- If the message contains URLs of web pages or files (PDF, image, audio) to analyze: call ${ToolName.GET_WEBSITE}\n` +
         `- If the message contains video URLs (YouTube, social media, etc.): call ${ToolName.GET_VIDEO_CAPTIONS}\n` +
         "- DO NOT call the previous 2 tools for the same URLs more than once\n" +
         "- You should only use URLs present in the user's message — do not add new URLs on your own\n" +

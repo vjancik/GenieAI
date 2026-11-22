@@ -3,7 +3,7 @@ import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/
 import { Command, END, MessagesValue, ReducedValue, START, StateGraph, StateSchema } from "@langchain/langgraph";
 import * as Sentry from "@sentry/bun";
 import { z } from "zod";
-import { type AppConfig, SearchMode } from "../../../application/config/AppConfig.ts";
+import { type AppConfig, AttachmentMode, SearchMode } from "../../../application/config/AppConfig.ts";
 import { dbMessagesToLangchain, extractContent } from "../../../application/helpers/langchainMessageTransformers.ts";
 import type { IAgentOrchestrator } from "../../../application/ports/IAgentOrchestrator.ts";
 import type { IModelProvider } from "../../../application/ports/IModelProvider.ts";
@@ -306,6 +306,8 @@ export class AgentOrchestrator implements IAgentOrchestrator {
     private readonly nodes: NodeSettings;
     private readonly searchMode: SearchMode;
     private readonly basePrompt: string;
+    /** Whether files found by the website tool are embedded for the model, see {@link flattenToolExchanges}. */
+    private readonly embedExternalFiles: boolean;
     /** The tools the tools node can execute, by the name triage calls them with. */
     private readonly tools: ReadonlyMap<string, IModelTool<Record<string, unknown>>>;
     private readonly toolNames: ReadonlySet<string>;
@@ -336,6 +338,8 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         this.nodes = config.file.agent.nodes;
         this.searchMode = config.file.agent.searchMode;
         this.basePrompt = config.file.prompts.basePrompt;
+        // Only upload mode resolves the media blocks such files are embedded as
+        this.embedExternalFiles = config.file.agent.uploadAttachmentMode === AttachmentMode.upload;
 
         if (this.searchMode === SearchMode.tavily && !tavilyTool) {
             throw new AppError(
@@ -687,7 +691,9 @@ export class AgentOrchestrator implements IAgentOrchestrator {
         return Sentry.startSpan(
             { name: spec.spanName, op: `agent.node.${spec.node}`, attributes: spec.attributes },
             async (span) => {
-                const history = flattenToolExchanges(state.messages, this.logger);
+                const history = flattenToolExchanges(state.messages, this.logger, {
+                    embedExternalFiles: this.embedExternalFiles,
+                });
                 span.setAttribute("agent.flattened_tool_exchanges", history.exchangeCount);
                 this.logger.debug(
                     { node: spec.node, ...spec.attributes, flattenedToolExchanges: history.exchangeCount },

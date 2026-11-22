@@ -175,21 +175,22 @@ export const geminiApiKeys = pgTable("gemini_api_keys", {
 export const geminiFiles = pgTable("gemini_files", {
     id: uuid("id").primaryKey().default(sql`uuidv7()`),
     /**
-     * The `discord://` token URL of the media item (see `discordTokenUrl.ts`). Immutable —
-     * stored in LangChain content blocks and used as the stable lookup key, and parsed
-     * to locate the media on Discord when it has to be re-uploaded.
+     * The media token URL of the item (see `mediaTokenUrl.ts`): a `discord://` token, or the
+     * `http(s)://` URL of a file fetched from the web. Immutable — stored in LangChain content
+     * blocks and used as the stable lookup key, and all that is needed to fetch the media
+     * again when it has to be re-uploaded.
      * The column name predates token URLs, when it held the first Gemini upload URI.
      */
     originalGeminiUrl: text("original_gemini_url").notNull().unique(),
     /**
      * UUID primary key of the messages row that originally created this upload.
      * FK → messages(id); ON DELETE CASCADE removes file records when the originating message is deleted.
+     * Null for a file fetched from the web, whose anchor is keyed by its URL alone and shared
+     * by every conversation that fetches it.
      * `discordMessageId` and `discordChannelId` are NOT stored here — they are joined from
      * the messages row at query time to avoid duplication.
      */
-    messageId: uuid("message_id")
-        .notNull()
-        .references(() => messages.id, { onDelete: "cascade" }),
+    messageId: uuid("message_id").references(() => messages.id, { onDelete: "cascade" }),
 });
 
 /**

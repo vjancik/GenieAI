@@ -1,5 +1,5 @@
 import { tool } from "@langchain/core/tools";
-import { Impit } from "impit";
+import type { Impit } from "impit";
 import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
 import { z } from "zod";
@@ -9,23 +9,11 @@ import { ToolName } from "../../../application/types/ToolName.ts";
 import type { WebFetchFailure } from "../../../domain/errors/AppError.ts";
 import { ToolError, WebFetchError } from "../../../domain/errors/AppError.ts";
 import type { BrowserPageFetcher } from "../../browser/BrowserPageFetcher.ts";
+import { declaredByteLength, resolveFileMimeType, resolveFileName } from "../../http/externalFile.ts";
+import { createImpitClient, IMPIT_PROFILES, type ImpitProfile } from "../../http/impitClient.ts";
 import { analyzePage, describeProblem } from "../../http/pageAnalysis.ts";
 
-/**
- * Content-negotiation headers.
- *
- * Impit's browser preset already supplies a complete, self-consistent request
- * signature (TLS/JA3 handshake, HTTP/2 settings, and the matching `user-agent`,
- * `accept` and `sec-*` headers). Overriding those made no measurable difference
- * to whether a site served content, so only headers that change *what* the
- * server returns are set here.
- */
-const CONTENT_HEADERS: Record<string, string> = {
-    "accept-language": "en-US,en;q=0.9",
-};
-
 const REQUEST_TIMEOUT_MS = 10_000;
-const MAX_REDIRECTS = 20;
 
 /**
  * Elements that never carry article body text: scripts and styles, embedded
@@ -112,39 +100,6 @@ function isTextualMimeType(mimeType: string): boolean {
     return /^application\/[\w.-]+\+(?:json|xml)$/.test(mimeType);
 }
 
-/**
- * Minimal in-memory cookie jar matching Impit's `cookieJar` contract.
- *
- * Cookies are grouped by registrable domain (approximated as the last two
- * labels of the host) so a redirect chain that hops between subdomains — as
- * consent interstitials do, e.g. `www.yahoo.com` → `guce.yahoo.com` →
- * `consent.yahoo.com` — carries its session forward.
- *
- * A jar is created per fetch, so cookies never leak between unrelated requests.
- */
-function createCookieJar() {
-    const byDomain = new Map<string, Map<string, string>>();
-    const registrableDomain = (url: string) => new URL(url).hostname.split(".").slice(-2).join(".");
-
-    return {
-        setCookie(cookie: string, url: string): void {
-            // Only the leading `name=value` pair matters; attributes are ignored
-            const pair = cookie.split(";")[0];
-            const separator = pair?.indexOf("=") ?? -1;
-            if (!pair || separator < 1) return;
-            const domain = registrableDomain(url);
-            const cookies = byDomain.get(domain) ?? new Map<string, string>();
-            cookies.set(pair.slice(0, separator).trim(), pair.slice(separator + 1).trim());
-            byDomain.set(domain, cookies);
-        },
-        getCookieString(url: string): string {
-            const cookies = byDomain.get(registrableDomain(url));
-            if (!cookies) return "";
-            return [...cookies].map(([name, value]) => `${name}=${value}`).join("; ");
-        },
-    };
-}
-
 /** Marks a response as a GDPR consent interstitial rather than the requested page. */
 const CONSENT_FORM_PATTERN = /consent-form|collectConsent/i;
 
@@ -199,14 +154,22 @@ async function acceptConsentForm(impit: Impit, url: string, html: string): Promi
 }
 
 /**
- * Browser fingerprints to try, in order.
- *
- * Firefox is preferred: some sites (NCBI among them) reject Impit's Chrome
- * fingerprint outright. Chrome is the fallback because the two negotiate TLS
- * differently — archive.today's servers pick a cipher suite that the Firefox
- * profile's TLS stack rejects as invalid, while the Chrome profile connects.
+ * A file found at a fetched URL, described by its response headers alone. The file itself is
+ * not downloaded by the tool: the URL is all that is needed to load it into the conversation.
  */
-const IMPIT_PROFILES = ["firefox", "chrome"] as const;
+export type FetchedFile = {
+    /** A type the model reads as a file: PDF, image, audio or video. */
+    mimeType: string;
+    name: string;
+    /** Size in bytes, or null when the server did not declare one. */
+    sizeBytes: number | null;
+};
+
+/** Enables the tool to report files found at a URL, rather than rejecting them. */
+export type FileLoadingOptions = {
+    /** Files declared larger than this are reported as a failure. */
+    maxBytes: number;
+};
 
 /**
  * Result of one fetch attempt.
@@ -214,21 +177,53 @@ const IMPIT_PROFILES = ["firefox", "chrome"] as const;
  * An error status is reported rather than thrown so the body travels with it —
  * bot walls answer with a 4xx whose body is a challenge page, which the caller
  * needs in order to distinguish a block from an ordinary HTTP failure.
+ *
+ * `file` is set, and `body` empty, when the URL served a file rather than text.
  */
-type FetchOutcome = { body: string; contentType: string; status: number; ok: boolean };
+type FetchOutcome = { body: string; contentType: string; status: number; ok: boolean; file?: FetchedFile };
+
+/** Renders a byte count in megabytes for an error message. */
+function toMegabytes(bytes: number): string {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Describes the file a non-textual response carries.
+ *
+ * @param url - The final URL of the response, after redirects
+ * @throws ToolError when the response is of a type the model cannot read as a file
+ * @throws WebFetchError (`too-large`) when the file is declared larger than the limit
+ */
+function describeFile(headers: Headers, mimeType: string, url: string, fileLoading: FileLoadingOptions): FetchedFile {
+    const fileMimeType = resolveFileMimeType(mimeType === "" ? null : mimeType, url);
+    if (fileMimeType === null) {
+        throw new ToolError(
+            `Unsupported content type "${mimeType}" — only textual responses, PDFs, images, audio and video are supported`,
+        );
+    }
+
+    const sizeBytes = declaredByteLength(headers);
+    if (sizeBytes !== null && sizeBytes > fileLoading.maxBytes) {
+        throw new WebFetchError(
+            "too-large",
+            `${url}: the file is ${toMegabytes(sizeBytes)}, larger than the ${toMegabytes(fileLoading.maxBytes)} limit`,
+        );
+    }
+
+    return { mimeType: fileMimeType, name: resolveFileName(headers, url), sizeBytes };
+}
 
 /** Performs one fetch attempt with a specific browser fingerprint. */
-async function fetchWithProfile(url: string, browser: (typeof IMPIT_PROFILES)[number]): Promise<FetchOutcome> {
-    const impit = new Impit({
-        browser,
-        followRedirects: true,
-        maxRedirects: MAX_REDIRECTS,
-        timeout: REQUEST_TIMEOUT_MS,
-        cookieJar: createCookieJar(),
-        headers: CONTENT_HEADERS,
-    });
+async function fetchWithProfile(
+    url: string,
+    browser: ImpitProfile,
+    fileLoading?: FileLoadingOptions,
+): Promise<FetchOutcome> {
+    const impit = createImpitClient(browser, REQUEST_TIMEOUT_MS);
 
-    const res = await impit.fetch(url);
+    // Lets the request be dropped once the headers show a file, whose body is not wanted here
+    const abortController = new AbortController();
+    const res = await impit.fetch(url, { signal: abortController.signal });
     const mimeType = parseMimeType(res.headers.get("content-type")) ?? "";
 
     if (!res.ok) {
@@ -240,7 +235,13 @@ async function fetchWithProfile(url: string, browser: (typeof IMPIT_PROFILES)[nu
     }
 
     if (!isTextualMimeType(mimeType)) {
-        throw new ToolError(`Unsupported content type "${mimeType}" — only textual responses are supported`);
+        // Either way the body goes unread, so stop the transfer rather than let it run
+        abortController.abort();
+        if (fileLoading === undefined) {
+            throw new ToolError(`Unsupported content type "${mimeType}" — only textual responses are supported`);
+        }
+        const file = describeFile(res.headers, mimeType, res.url || url, fileLoading);
+        return { body: "", contentType: file.mimeType, status: res.status, ok: true, file };
     }
 
     const body = await res.text();
@@ -255,8 +256,11 @@ async function fetchWithProfile(url: string, browser: (typeof IMPIT_PROFILES)[nu
 
 /**
  * Fetches a URL and returns its body as text, enforcing that the Content-Type
- * is textual (see {@link isTextualMimeType}). Binary responses (images,
- * archives, etc.) are rejected with a ToolError.
+ * is textual (see {@link isTextualMimeType}).
+ *
+ * A binary response is rejected with a ToolError, unless `fileLoading` is given and the
+ * response is a file the model can read (PDF, image, audio, video): the outcome then
+ * describes that file instead of carrying a body.
  *
  * Requests go through Impit rather than the platform `fetch`. Many publishers
  * reject requests by TLS/HTTP2 fingerprint regardless of how browser-like the
@@ -270,12 +274,12 @@ async function fetchWithProfile(url: string, browser: (typeof IMPIT_PROFILES)[nu
  * GDPR consent interstitials encountered along the way are accepted
  * automatically (see {@link acceptConsentForm}).
  */
-export async function fetchTextBody(url: string): Promise<FetchOutcome> {
+async function fetchTextBody(url: string, fileLoading?: FileLoadingOptions): Promise<FetchOutcome> {
     let lastTransportError: unknown;
 
     for (const profile of IMPIT_PROFILES) {
         try {
-            return await fetchWithProfile(url, profile);
+            return await fetchWithProfile(url, profile, fileLoading);
         } catch (err) {
             // ToolError means the server answered and we rejected the response;
             // only connection-level failures are worth another fingerprint.
@@ -321,12 +325,17 @@ export function bodyToContent(body: string, contentType: string): string {
     return body;
 }
 
-/** Successful result for a single URL fetch. */
+/** Successful result for a single URL that served a web page or other text. */
 export type WebsiteResult = { url: string; pageContents: string };
+/**
+ * Successful result for a single URL that served a file. Carries no content: the file is
+ * loaded from the URL when the conversation is sent to the model.
+ */
+export type WebsiteFileResult = { url: string; file: FetchedFile };
 /** Error result for a single URL fetch, with a machine-readable reason. */
 export type WebsiteError = { url: string; error: string; reason: WebFetchFailure };
 /** Union result type returned per URL by the website tool. */
-export type WebsiteResultEntry = WebsiteResult | WebsiteError;
+export type WebsiteResultEntry = WebsiteResult | WebsiteFileResult | WebsiteError;
 
 /**
  * Handles a response that arrived with an error status.
@@ -370,9 +379,18 @@ async function handleErrorResponse(
  * Escalation requires positive evidence that rendering would change the outcome
  * (see {@link analyzePage}); thin content alone is not enough, since a short but
  * complete page is indistinguishable from an unrendered shell.
+ *
+ * @returns The page's content as text, or a description of the file the URL served
  */
-async function retrievePage(url: string, logger: Logger, browserFetcher?: BrowserPageFetcher): Promise<string> {
-    const { body, contentType, status, ok } = await fetchTextBody(url);
+async function retrievePage(
+    url: string,
+    logger: Logger,
+    browserFetcher?: BrowserPageFetcher,
+    fileLoading?: FileLoadingOptions,
+): Promise<string | FetchedFile> {
+    const { body, contentType, status, ok, file } = await fetchTextBody(url, fileLoading);
+
+    if (file !== undefined) return file;
 
     if (!ok) {
         return handleErrorResponse(url, body, status, logger, browserFetcher);
@@ -455,8 +473,9 @@ function toWebsiteError(url: string, err: unknown): WebsiteError {
 /**
  * Creates a LangChain tool that fetches one or more URLs and returns their
  * content as a structured array, one entry per URL. HTML pages are converted
- * to Markdown; other textual types are returned verbatim. Non-textual content
- * types are rejected. Individual URL failures are co-located with the URL in an
+ * to Markdown; other textual types are returned verbatim. Files the model can read
+ * (PDF, image, audio, video) are reported by their metadata when `fileLoading` is given;
+ * all other non-textual content types are rejected. Individual URL failures are co-located with the URL in an
  * error entry carrying a reason, so the model can tell the user whether a page
  * was blocked, paywalled, or simply unreachable.
  *
@@ -465,8 +484,14 @@ function toWebsiteError(url: string, err: unknown): WebsiteError {
  * @param logger - Injectable logger for testability
  * @param browserFetcher - Optional browser fallback for client-rendered pages and
  *   JS bot challenges. Without it, such pages are reported as failures.
+ * @param fileLoading - Enables reporting files found at a URL. Without it, files are
+ *   rejected as unsupported content, which suits setups that cannot load them.
  */
-export function createGetWebsiteTool(logger: Logger, browserFetcher?: BrowserPageFetcher) {
+export function createGetWebsiteTool(
+    logger: Logger,
+    browserFetcher?: BrowserPageFetcher,
+    fileLoading?: FileLoadingOptions,
+) {
     return tool(
         async ({ urls }): Promise<WebsiteResultEntry[]> => {
             // Deduplicate URLs to avoid redundant fetches
@@ -474,9 +499,9 @@ export function createGetWebsiteTool(logger: Logger, browserFetcher?: BrowserPag
             logger.debug({ urls: unique }, "Fetching websites");
 
             const results = await Promise.allSettled(
-                unique.map(async (url): Promise<WebsiteResult> => {
-                    const pageContents = await retrievePage(url, logger, browserFetcher);
-                    return { url, pageContents };
+                unique.map(async (url): Promise<WebsiteResult | WebsiteFileResult> => {
+                    const retrieved = await retrievePage(url, logger, browserFetcher, fileLoading);
+                    return typeof retrieved === "string" ? { url, pageContents: retrieved } : { url, file: retrieved };
                 }),
             );
 
@@ -493,8 +518,13 @@ export function createGetWebsiteTool(logger: Logger, browserFetcher?: BrowserPag
         {
             name: ToolName.GET_WEBSITE,
             description:
-                "Fetch one or more web page URLs and return their full content as Markdown. " +
-                "Use this when the user provides URLs to web pages they want analyzed, summarized, or referenced. " +
+                "Fetch one or more URLs. Web pages are returned with their full content as Markdown" +
+                (fileLoading === undefined
+                    ? ". "
+                    : "; files (PDF, image, audio, video) are loaded for the answering agent to read. ") +
+                "Use this when the user provides URLs to web pages" +
+                (fileLoading === undefined ? "" : " or files") +
+                " they want analyzed, summarized, or referenced. " +
                 "Failed entries include a reason (e.g. blocked, paywalled) that should be relayed to the user.",
             schema: z.object({
                 urls: z.array(z.url()).min(1).describe("List of URLs to fetch"),
