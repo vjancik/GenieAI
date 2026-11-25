@@ -44,6 +44,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
                 retries: 3,
                 enableInDMs: false,
                 rateLimits: [],
+                tokenRateLimits: { cachedTokensWeight: 0.1, outputTokensWeight: 5, windows: [] },
             },
             geminiModels: { includeThoughts: false },
             agent: {

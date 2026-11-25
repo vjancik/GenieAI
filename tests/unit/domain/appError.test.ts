@@ -13,6 +13,7 @@ import {
     ModelOverloadedError,
     ModelPromptBlockedError,
     ModelTimeoutError,
+    TokenRateLimitExceededError,
 } from "../../../src/domain/errors/AppError.ts";
 import { BlockReason } from "../../../src/domain/value-objects/BlockReason.ts";
 
@@ -173,5 +174,24 @@ describe("getDeclaredRetryable", () => {
     it("ignores a retryable property that is not a boolean", () => {
         const err = Object.assign(new AllFreeKeysExhaustedError(), { retryable: "no" });
         expect(getDeclaredRetryable(err)).toBeNull();
+    });
+});
+
+describe("TokenRateLimitExceededError", () => {
+    const message = (ms: number) => new TokenRateLimitExceededError(ms).displayMessage;
+
+    it("is declared non-retryable and carries a display message", () => {
+        const err = new TokenRateLimitExceededError(1_000);
+        expect(getDeclaredRetryable(err)).toBe(false);
+        expect(findDisplayableError(err)).toBe(err);
+    });
+
+    it("rounds the wait up to whole seconds, minutes, or hours and minutes", () => {
+        expect(message(1)).toContain("about 1 second.");
+        expect(message(45_200)).toContain("about 46 seconds.");
+        expect(message(60_000)).toContain("about 1 minute.");
+        expect(message(61_000)).toContain("about 2 minutes.");
+        expect(message(3_600_000)).toContain("about 1 hour.");
+        expect(message(3 * 3_600_000 + 4 * 60_000 + 1)).toContain("about 3 hours and 5 minutes.");
     });
 });

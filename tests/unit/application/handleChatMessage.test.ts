@@ -1,5 +1,5 @@
 import { describe, expect, it, mock, spyOn } from "bun:test";
-import type { BaseMessage } from "@langchain/core/messages";
+import { AIMessage, type BaseMessage } from "@langchain/core/messages";
 import pino from "pino";
 import {
     FALLBACK_FOOTER,
@@ -12,7 +12,11 @@ import type {
     IChatClientMessageAttachment,
 } from "../../../src/application/ports/chat/IChatClient.ts";
 import type { IAgentOrchestrator } from "../../../src/application/ports/IAgentOrchestrator.ts";
-import type { IRateLimiter, RateLimitResult } from "../../../src/application/ports/IRateLimiter.ts";
+import type {
+    IRateLimiter,
+    IWeightedRateLimiter,
+    RateLimitResult,
+} from "../../../src/application/ports/IRateLimiter.ts";
 import type { StatusMessageUpdater } from "../../../src/application/services/StatusMessageUpdater.ts";
 import { AgentStatusType } from "../../../src/application/types/AgentStatus.ts";
 import type { Logger } from "../../../src/application/types/Logger.ts";
@@ -21,6 +25,7 @@ import {
     ModelOverloadedError,
     ModelPromptBlockedError,
     ModelTimeoutError,
+    TokenRateLimitExceededError,
 } from "../../../src/domain/errors/AppError.ts";
 import type { IMessagePageRepository } from "../../../src/domain/ports/IMessagePageRepository.ts";
 import type { IMessageRepository } from "../../../src/domain/ports/IMessageRepository.ts";
@@ -100,6 +105,7 @@ function makeOrchestrator(
         throws: boolean;
         /** Error thrown when `throws` is set; defaults to a generic Error. */
         error: unknown;
+        newMessages: BaseMessage[];
     }> = {},
 ): IAgentOrchestrator {
     return {
@@ -109,7 +115,7 @@ function makeOrchestrator(
             onStatusUpdate?.({ type: AgentStatusType.SEARCHING });
             return {
                 content: overrides.response ?? "AI response",
-                newMessages: [] as BaseMessage[],
+                newMessages: overrides.newMessages ?? ([] as BaseMessage[]),
                 isRetryable: overrides.isRetryable ?? false,
                 usedFallback: overrides.usedFallback ?? false,
                 usedRetryableFallback: overrides.usedRetryableFallback ?? false,
@@ -133,9 +139,17 @@ function makeRateLimiter(allowed = true): IRateLimiter {
     };
 }
 
+function makeTokenRateLimiter(allowed = true): IWeightedRateLimiter {
+    return {
+        check: mock((): RateLimitResult => (allowed ? { allowed: true } : { allowed: false, retryAfterMs: 90_000 })),
+        record: mock(() => {}),
+    };
+}
+
 function makeUseCase(
     overrides: {
         rateLimiter?: IRateLimiter;
+        tokenRateLimiter?: IWeightedRateLimiter;
         orchestrator?: IAgentOrchestrator;
         messageRepo?: IMessageRepository;
         messagePageRepo?: IMessagePageRepository;
@@ -156,6 +170,8 @@ function makeUseCase(
         overrides.messagePageRepo ?? makePageRepo(),
         overrides.retries ?? 0,
         overrides.rateLimiter ?? makeRateLimiter(),
+        overrides.tokenRateLimiter ?? makeTokenRateLimiter(),
+        { cachedTokensWeight: 0.1, outputTokensWeight: 5 },
     );
 }
 
@@ -688,5 +704,97 @@ describe("HandleChatMessageUseCase — empty responses", () => {
         const { reply } = await sendEmpty();
 
         expect(reply.buttons?.some((b) => b.label.startsWith("Retry"))).toBe(true);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Token rate limit — checked before the model call, charged after it
+// ---------------------------------------------------------------------------
+
+describe("HandleChatMessageUseCase — token rate limit", () => {
+    /** An answer carrying usage: 1000 input (400 cached) and 100 output tokens. */
+    function makeAnswerWithUsage(): AIMessage {
+        return new AIMessage({
+            content: "answer",
+            usage_metadata: {
+                input_tokens: 1000,
+                output_tokens: 100,
+                total_tokens: 1100,
+                input_token_details: { cache_read: 400 },
+            },
+        });
+    }
+
+    function makeThinkingAndUserMessage(authorId = "user-1") {
+        const thinkingMsg = makeMessage({ id: "thinking", authorId: BOT_USER_ID, isAuthorBot: true });
+        const msg = makeMessage({
+            id: "user-msg",
+            content: "!ai hello",
+            authorId,
+            reply: mock(async () => thinkingMsg),
+        });
+        return msg;
+    }
+
+    it("refuses with a non-retryable notice and skips the model when the requester is over the limit", async () => {
+        const orchestrator = makeOrchestrator();
+        const messageRepo = makeMessageRepo();
+        const tokenRateLimiter = makeTokenRateLimiter(false);
+        const useCase = makeUseCase({ orchestrator, messageRepo, tokenRateLimiter, retries: 1 });
+        const msg = makeThinkingAndUserMessage("user-tl");
+
+        await useCase.execute({ message: msg, shutdownPending: false });
+
+        expect(tokenRateLimiter.check).toHaveBeenCalledWith("user-tl");
+        expect(orchestrator.process).not.toHaveBeenCalled();
+        const reply = (msg.reply as ReturnType<typeof mock>).mock.calls.at(-1)?.[0] as {
+            content: string;
+            buttons?: { label: string }[];
+        };
+        expect(reply.content).toBe(new TokenRateLimitExceededError(90_000).displayMessage ?? "");
+        expect(reply.buttons?.some((b) => b.label.startsWith("Retry")) ?? false).toBe(false);
+        // The refused prompt is persisted so the conversation can still be continued by replying
+        expect(messageRepo.save).toHaveBeenCalledWith(expect.objectContaining({ role: "human" }));
+    });
+
+    it("charges the weighted usage of the final AI message to the message author", async () => {
+        const tokenRateLimiter = makeTokenRateLimiter();
+        const orchestrator = makeOrchestrator({ newMessages: [makeAnswerWithUsage()] });
+        const useCase = makeUseCase({ orchestrator, tokenRateLimiter });
+
+        await useCase.execute({ message: makeThinkingAndUserMessage("user-tl"), shutdownPending: false });
+
+        // 1000 - 400 + 400 * 0.1 + 100 * 5
+        expect(tokenRateLimiter.record).toHaveBeenCalledWith("user-tl", 1140);
+    });
+
+    it("charges the interaction author rather than the message author when one is given", async () => {
+        const tokenRateLimiter = makeTokenRateLimiter();
+        const orchestrator = makeOrchestrator({ newMessages: [makeAnswerWithUsage()] });
+        const useCase = makeUseCase({ orchestrator, tokenRateLimiter });
+
+        await useCase.invokeAgentAndReply({
+            message: makeThinkingAndUserMessage("target-author"),
+            userContent: "hello",
+            attachments: [],
+            intent: MessageIntent.SUMMARY,
+            interactionAuthorDiscordId: "invoker-1",
+            span: { setAttribute: () => {}, setAttributes: () => {} } as unknown as Parameters<
+                HandleChatMessageUseCase["invokeAgentAndReply"]
+            >[0]["span"],
+        });
+
+        expect(tokenRateLimiter.check).toHaveBeenCalledWith("invoker-1");
+        expect(tokenRateLimiter.record).toHaveBeenCalledWith("invoker-1", 1140);
+    });
+
+    it("charges nothing when the response carries no usage metadata", async () => {
+        const tokenRateLimiter = makeTokenRateLimiter();
+        const orchestrator = makeOrchestrator({ newMessages: [new AIMessage("answer")] });
+        const useCase = makeUseCase({ orchestrator, tokenRateLimiter });
+
+        await useCase.execute({ message: makeThinkingAndUserMessage(), shutdownPending: false });
+
+        expect(tokenRateLimiter.record).not.toHaveBeenCalled();
     });
 });

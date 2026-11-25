@@ -19,3 +19,25 @@ export interface IRateLimiter {
      */
     check(key: string): RateLimitResult;
 }
+
+/**
+ * Port for a per-key weighted rate limiter whose cost is only known after the guarded work runs
+ * (e.g. LLM tokens). Checking and recording are separate: a caller checks before the work and
+ * records its weight afterwards, so a single request may overshoot a window by its own weight.
+ */
+export interface IWeightedRateLimiter {
+    /**
+     * Returns whether `key` still has capacity in every window. Records nothing.
+     *
+     * @param key - Identifier for the caller (e.g. a chat user ID)
+     */
+    check(key: string): RateLimitResult;
+
+    /**
+     * Records `weight` units of usage for `key` at the current time.
+     *
+     * @param key - Identifier for the caller (e.g. a chat user ID)
+     * @param weight - Usage to charge; non-positive weights are ignored
+     */
+    record(key: string, weight: number): void;
+}

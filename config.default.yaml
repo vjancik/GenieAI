@@ -50,6 +50,25 @@ discord:
       limit: 3
     - windowMs: 60000      # 1 minute
       limit: 10
+  # Per-user sliding-window limits on model token usage. Disabled unless `windows` is set.
+  # Each finished request is charged, from the final model response's token usage:
+  #   input_tokens - cache_read + cache_read * cachedTokensWeight + output_tokens * outputTokensWeight
+  # (output_tokens include thinking tokens). A user is refused new requests once the charges recorded
+  # inside any window reach its limit; the request that crosses a limit is still served.
+  # Kept in memory, so the windows reset when the bot restarts.
+  tokenRateLimits:         # <optional>
+    # Multiplier for input tokens served from the context cache, 0 to 1 inclusive.
+    cachedTokensWeight: 0.1  # <optional>
+    # Multiplier for output tokens, 0 to 10 inclusive.
+    outputTokensWeight: 5    # <optional>
+    # Uncomment to enable, `limit` is in weighted tokens.
+#   windows:               # <optional>
+#     - windowMs: 300000     # 5 minutes
+#       limit: 500000
+#     - windowMs: 3600000    # 1 hour
+#       limit: 1000000
+#     - windowMs: 86400000   # 24 hours
+#       limit: 2000000
   # Discord user ID of a previous bot version treated as own-bot messages.
 # previousBotId: ""        # <optional>
 

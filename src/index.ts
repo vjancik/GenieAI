@@ -47,6 +47,7 @@ import { DiscordGateway } from "./infrastructure/discord/DiscordGateway.ts";
 import { DiscordMediaService } from "./infrastructure/discord/DiscordMediaService.ts";
 import { InteractionLock } from "./infrastructure/discord/InteractionLock.ts";
 import { RateLimiter } from "./infrastructure/discord/RateLimiter.ts";
+import { TokenRateLimiter } from "./infrastructure/discord/TokenRateLimiter.ts";
 import { HtmlToImageRenderer } from "./infrastructure/exporters/HtmlToImageRenderer.ts";
 import { MarkdownToHtmlRenderer } from "./infrastructure/exporters/MarkdownToHtmlRenderer.ts";
 import { ExternalUrlGuard } from "./infrastructure/http/ExternalUrlGuard.ts";
@@ -293,6 +294,7 @@ const statusUpdater = new StatusMessageUpdater(logger.child({ module: "statusUpd
 const discordClientBot = new DiscordClientBot(discordClient.client);
 // One limiter shared by chat messages and the Summarize command so both draw on the same per-user budget
 const messageRateLimiter = new RateLimiter(config.file.discord.rateLimits);
+const { windows: tokenRateLimitWindows, ...tokenUsageWeights } = config.file.discord.tokenRateLimits;
 const handleChatMessageUseCase = new HandleChatMessageUseCase(
     agentOrchestrator,
     messageRepository,
@@ -303,6 +305,8 @@ const handleChatMessageUseCase = new HandleChatMessageUseCase(
     messagePageRepository,
     config.file.discord.retries,
     messageRateLimiter,
+    new TokenRateLimiter(tokenRateLimitWindows),
+    tokenUsageWeights,
     discordChatMessageService,
     config.file.discord.enableInDMs,
     isInlineMode ? inlineMediaNormalizer : undefined,

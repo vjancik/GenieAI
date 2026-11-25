@@ -229,6 +229,40 @@ export class InputTokenBudgetExceededError extends AppError {
     }
 }
 
+/**
+ * Formats a positive duration as a rounded-up, human-readable English phrase, e.g. "45 seconds",
+ * "12 minutes" or "3 hours and 5 minutes". Rounds up so the user is never told to come back too early.
+ */
+function formatWaitDuration(ms: number): string {
+    const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
+    const seconds = Math.max(1, Math.ceil(ms / 1000));
+    if (seconds < 60) return plural(seconds, "second");
+    const minutes = Math.ceil(seconds / 60);
+    if (minutes < 60) return plural(minutes, "minute");
+    const hours = Math.floor(minutes / 60);
+    const restMinutes = minutes % 60;
+    return restMinutes === 0 ? plural(hours, "hour") : `${plural(hours, "hour")} and ${plural(restMinutes, "minute")}`;
+}
+
+/**
+ * Thrown before a model call when the requesting user has used up their token allowance in one
+ * of the configured `discord.tokenRateLimits` windows. Not retryable: it's an abuse-prevention
+ * limit, so the user re-sends manually once the window frees up. Replying to the notice is fine.
+ */
+export class TokenRateLimitExceededError extends AppError {
+    /** Declared for {@link getDeclaredRetryable}, overriding the default that failures are retryable. */
+    readonly retryable = false;
+
+    constructor(public readonly retryAfterMs: number) {
+        super(
+            "TOKEN_RATE_LIMIT_EXCEEDED",
+            `Token rate limit exceeded, retry after ${retryAfterMs} ms`,
+            undefined,
+            `You've used up your token allowance for now. You can send new requests again in about ${formatWaitDuration(retryAfterMs)}.`,
+        );
+    }
+}
+
 /** Thrown when an LLM produces an invalid or unexpected response (e.g. tool calls from a user-facing model). */
 export class LlmError extends AppError {
     constructor(message: string, cause?: unknown) {

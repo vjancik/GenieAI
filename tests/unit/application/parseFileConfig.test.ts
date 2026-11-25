@@ -77,6 +77,47 @@ describe("parseFileConfig", () => {
         expect(parseFileConfig(`${VALID_YAML}\ndiscord:\n  rateLimits: []\n`).discord.rateLimits).toEqual([]);
     });
 
+    it("disables token rate limiting by default with the default weights", () => {
+        expect(parseFileConfig(VALID_YAML).discord.tokenRateLimits).toEqual({
+            cachedTokensWeight: 0.1,
+            outputTokensWeight: 5,
+            windows: [],
+        });
+    });
+
+    it("accepts token rate limit windows and weights", () => {
+        const config = parseFileConfig(
+            `${VALID_YAML}\ndiscord:\n  tokenRateLimits:\n    outputTokensWeight: 10\n    windows:\n      - windowMs: 300000\n        limit: 500000\n`,
+        );
+        expect(config.discord.tokenRateLimits).toEqual({
+            cachedTokensWeight: 0.1,
+            outputTokensWeight: 10,
+            windows: [{ windowMs: 300_000, limit: 500_000 }],
+        });
+    });
+
+    it("throws ConfigError for token weights outside their inclusive ranges", () => {
+        expect(() =>
+            parseFileConfig(`${VALID_YAML}\ndiscord:\n  tokenRateLimits:\n    cachedTokensWeight: 1.5\n`),
+        ).toThrow(ConfigError);
+        expect(() =>
+            parseFileConfig(`${VALID_YAML}\ndiscord:\n  tokenRateLimits:\n    outputTokensWeight: 10.5\n`),
+        ).toThrow(ConfigError);
+        expect(() =>
+            parseFileConfig(`${VALID_YAML}\ndiscord:\n  tokenRateLimits:\n    cachedTokensWeight: -0.1\n`),
+        ).toThrow(ConfigError);
+    });
+
+    it("parses the commented token windows in config.default.yaml once uncommented", async () => {
+        const raw = await Bun.file("./config.default.yaml").text();
+        const uncommented = raw.replace(/^#( {3}windows:| {5}- windowMs:| {7}limit:)/gm, " $1");
+        expect(parseFileConfig(uncommented).discord.tokenRateLimits.windows).toEqual([
+            { windowMs: 300_000, limit: 500_000 },
+            { windowMs: 3_600_000, limit: 1_000_000 },
+            { windowMs: 86_400_000, limit: 2_000_000 },
+        ]);
+    });
+
     it("throws ConfigError for a non-positive rate limit", () => {
         expect(() =>
             parseFileConfig(`${VALID_YAML}\ndiscord:\n  rateLimits:\n    - windowMs: 1000\n      limit: 0\n`),

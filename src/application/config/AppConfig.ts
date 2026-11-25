@@ -84,6 +84,12 @@ const DEFAULT_RATE_LIMITS: RateLimitWindow[] = [
     { windowMs: 60_000, limit: 10 },
 ];
 
+/**
+ * Token rate limiting is disabled by default (no windows). Declared outside the `as const`
+ * defaults so it stays a mutable array, which zod's `prefault` requires.
+ */
+const DEFAULT_TOKEN_RATE_LIMIT_WINDOWS: RateLimitWindow[] = [];
+
 const fileConfigDefaults = {
     prompts: {
         basePrompt: BASE_PROMPT_DEFAULT,
@@ -123,6 +129,19 @@ const fileConfigDefaults = {
          * only when every window has capacity left. An empty list disables rate limiting.
          */
         rateLimits: DEFAULT_RATE_LIMITS,
+        /**
+         * Per-user sliding-window limits on weighted model token usage. Each finished request is charged
+         * `input_tokens - cache_read + cache_read * cachedTokensWeight + output_tokens * outputTokensWeight`,
+         * read from the final model response; a user is refused once any window's total reaches its limit.
+         */
+        tokenRateLimits: {
+            /** Multiplier for cached input tokens, 0 to 1. */
+            cachedTokensWeight: 0.1,
+            /** Multiplier for output (including thinking) tokens, 0 to 10. */
+            outputTokensWeight: 5,
+            /** Windows to enforce; empty disables token rate limiting. */
+            windows: DEFAULT_TOKEN_RATE_LIMIT_WINDOWS,
+        },
     },
     geminiModels: {
         /** Whether to include thought tokens in model responses. Useful for debugging. */
@@ -292,6 +311,23 @@ const fileConfigSchema = z.object({
             retries: z.number().int().nonnegative().prefault(fileConfigDefaults.discord.retries),
             enableInDMs: z.boolean().prefault(fileConfigDefaults.discord.enableInDMs),
             rateLimits: z.array(rateLimitWindowSchema).prefault(fileConfigDefaults.discord.rateLimits),
+            tokenRateLimits: z
+                .object({
+                    cachedTokensWeight: z
+                        .number()
+                        .min(0)
+                        .max(1)
+                        .prefault(fileConfigDefaults.discord.tokenRateLimits.cachedTokensWeight),
+                    outputTokensWeight: z
+                        .number()
+                        .min(0)
+                        .max(10)
+                        .prefault(fileConfigDefaults.discord.tokenRateLimits.outputTokensWeight),
+                    windows: z
+                        .array(rateLimitWindowSchema)
+                        .prefault(fileConfigDefaults.discord.tokenRateLimits.windows),
+                })
+                .prefault(fileConfigDefaults.discord.tokenRateLimits),
             previousBotId: z.string().optional(),
         })
 

@@ -6,6 +6,7 @@ import {
     getDeclaredRetryable,
     InputTokenBudgetExceededError,
     ModelPromptBlockedError,
+    TokenRateLimitExceededError,
 } from "../../domain/errors/AppError.ts";
 import type { IMessagePageRepository } from "../../domain/ports/IMessagePageRepository.ts";
 import type { IMessageRepository } from "../../domain/ports/IMessageRepository.ts";
@@ -25,6 +26,7 @@ import {
     isInlineDataPart,
     replaceInlineDataBlocksWithDiscordTokenUrls,
 } from "../helpers/langchainMessageTransformers.ts";
+import { lastAiUsageMetadata, type TokenUsageWeights, weighTokenUsage } from "../helpers/tokenUsageWeight.ts";
 import type {
     IChatClientBot,
     IChatClientMessage,
@@ -35,7 +37,7 @@ import type {
 import type { IAgentOrchestrator } from "../ports/IAgentOrchestrator.ts";
 import type { IChatMessageService } from "../ports/IChatMessageService.ts";
 import type { IInlineMediaNormalizer } from "../ports/IInlineMediaNormalizer.ts";
-import type { IRateLimiter } from "../ports/IRateLimiter.ts";
+import type { IRateLimiter, IWeightedRateLimiter } from "../ports/IRateLimiter.ts";
 import type { StatusMessageUpdater } from "../services/StatusMessageUpdater.ts";
 import {
     DM_GUILD_TOKEN,
@@ -58,7 +60,7 @@ export const RATE_LIMITED_NOTICE =
  * Failures that are an expected outcome rather than a fault in the bot (e.g. user content
  * tripping the provider's filters). They are logged as warnings and not reported to Sentry.
  */
-const WARN_ONLY_ERRORS = [ModelPromptBlockedError, InputTokenBudgetExceededError] as const;
+const WARN_ONLY_ERRORS = [ModelPromptBlockedError, InputTokenBudgetExceededError, TokenRateLimitExceededError] as const;
 
 function isWarnOnlyError(err: unknown): boolean {
     return WARN_ONLY_ERRORS.some((ErrorClass) => err instanceof ErrorClass);
@@ -104,6 +106,10 @@ export class HandleChatMessageUseCase {
         private readonly retries: number,
         /** Per-author limiter consulted only for messages that pass the relevance guards. */
         private readonly rateLimiter: IRateLimiter,
+        /** Per-requester weighted token limiter, checked before every agent run and charged after it. */
+        private readonly tokenRateLimiter: IWeightedRateLimiter,
+        /** Multipliers that convert a run's token usage into the amount charged to the token limiter. */
+        private readonly tokenUsageWeights: TokenUsageWeights,
         private readonly chatMessageService?: IChatMessageService,
         private readonly enableInDMs: boolean = false,
         /** Required in inline attachment mode: resolves discord:// token URLs to base64 data blocks. */
@@ -241,6 +247,11 @@ export class HandleChatMessageUseCase {
         reuseHumanMessage?: boolean;
         fetchHistory?: boolean;
         ephemeralInstructionMessage?: string;
+        /**
+         * User charged for the run's token usage — whoever triggered it (e.g. the Summarize invoker).
+         * Defaults to the message author.
+         */
+        requesterId?: string;
     }): Promise<AgentResult> {
         const {
             message,
@@ -252,6 +263,7 @@ export class HandleChatMessageUseCase {
             reuseHumanMessage,
             fetchHistory,
             ephemeralInstructionMessage,
+            requesterId = message.authorId,
         } = params;
 
         // Send the "Thinking" placeholder immediately — fire-and-forget (not awaited)
@@ -300,6 +312,7 @@ export class HandleChatMessageUseCase {
                 channelId: message.channelId,
                 guildId: message.guildId ?? DM_GUILD_TOKEN,
                 discordAuthorId: message.authorId,
+                requesterId,
                 message: userContent !== null ? message : null,
                 strippedContent: userContent,
                 attachments: attachments ?? [],
@@ -397,7 +410,10 @@ export class HandleChatMessageUseCase {
             span,
             ...agentParams
         } = params;
-        const result = await this.invokeAgent(agentParams);
+        const result = await this.invokeAgent({
+            ...agentParams,
+            requesterId: interactionAuthorDiscordId ?? params.message.authorId,
+        });
         await this.sendAgentResponse({
             replyTarget: params.message,
             ...result,
@@ -408,6 +424,26 @@ export class HandleChatMessageUseCase {
             interactionAuthorDiscordId,
             span,
         });
+    }
+
+    /**
+     * Charges a finished run's token usage to `requesterId` on the token rate limiter.
+     *
+     * Only the final AI message's usage is read: under the triage → answering-node structure the
+     * answering call's input already contains the whole history and tool results, so it dominates
+     * the turn and the intermediate calls scale with it.
+     */
+    private chargeTokenUsage(requesterId: string, newMessages: BaseMessage[], discordMessageId: string): void {
+        const usage = lastAiUsageMetadata(newMessages);
+        if (!usage) {
+            if (newMessages.length > 0) {
+                this.logger.warn({ discordMessageId }, "Agent response carried no token usage — nothing charged");
+            }
+            return;
+        }
+        const weightedTokens = weighTokenUsage(usage, this.tokenUsageWeights);
+        this.tokenRateLimiter.record(requesterId, weightedTokens);
+        this.logger.debug({ discordMessageId, requesterId, usage, weightedTokens }, "Charged token usage");
     }
 
     /**
@@ -423,6 +459,8 @@ export class HandleChatMessageUseCase {
         channelId: string;
         guildId: string;
         discordAuthorId: string;
+        /** User charged against the token rate limit for this run. */
+        requesterId: string;
         /** The live message object. Null when reuseHumanMessage is true. */
         message: IChatClientMessage | null;
         /** Content with bot mentions and command prefix already stripped. Null when reuseHumanMessage is true. */
@@ -592,6 +630,14 @@ export class HandleChatMessageUseCase {
 
                     span.setAttribute("app.history_length", history.length);
 
+                    // Checked only now, after the human message is persisted, so the refused prompt stays
+                    // in the reply chain and replying to the notice later keeps the conversation's context.
+                    // Still ahead of attachment resolution and the model call, so a refusal costs nothing.
+                    const tokenRateLimit = this.tokenRateLimiter.check(params.requesterId);
+                    if (!tokenRateLimit.allowed) {
+                        throw new TokenRateLimitExceededError(tokenRateLimit.retryAfterMs);
+                    }
+
                     // In inline mode, media blocks in history contain discord:// token URLs
                     // instead of raw base64. Resolve them to data blocks before sending to the LLM.
                     const llmHistory = this.inlineMediaNormalizer
@@ -617,6 +663,8 @@ export class HandleChatMessageUseCase {
                         wasInterrupted,
                         finishReason,
                     } = await this.orchestrator.process(llmHistory, params.intent, params.onStatusUpdate);
+
+                    this.chargeTokenUsage(params.requesterId, newMessages, params.discordMessageId);
 
                     if (!content && !this.hasInlineData(newMessages)) {
                         this.logger.warn(
