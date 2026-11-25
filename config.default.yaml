@@ -117,7 +117,7 @@ agent:
   #   google: Google Search grounding via Gemini API, answered by the googleSearch node.
   #           Requires GOOGLE_PAID_API_KEYS. Free only for gemini-2.5 models — gemini-3+ requires
   #           a paid plan.
-  #   tavily: Tavily Search API. Requires TAVILY_API_KEY env var. Searches run as a tool and their
+  #   tavily: Tavily Search API. Requires TAVILY_API_KEYS env var. Searches run as a tool and their
   #           results are evaluated by the general node, so the googleSearch node is not used.
   searchMode: "tavily"
 

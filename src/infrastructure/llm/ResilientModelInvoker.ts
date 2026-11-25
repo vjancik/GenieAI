@@ -16,6 +16,7 @@ import type {
     ModelInvocationResult,
 } from "../../application/ports/IResilientModelInvoker.ts";
 import type { IRoundRobinKeyProvider } from "../../application/ports/IRoundRobinKeyProvider.ts";
+import { type KeyAttemptResult, runWithKeyRotation } from "../../application/services/runWithKeyRotation.ts";
 import type { OnStatusUpdate } from "../../application/types/AgentStatus.ts";
 import type { Logger } from "../../application/types/Logger.ts";
 import type { GeminiApiKey } from "../../domain/entities/GeminiApiKey.ts";
@@ -195,9 +196,7 @@ async function streamingInvoke(
  * rate-limited (see {@link isKeyRotationError}) is returned rather than thrown so that key
  * rotation is handled in one place, regardless of how the fallback model is executed.
  */
-type KeyAttemptOutcome =
-    | { kind: "success"; invocation: ModelInvocationResult }
-    | { kind: "keyUnusable"; error: unknown };
+type KeyAttemptOutcome = KeyAttemptResult<ModelInvocationResult>;
 
 /** Per-key-attempt state shared by the fallback execution strategies. */
 interface KeyAttemptContext {
@@ -224,7 +223,7 @@ type ParallelDecision =
 function succeeded(outcome: ModelCallOutcome, usedFallback: boolean): KeyAttemptOutcome {
     return {
         kind: "success",
-        invocation: {
+        value: {
             result: outcome.message,
             usedFallback,
             wasInterrupted: outcome.wasInterrupted,
@@ -312,8 +311,7 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
      * inline filtering, fallback (per the configured execution mode), and rotation to the next
      * key whenever the current one is rejected (401, 402, 403) or rate-limited (429).
      *
-     * - Attempt 0 uses the current key (shared cursor, no mutation).
-     * - Attempt 1+ calls nextKey(), advancing the shared cursor.
+     * Rotation over the shared cursor is handled by {@link runWithKeyRotation}.
      *
      * @throws {@link AllFreeKeysExhaustedError} if `isPaid` is false and every key is rejected or rate-limited
      * @throws {@link AllPaidKeysExhaustedError} if `isPaid` is true and every key is rejected or rate-limited
@@ -340,53 +338,32 @@ export class ResilientModelInvoker implements IResilientModelInvoker {
                 const timeoutMs = options.timeoutMs ?? this.options.globalTimeoutMs;
                 // One budget check per invocation, so retries and fallback calls reuse a single count
                 const budgetCheck = this.inputTokenBudgetGuard?.forRequest();
-                let lastErr: unknown;
 
-                for (let attempt = 0; attempt < keyProvider.keyCount; attempt++) {
-                    // Capture the current key before invoking. Because multiple requests
-                    // can run concurrently, the cursor may have already been advanced by
-                    // another request between when we threw and when we check. Reading
-                    // currentKey here ensures each attempt starts with the live cursor.
-                    const key = keyProvider.currentKey;
+                const rotation = await runWithKeyRotation(keyProvider, (key, attempt) =>
+                    this.attemptWithKey(getModel(key), getFallbackModel?.(key), messages, options, {
+                        key,
+                        attempt,
+                        isPaid,
+                        timeoutMs,
+                        span,
+                        callbacks: budgetCheck && [budgetCheck.handlerFor(key)],
+                    }),
+                );
 
-                    const outcome = await this.attemptWithKey(
-                        getModel(key),
-                        getFallbackModel?.(key),
-                        messages,
-                        options,
-                        {
-                            key,
-                            attempt,
-                            isPaid,
-                            timeoutMs,
-                            span,
-                            callbacks: budgetCheck && [budgetCheck.handlerFor(key)],
-                        },
-                    );
-
-                    if (outcome.kind === "keyUnusable") {
-                        lastErr = outcome.error;
-                        // Only advance the cursor if no concurrent request has already
-                        // done so. If currentKey has changed since we captured it, a
-                        // parallel invocation already rotated to the next key — we must
-                        // not skip it by calling nextKey() again.
-                        if (keyProvider.currentKey.id === key.id) {
-                            keyProvider.nextKey();
-                        }
-                        continue;
-                    }
-
-                    const { invocation } = outcome;
-                    span.setAttributes({
-                        "llm.attempt_count": attempt + 1,
-                        "llm.api_key_id": key.id,
-                        "llm.used_fallback": invocation.usedFallback,
-                        ...(invocation.finishReason && { "llm.finish_reason": invocation.finishReason }),
-                    });
-                    return invocation;
+                if (rotation.kind === "exhausted") {
+                    throw isPaid
+                        ? new AllPaidKeysExhaustedError(rotation.lastError)
+                        : new AllFreeKeysExhaustedError(rotation.lastError);
                 }
 
-                throw isPaid ? new AllPaidKeysExhaustedError(lastErr) : new AllFreeKeysExhaustedError(lastErr);
+                const { value: invocation, key, attemptCount } = rotation;
+                span.setAttributes({
+                    "llm.attempt_count": attemptCount,
+                    "llm.api_key_id": key.id,
+                    "llm.used_fallback": invocation.usedFallback,
+                    ...(invocation.finishReason && { "llm.finish_reason": invocation.finishReason }),
+                });
+                return invocation;
             },
         );
     }

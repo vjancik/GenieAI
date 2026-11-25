@@ -1,12 +1,13 @@
 import type { File as GenaiFile, GoogleGenAIOptions, UploadFileConfig } from "@google/genai";
 import { GoogleGenAI } from "@google/genai";
+import { type RetryOptions, retryWithBackoff } from "../../application/services/retryWithBackoff.ts";
 import { AppError, GeminiUploadHttpError } from "../../domain/errors/AppError.ts";
 
 const GEMINI_UPLOAD_BASE = "https://generativelanguage.googleapis.com";
 const UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024; // 8 MB — matches SDK default
-const MAX_RETRY_COUNT = 3;
-const INITIAL_RETRY_DELAY_MS = 1000;
-const DELAY_MULTIPLIER = 2;
+
+/** Retry policy for transient upload failures: 3 retries, waiting 1 s, 2 s and 4 s. */
+const UPLOAD_RETRY_OPTIONS: RetryOptions = { maxRetries: 3, initialDelayMs: 1000 };
 
 export interface UploadStreamConfig extends Pick<UploadFileConfig, "name" | "mimeType" | "displayName"> {
     /** Total byte length of the stream — required by the resumable upload protocol. */
@@ -21,6 +22,28 @@ export interface UploadStreamConfig extends Pick<UploadFileConfig, "name" | "mim
  */
 function isRetryableUploadStatus(status: number): boolean {
     return status === 408 || status >= 500;
+}
+
+/**
+ * Thrown when an upload chunk is answered with an OK response that lacks the
+ * `x-goog-upload-status` header, i.e. the server did not acknowledge the chunk. Retryable.
+ */
+class UploadNotAcknowledgedError extends AppError {
+    constructor(message: string) {
+        super("GEMINI_UPLOAD_FAILED", message);
+    }
+}
+
+/** True for an upload failure worth sending the same request again (see {@link isRetryableUploadStatus}). */
+function isRetryableUploadError(err: unknown): boolean {
+    if (err instanceof UploadNotAcknowledgedError) return true;
+    return err instanceof GeminiUploadHttpError && isRetryableUploadStatus(err.status);
+}
+
+/** Notes the retries that preceded a failure in its message; empty for a first attempt. */
+function retriesNote(retry: number): string {
+    if (retry === 0) return "";
+    return ` after ${retry} ${retry === 1 ? "retry" : "retries"}`;
 }
 
 // Implementation methods were hoisted to module level for easier testing
@@ -81,6 +104,7 @@ export async function initiateResumableUpload(apiKey: string, config: UploadStre
  * first (safe under 8 MB) so the body can be retried with exponential backoff
  * on transient failures (see {@link isRetryableUploadStatus}).
  *
+ * @param retryOptions - Retry policy for transient failures; overridable for tests
  * @throws {GeminiUploadHttpError} immediately on a non-retryable response, or once the retries
  *         for a retryable one are used up
  */
@@ -88,6 +112,7 @@ export async function uploadStreamSingleRequest(
     apiKey: string,
     stream: ReadableStream<Uint8Array>,
     config: UploadStreamConfig,
+    retryOptions: RetryOptions = UPLOAD_RETRY_OPTIONS,
 ): Promise<GenaiFile> {
     const fileMetadata: Record<string, string | undefined> = {
         mimeType: config.mimeType,
@@ -130,10 +155,7 @@ export async function uploadStreamSingleRequest(
 
     const url = `${GEMINI_UPLOAD_BASE}/upload/v1beta/files?key=${apiKey}`;
 
-    let retryCount = 0;
-    let delayMs = INITIAL_RETRY_DELAY_MS;
-
-    while (true) {
+    const send = async (retry: number) => {
         const response = await fetch(url, {
             method: "POST",
             headers: {
@@ -144,41 +166,35 @@ export async function uploadStreamSingleRequest(
         });
 
         if (response.ok) {
+            // TYPE COERCION: the Files API answers a successful upload with the File resource under `file`
             const fileResource = (await response.json()) as { file: GenaiFile };
             return fileResource.file;
         }
 
-        if (!isRetryableUploadStatus(response.status)) {
-            const text = await response.text();
-            throw new GeminiUploadHttpError(
-                `Gemini File API single request upload failed (${response.status}): ${text}`,
-                response.status,
-                text,
-            );
-        }
+        const text = await response.text();
+        throw new GeminiUploadHttpError(
+            `Gemini File API single request upload failed (${response.status})${retriesNote(retry)}: ${text}`,
+            response.status,
+            text,
+        );
+    };
 
-        retryCount++;
-        if (retryCount > MAX_RETRY_COUNT) {
-            const text = await response.text();
-            throw new GeminiUploadHttpError(
-                `Gemini File API single request upload failed (${response.status}) after ${MAX_RETRY_COUNT} retries: ${text}`,
-                response.status,
-                text,
-            );
-        }
-        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-        delayMs *= DELAY_MULTIPLIER;
-    }
+    return retryWithBackoff(send, retryOptions, { isRetryable: isRetryableUploadError });
 }
 
 /**
  * Step 2 of the resumable upload protocol: read the stream in 8 MB chunks and
  * POST each to the upload session URL with exponential-backoff retry.
  *
+ * @param retryOptions - Retry policy for transient chunk failures; overridable for tests
  * @throws {GeminiUploadHttpError} when a chunk is answered with a non-OK response that is not
  *         worth retrying (see {@link isRetryableUploadStatus}) or that outlasts the retries
  */
-export async function uploadStreamChunked(stream: ReadableStream<Uint8Array>, uploadUrl: string): Promise<GenaiFile> {
+export async function uploadStreamChunked(
+    stream: ReadableStream<Uint8Array>,
+    uploadUrl: string,
+    retryOptions: RetryOptions = UPLOAD_RETRY_OPTIONS,
+): Promise<GenaiFile> {
     const reader = stream.getReader();
     // Pre-allocate one fixed 8 MB buffer reused across all chunks.
     const buffer = new Uint8Array(UPLOAD_CHUNK_SIZE);
@@ -230,12 +246,8 @@ export async function uploadStreamChunked(stream: ReadableStream<Uint8Array>, up
         const isLastChunk = streamDone && leftover === null;
         const uploadCommand = isLastChunk ? "upload, finalize" : "upload";
 
-        let retryCount = 0;
-        let delayMs = INITIAL_RETRY_DELAY_MS;
-        let chunkResponse: Response | null = null;
-
-        while (retryCount <= MAX_RETRY_COUNT) {
-            chunkResponse = await fetch(uploadUrl, {
+        const sendChunk = async (retry: number) => {
+            const response = await fetch(uploadUrl, {
                 method: "POST",
                 headers: {
                     "Content-Length": String(chunkSize),
@@ -246,33 +258,28 @@ export async function uploadStreamChunked(stream: ReadableStream<Uint8Array>, up
             });
 
             // x-goog-upload-status presence signals the server acknowledged the chunk
-            if (chunkResponse.headers.get("x-goog-upload-status")) break;
+            if (response.headers.get("x-goog-upload-status")) return response;
 
-            if (!chunkResponse.ok && !isRetryableUploadStatus(chunkResponse.status)) {
-                const body = await chunkResponse.text();
-                throw new GeminiUploadHttpError(
-                    `Gemini chunk upload failed (${chunkResponse.status}) at offset ${offset}: ${body}`,
-                    chunkResponse.status,
-                    body,
+            const attemptContext = `${retriesNote(retry)} at offset ${offset}`;
+            if (response.ok) {
+                throw new UploadNotAcknowledgedError(
+                    `Gemini chunk upload failed${attemptContext}: the response lacks x-goog-upload-status`,
                 );
             }
+            const body = await response.text();
+            throw new GeminiUploadHttpError(
+                `Gemini chunk upload failed (${response.status})${attemptContext}: ${body}`,
+                response.status,
+                body,
+            );
+        };
 
-            retryCount++;
-            if (retryCount > MAX_RETRY_COUNT) {
-                const message = `Gemini chunk upload failed after ${MAX_RETRY_COUNT} retries at offset ${offset}`;
-                // An OK response that merely lacks the upload status header has no failure status to report
-                throw chunkResponse.ok
-                    ? new AppError("GEMINI_UPLOAD_FAILED", message)
-                    : new GeminiUploadHttpError(message, chunkResponse.status, await chunkResponse.text());
-            }
-            await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-            delayMs *= DELAY_MULTIPLIER;
-        }
+        const chunkResponse = await retryWithBackoff(sendChunk, retryOptions, { isRetryable: isRetryableUploadError });
 
         lastResponse = chunkResponse;
         offset += chunkSize;
 
-        if (chunkResponse?.headers.get("x-goog-upload-status") !== "active") break;
+        if (chunkResponse.headers.get("x-goog-upload-status") !== "active") break;
     }
 
     if (!lastResponse) {

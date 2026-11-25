@@ -34,7 +34,7 @@ const ATTACHMENT_MODES = Object.values(AttachmentMode) as readonly AttachmentMod
  * - "google": Google Search grounding via the Gemini API (requires a paid API key;
  *   only free for gemini-2.5 models — gemini-3+ requires a paid plan). Answered by the
  *   googleSearch node.
- * - "tavily": Tavily Search API (requires TAVILY_API_KEY env var). Runs as a tool, with the
+ * - "tavily": Tavily Search API (requires the TAVILY_API_KEYS env var). Runs as a tool, with the
  *   general node answering from the results.
  */
 export const SearchMode = {
@@ -383,7 +383,7 @@ const fileConfigSchema = z.object({
          * - "google": Google Search grounding via the Gemini API (requires a paid key;
          *   free only for gemini-2.5 models — gemini-3+ requires a paid plan). Search requests
          *   are answered by the googleSearch node.
-         * - "tavily": Tavily Search API (requires TAVILY_API_KEY env var). Searches run as a
+         * - "tavily": Tavily Search API (requires the TAVILY_API_KEYS env var). Searches run as a
          *   tool and their results are answered from by the general node.
          * Defaults to "google".
          */
@@ -429,6 +429,15 @@ const commaSeparatedKeysSchema = z
     )
     .pipe(z.string().array());
 
+/**
+ * Resolves the Tavily key pool: TAVILY_API_KEYS when it lists any key, otherwise the legacy
+ * single-key TAVILY_API_KEY, otherwise null.
+ */
+function resolveTavilyApiKeys(keys: string[] | undefined, legacyKey: string | undefined): string[] | null {
+    if (keys !== undefined && keys.length > 0) return keys;
+    return legacyKey ? [legacyKey] : null;
+}
+
 const envConfigSchema = z
     .object({
         DISCORD_CLIENT_ID: z.string().min(1, "DISCORD_CLIENT_ID is required"),
@@ -448,12 +457,15 @@ const envConfigSchema = z
          */
         GOOGLE_PAID_API_KEYS: commaSeparatedKeysSchema.optional(),
         /**
-         * Tavily Search API key — required when agent.searchMode is "tavily".
-         * Obtain a key at https://tavily.com.
+         * Tavily Search API keys. Comma-separated. Required when agent.searchMode is "tavily".
+         * Obtain keys at https://tavily.com.
+         * Keys are used in the listed order, rotating to the next one when a key is rejected
+         * (HTTP 401, 403), rate-limited (HTTP 429) or out of credits (HTTP 432, 433).
          */
+        TAVILY_API_KEYS: commaSeparatedKeysSchema.optional(),
+        /** Single Tavily Search API key, still accepted for existing setups. Ignored when TAVILY_API_KEYS is set. */
         TAVILY_API_KEY: z
             .string()
-            .min(1)
             .transform((v) => v.trim())
             .optional(),
     })
@@ -463,7 +475,7 @@ const envConfigSchema = z
         databaseUrl: env.DATABASE_URL,
         googleFreeApiKeys: env.GOOGLE_FREE_API_KEYS ?? null,
         googlePaidApiKeys: env.GOOGLE_PAID_API_KEYS ?? null,
-        tavilyApiKey: env.TAVILY_API_KEY ?? null,
+        tavilyApiKeys: resolveTavilyApiKeys(env.TAVILY_API_KEYS, env.TAVILY_API_KEY),
     }));
 
 /** Inferred type from the environment variable schema. */
@@ -696,6 +708,10 @@ export function validateConfig(config: AppConfig, logger?: Logger): void {
         throw new ConfigError(
             'GOOGLE_PAID_API_KEYS is required because one or more agent nodes use apiKeyType: "paid"',
         );
+    }
+
+    if (searchMode === SearchMode.tavily && !config.tavilyApiKeys?.length) {
+        throw new ConfigError('TAVILY_API_KEYS is required because agent.searchMode is "tavily"');
     }
 
     // In parallel mode the grace period decides when a fallback answer wins, and suitable values

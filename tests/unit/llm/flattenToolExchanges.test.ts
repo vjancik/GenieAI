@@ -116,12 +116,32 @@ describe("flattenToolExchanges", () => {
         expect(text).toBe("Web search context:\n[1] A (https://a.com)\nfirst\n\n[2] B (https://b.com)\nsecond");
     });
 
-    test("reports an empty web search", () => {
+    test("explains an empty web search to the model, naming the query", () => {
+        const messages = [
+            new AIMessage({
+                content: "",
+                tool_calls: [
+                    { name: ToolName.WEB_SEARCH, args: { query: "obscure topic" }, id: "call_0", type: "tool_call" },
+                ],
+            }),
+            toolResult(ToolName.WEB_SEARCH, []),
+        ];
+
+        const text = humanTextAt(flattenToolExchanges(messages, testLogger).messages, 0);
+
+        expect(text).toBe(
+            'Web search context:\nThe web search for "obscure topic" found no results, so there is no web content ' +
+                "to base the answer on. Tell the user that nothing relevant could be found online. If you answer " +
+                "from your own knowledge instead, say so, and point out that it may be outdated.",
+        );
+    });
+
+    test("explains an empty web search without a query when the call has none", () => {
         const messages = [toolCallMessage(ToolName.WEB_SEARCH), toolResult(ToolName.WEB_SEARCH, [])];
 
         const text = humanTextAt(flattenToolExchanges(messages, testLogger).messages, 0);
 
-        expect(text).toBe("Web search context:\nThe web search returned no results.");
+        expect(text).toStartWith("Web search context:\nThe web search found no results,");
     });
 
     test("merges all ToolMessages of one exchange into one HumanMessage", () => {

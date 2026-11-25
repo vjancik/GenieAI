@@ -118,7 +118,7 @@ Copy `.env.example` to `.env` and fill in the required values.
 | `DATABASE_URL` | ✅ | PostgreSQL connection string |
 | `GOOGLE_FREE_API_KEYS` | ✅* | Comma-separated free-tier Google AI API keys (required when any agent node uses `apiKeyType: "free"`) |
 | `GOOGLE_PAID_API_KEYS` | ✅* | Comma-separated paid Google AI API keys, used in the listed order (required when any agent node uses `apiKeyType: "paid"`) |
-| `TAVILY_API_KEY` | | [Tavily](https://app.tavily.com/playground) API key — required only when `agent.searchMode` is set to `"tavily"` |
+| `TAVILY_API_KEYS` | | Comma-separated [Tavily](https://app.tavily.com/playground) API keys, used in the listed order and rotated when a key is rejected, rate-limited or out of credits — required only when `agent.searchMode` is set to `"tavily"`. The single-key `TAVILY_API_KEY` is still accepted when this is unset |
 | `LOG_LEVEL` | | Pino log level: `trace`, `debug`, `info`, `warn`, `error` (default: `info`) |
 | `FILE_LOG` | | Write structured JSON logs to `./logs/` alongside console output (default: `false`) |
 | `NODE_ENV` | | Set to `production` to disable pino-pretty and output raw JSON |

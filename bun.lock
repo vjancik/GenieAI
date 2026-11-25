@@ -9,7 +9,6 @@
         "@langchain/core": "^1.4.1",
         "@langchain/google": "^0.2.15",
         "@langchain/langgraph": "^1.7.4",
-        "@langchain/tavily": "^1.2.1",
         "@mozilla/readability": "^0.6.0",
         "@sentry/bun": "^11.12.0",
         "@sentry/core": "^11.12.0",
@@ -160,8 +159,6 @@
     "@langchain/langgraph-sdk": ["@langchain/langgraph-sdk@1.16.0", "", { "dependencies": { "@langchain/protocol": "^0.0.21", "@types/json-schema": "^7.0.15", "p-queue": "^9.0.1", "p-retry": "^7.1.1" }, "peerDependencies": { "@langchain/core": "^1.3.2", "react": "^18 || ^19", "react-dom": "^18 || ^19" }, "optionalPeers": ["react", "react-dom"] }, "sha512-E1NZJDHmHxKBqbxGGahNSlvpI8oUo7UKs+Ce4XhGz2tvXRAyQfZeQppVzFkeQsYpueXvFiyMYuyUXz9X98/4+A=="],
 
     "@langchain/protocol": ["@langchain/protocol@0.0.21", "", {}, "sha512-HJS8Cd5GJ437MIrCnbrPHx0FJcluyOk5HdZzD081ap4SBzfWpAj/6AtI7fqpNSMo6VZEoEdaN9fIts8R0XR1AQ=="],
-
-    "@langchain/tavily": ["@langchain/tavily@1.2.1", "", { "dependencies": { "zod": "^4.6.6" }, "peerDependencies": { "@langchain/core": "^1.0.0" } }, "sha512-VVkZf7icx0mZaNQ1G3fxSBtiOGXBkrW6mkm1Jlfpq4COG2qCaqxY+ucXS7ksD23jt8jQV9sK/Zb4vgubHC0sdQ=="],
 
     "@mixmark-io/domino": ["@mixmark-io/domino@2.2.0", "", {}, "sha512-Y28PR25bHXUg88kCV7nivXrP2Nj2RueZ3/l/jdx6J9f8J4nsEGcgX0Qe6lt7Pa+J79+kPiJU3LguR6O/6zrLOw=="],
 

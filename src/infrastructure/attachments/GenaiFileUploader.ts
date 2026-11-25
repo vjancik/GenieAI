@@ -1,6 +1,6 @@
 import { FileState } from "@google/genai";
 import * as Sentry from "@sentry/bun";
-import { file as bunFile } from "bun";
+import { file as bunFile, sleep } from "bun";
 import type { FileConfig } from "../../application/config/AppConfig.ts";
 import { normalizeGeminiMimeType } from "../../application/helpers/geminiMimeType.ts";
 import type { IGeminiFileUploader, UploadedGeminiFile } from "../../application/ports/IGeminiFileUploader.ts";
@@ -86,7 +86,7 @@ export class GenaiFileUploader implements IGeminiFileUploader {
                             `Timed out waiting for Gemini file "${fileName}" to become ACTIVE after ${this.maxPollWaitMs / 1000}s`,
                         );
                     }
-                    await new Promise<void>((resolve) => setTimeout(resolve, this.pollIntervalMs));
+                    await sleep(this.pollIntervalMs);
                     if (!file.name) {
                         throw new AppError(
                             "GEMINI_UPLOAD_FAILED",

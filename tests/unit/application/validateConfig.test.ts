@@ -26,7 +26,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
         databaseUrl: "postgres://localhost/test",
         googleFreeApiKeys: ["free-key"],
         googlePaidApiKeys: null,
-        tavilyApiKey: null,
+        tavilyApiKeys: ["tavily-key"],
         file: {
             attachmentDownloader: {
                 timeoutMs: 10_000,
@@ -146,6 +146,17 @@ describe("validateConfig", () => {
             apiKeyType: "paid",
         };
         expect(() => validateConfig(config)).toThrow(/GOOGLE_PAID_API_KEYS is required/);
+    });
+
+    it("throws ConfigError in tavily mode when TAVILY_API_KEYS is absent or empty", () => {
+        for (const tavilyApiKeys of [null, []]) {
+            const config = makeConfig({ tavilyApiKeys });
+            expect(() => validateConfig(config)).not.toThrow();
+
+            // TYPE COERCION: overriding a readonly nested setting requires a cast
+            (config.file.agent as { searchMode: SearchMode }).searchMode = SearchMode.tavily;
+            expect(() => validateConfig(config)).toThrow(/TAVILY_API_KEYS is required/);
+        }
     });
 
     it("ignores the googleSearch node's key type in tavily mode, where it never runs", () => {

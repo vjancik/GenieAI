@@ -1,4 +1,4 @@
-import type { IRoundRobinKeyProvider } from "../../application/ports/IRoundRobinKeyProvider.ts";
+import type { IRoundRobinKeyProvider, RotatableKey } from "../../application/ports/IRoundRobinKeyProvider.ts";
 import type { GeminiApiKey } from "../../domain/entities/GeminiApiKey.ts";
 import { ConfigError } from "../../domain/errors/AppError.ts";
 import type { IGeminiApiKeyRepository } from "../../domain/ports/IGeminiApiKeyRepository.ts";
@@ -6,9 +6,12 @@ import type { IGeminiApiKeyRepository } from "../../domain/ports/IGeminiApiKeyRe
 /** Persists the rotation cursor so it can be resumed after a restart. */
 type KeyCursorStore = Pick<IGeminiApiKeyRepository, "setLastUsed">;
 
+/** A key that can resume rotation from a persisted cursor (see `cursorStore`). */
+type ResumableKey = RotatableKey & { readonly lastUsed?: boolean };
+
 /**
- * Round-robin implementation of {@link IRoundRobinKeyProvider}, used for both the free and the
- * paid key pool.
+ * Round-robin implementation of {@link IRoundRobinKeyProvider}, used for the free and the paid
+ * Google key pool, and for the Tavily key pool.
  *
  * Maintains a cursor over the pool's API keys. The cursor is shared across concurrent requests,
  * so advancing it when a key is rejected in one request causes subsequent requests to start
@@ -29,7 +32,7 @@ type KeyCursorStore = Pick<IGeminiApiKeyRepository, "setLastUsed">;
  * a store to a second instance would make the two overwrite each other's position; the schema
  * and the repository query need to be extended first.
  */
-export class RoundRobinKeyProvider implements IRoundRobinKeyProvider {
+export class RoundRobinKeyProvider<TKey extends ResumableKey = GeminiApiKey> implements IRoundRobinKeyProvider<TKey> {
     private currentIndex: number;
 
     /**
@@ -38,7 +41,7 @@ export class RoundRobinKeyProvider implements IRoundRobinKeyProvider {
      *                      the first key
      */
     constructor(
-        private readonly keys: GeminiApiKey[],
+        private readonly keys: TKey[],
         private readonly cursorStore?: KeyCursorStore,
     ) {
         // Resume from the key that was last used before shutdown.
@@ -53,7 +56,7 @@ export class RoundRobinKeyProvider implements IRoundRobinKeyProvider {
      * @throws {ConfigError} if the pool is empty. Deferred to first use rather than construction
      *         because a pool that no agent node is configured to use is legitimately empty.
      */
-    get currentKey(): GeminiApiKey {
+    get currentKey(): TKey {
         // nextKey wraps via modulo, so the index only misses when the pool is empty
         const key = this.keys[this.currentIndex];
         if (!key) throw new ConfigError("RoundRobinKeyProvider has no API keys to provide");
@@ -65,7 +68,7 @@ export class RoundRobinKeyProvider implements IRoundRobinKeyProvider {
      * Mutates shared state — the next caller's {@link currentKey} will be this key.
      * Persists the new key as last-used when a cursor store is configured (fire-and-forget).
      */
-    nextKey(): GeminiApiKey {
+    nextKey(): TKey {
         // Math.max guards the modulo against an empty pool, leaving currentKey to report it
         this.currentIndex = (this.currentIndex + 1) % Math.max(this.keys.length, 1);
         const key = this.currentKey;

@@ -166,6 +166,45 @@ export class AllFreeKeysExhaustedError extends AppError {
 }
 
 /**
+ * Thrown when every Tavily API key has been rejected, rate-limited or has run out of credits.
+ * The display message deliberately names no provider.
+ */
+export class AllSearchKeysExhaustedError extends AppError {
+    constructor(cause?: unknown) {
+        super(
+            "ALL_SEARCH_KEYS_EXHAUSTED",
+            "All Tavily API keys are rejected, rate-limited or out of credits",
+            cause,
+            "All search provider API keys are currently exhausted, please try again later.",
+        );
+    }
+}
+
+/**
+ * Thrown when a Tavily search request fails: a non-OK HTTP response, a malformed response body,
+ * or a request that never got a response (network failure or timeout). Carries the response's
+ * `status` (null when there was no response or it was OK but malformed) so callers can classify
+ * the failure, e.g. as a rejected or exhausted API key, without parsing the message.
+ * The display message deliberately names no provider.
+ */
+export class TavilySearchError extends AppError {
+    /**
+     * @param message - Description of what went wrong
+     * @param status  - HTTP status code of the failed response, or null when there is none to report
+     * @param body    - Raw response body, kept for diagnostics; null when there was no response
+     * @param cause   - The underlying error, for failures without a response
+     */
+    constructor(
+        message: string,
+        public readonly status: number | null,
+        public readonly body: string | null,
+        cause?: unknown,
+    ) {
+        super("TAVILY_SEARCH_FAILED", message, cause, "The search provider failed to respond, please try again later.");
+    }
+}
+
+/**
  * Thrown when a Gemini Files API upload request is answered with a non-OK HTTP response.
  * Carries the response's `status` as a structured property so that callers can classify the
  * failure (e.g. a rejected or rate-limited API key) without parsing the message.

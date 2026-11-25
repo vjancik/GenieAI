@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { sleep } from "bun";
 import pino from "pino";
 import { StatusMessageUpdater } from "../../../src/application/services/StatusMessageUpdater.ts";
 
@@ -8,7 +9,6 @@ const testLogger = pino({ level: "silent" });
 const RATE_MS = 50;
 
 /** Wait long enough for the rate limit timer to fire. */
-const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 describe("StatusMessageUpdater", () => {
     test("never fires synchronously — always deferred even with no prior edit", () => {
@@ -30,7 +30,7 @@ describe("StatusMessageUpdater", () => {
             updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status A");
             expect(editFn).toHaveBeenCalledTimes(0);
 
-            await wait(RATE_MS + 20);
+            await sleep(RATE_MS + 20);
 
             expect(editFn).toHaveBeenCalledTimes(1);
             expect(editFn).toHaveBeenCalledWith("Status A");
@@ -60,7 +60,7 @@ describe("StatusMessageUpdater", () => {
             updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status C");
             updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status D");
 
-            await wait(RATE_MS + 20);
+            await sleep(RATE_MS + 20);
 
             // Exactly one edit, with the last content
             expect(editFn).toHaveBeenCalledTimes(1);
@@ -77,14 +77,14 @@ describe("StatusMessageUpdater", () => {
 
             // First update — fires after RATE_MS
             updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status A");
-            await wait(RATE_MS + 20);
+            await sleep(RATE_MS + 20);
             expect(editFn).toHaveBeenCalledTimes(1);
 
             // Second update arrives immediately after — fires after another ~RATE_MS
             updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status B");
             expect(editFn).toHaveBeenCalledTimes(1); // not yet
 
-            await wait(RATE_MS + 20);
+            await sleep(RATE_MS + 20);
             expect(editFn).toHaveBeenCalledTimes(2);
             expect(editFn).toHaveBeenLastCalledWith("Status B");
         },
@@ -100,7 +100,7 @@ describe("StatusMessageUpdater", () => {
             updater.scheduleUpdate("ch-1", "msg-1", editFn, "Status A");
             updater.cancel("msg-1");
 
-            await wait(RATE_MS + 20);
+            await sleep(RATE_MS + 20);
 
             expect(editFn).toHaveBeenCalledTimes(0);
         },
@@ -134,7 +134,7 @@ describe("StatusMessageUpdater", () => {
         updater.scheduleUpdate("ch-1", "msg-1", throwingEdit, "Status A");
 
         // Allow the timer to fire and the rejected promise to be handled
-        await wait(RATE_MS + 20);
+        await sleep(RATE_MS + 20);
         await Promise.resolve();
     });
 });

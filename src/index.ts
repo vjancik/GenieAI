@@ -27,6 +27,7 @@ import { HandleNextPageUseCase } from "./application/use-cases/HandleMessageNext
 import { HandleRetryUseCase } from "./application/use-cases/HandleMessageRetry.ts";
 import { HandleSourcesUseCase } from "./application/use-cases/HandleMessageSources.ts";
 import { HandleSummarizeUseCase } from "./application/use-cases/HandleMessageSummarize.ts";
+import { toTavilyApiKeys } from "./domain/entities/TavilyApiKey.ts";
 import { FetchAttachmentDownloader } from "./infrastructure/attachments/FetchAttachmentDownloader.ts";
 import { FetchStreamingAttachmentDownloader } from "./infrastructure/attachments/FetchStreamingAttachmentDownloader.ts";
 import { GenaiFileUploaderRegistry } from "./infrastructure/attachments/GenaiFileUploaderRegistry.ts";
@@ -70,6 +71,8 @@ import { createGetVideoCaptionsTool } from "./infrastructure/llm/tools/getVideoC
 import { createGetWebsiteTool } from "./infrastructure/llm/tools/getWebsiteTool.ts";
 import { createTavilyTool } from "./infrastructure/llm/tools/tavilySearchTool.ts";
 import { createLogger } from "./infrastructure/logging/logger.ts";
+import { KeyRotatingTavilySearch } from "./infrastructure/search/KeyRotatingTavilySearch.ts";
+import { TavilySearchClient } from "./infrastructure/search/TavilySearchClient.ts";
 
 const logger = createLogger(
     process.env.LOG_LEVEL?.toLowerCase() ?? "info",
@@ -140,8 +143,31 @@ const getVideoCaptionsTool = await createGetVideoCaptionsTool(logger.child({ mod
     urlGuard: externalUrlGuard,
     httpsUpgrader,
 });
+// Tavily mode only: web searches rotate over the Tavily key pool, which validateConfig has already
+// ensured is non-empty. The cursor always starts from the first key, respecting the configured order.
 const tavilyTool =
-    config.file.agent.searchMode === "tavily" ? createTavilyTool(logger.child({ module: "tool:search" })) : undefined;
+    config.file.agent.searchMode === "tavily" && config.tavilyApiKeys
+        ? createTavilyTool(
+              logger.child({ module: "tool:search" }),
+              new KeyRotatingTavilySearch(
+                  new TavilySearchClient(),
+                  new RoundRobinKeyProvider(toTavilyApiKeys(config.tavilyApiKeys)),
+                  {
+                      maxResults: 10,
+                      includeUsage: true,
+                      searchDepth: "basic",
+                      chunksPerSource: 3,
+                      includeAnswer: false,
+                      includeFavicon: false,
+                      includeImages: false,
+                      includeImageDescriptions: false,
+                  },
+                  logger.child({ module: "search:tavily" }),
+                  // Transient failures (5xx, network, timeout) are retried on the same key with exponential backoff
+                  { maxRetries: 1, initialDelayMs: 500 },
+              ),
+          )
+        : undefined;
 
 // Lazy model providers — one ChatGoogle client per (provider, apiKey) pair
 // Key pools — validateConfig has already ensured that every pool an agent node uses is non-empty.

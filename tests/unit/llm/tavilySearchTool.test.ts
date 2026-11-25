@@ -1,6 +1,7 @@
 import { describe, expect, it, mock } from "bun:test";
 import type { Logger } from "../../../src/application/types/Logger.ts";
 import {
+    createTavilyTool,
     dedupeGroundingChunks,
     extractTavilyResults,
     safeParseTavilyResponse,
@@ -17,16 +18,6 @@ describe("safeParseTavilyResponse", () => {
         const { objResponse, parsed } = safeParseTavilyResponse(obj);
 
         expect(objResponse).toBe(obj);
-        expect(parsed.success).toBe(true);
-    });
-
-    it("JSON.parses a string input before validating", () => {
-        const obj = { results: [{ url: "https://example.com", title: "Example", content: "text" }] };
-        const raw = JSON.stringify(obj);
-
-        const { objResponse, parsed } = safeParseTavilyResponse(raw);
-
-        expect(objResponse).toEqual(obj);
         expect(parsed.success).toBe(true);
     });
 
@@ -122,12 +113,6 @@ describe("extractTavilyResults", () => {
         expect(logger.warn).not.toHaveBeenCalled();
     });
 
-    it("accepts a JSON string response", () => {
-        const results = [{ url: "https://example.com", title: "Example", content: "text" }];
-
-        expect(extractTavilyResults(JSON.stringify({ results }), makeLogger())).toEqual(results);
-    });
-
     it("warns about and still forwards results that don't match the schema", () => {
         const results = [{ url: "https://example.com" }];
         const logger = makeLogger();
@@ -176,5 +161,25 @@ describe("searchResultsToGroundingChunks", () => {
     it("returns null when no result set matched the schema", () => {
         expect(searchResultsToGroundingChunks([null, "garbage"], makeLogger())).toBeNull();
         expect(searchResultsToGroundingChunks([], makeLogger())).toBeNull();
+    });
+});
+
+describe("createTavilyTool", () => {
+    it("searches for the query and resolves to the results array", async () => {
+        const results = [{ url: "https://example.com", title: "Example", content: "text" }];
+        const search = mock(async (_query: string): Promise<unknown> => ({ query: "q", results }));
+
+        expect(await createTavilyTool(makeLogger(), { search }).invoke({ query: "q" })).toEqual(results);
+        expect(search).toHaveBeenCalledWith("q");
+    });
+
+    it("throws search failures rather than returning them as a result", async () => {
+        const search = mock(async (_query: string): Promise<unknown> => {
+            throw new Error("all keys exhausted");
+        });
+
+        await expect(createTavilyTool(makeLogger(), { search }).invoke({ query: "q" })).rejects.toThrow(
+            "all keys exhausted",
+        );
     });
 });

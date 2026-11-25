@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { sleep } from "bun";
 import { isTimeoutError } from "../../../src/infrastructure/llm/errors/isTimeoutError.ts";
 
 describe("isTimeoutError", () => {
@@ -37,7 +38,7 @@ describe("isTimeoutError", () => {
             // AbortSignal.timeout() fires a TimeoutError DOMException after the delay.
             // Wait for the signal to fire so signal.reason is populated.
             const signal = AbortSignal.timeout(1);
-            await new Promise((resolve) => setTimeout(resolve, 10));
+            await sleep(10);
             expect(isTimeoutError(signal.reason)).toBe(true);
         });
     });

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { GeminiUploadHttpError } from "../../../src/domain/errors/AppError.ts";
 import type { UploadStreamConfig } from "../../../src/infrastructure/attachments/GoogleGenAI.ts";
 import {
@@ -88,8 +88,8 @@ function mockFetch(responses: Response[]): CapturedCall[] {
     return calls;
 }
 
-// Capture setTimeout before any test mutations so afterEach can always restore it.
-const originalSetTimeout = globalThis.setTimeout;
+/** The production retry count, without the delays. */
+const NO_DELAY = { maxRetries: 3, initialDelayMs: 0 };
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -153,24 +153,11 @@ describe("initiateResumableUpload", () => {
 });
 
 describe("uploadStreamChunked", () => {
-    beforeEach(() => {
-        // Suppress retry delays
-        // TYPE COERCION: Bun's setTimeout type includes __promisify__ not needed here
-        globalThis.setTimeout = ((fn: () => void) => {
-            fn();
-            return 0;
-        }) as unknown as typeof setTimeout;
-    });
-
-    afterEach(() => {
-        globalThis.setTimeout = originalSetTimeout;
-    });
-
     describe("single chunk", () => {
         test("sends one POST with 'upload, finalize' and returns the file resource", async () => {
             const calls = mockFetch([finalChunkResponse()]);
 
-            const result = await uploadStreamChunked(makeStream(bytes(1024)), UPLOAD_SESSION_URL);
+            const result = await uploadStreamChunked(makeStream(bytes(1024)), UPLOAD_SESSION_URL, NO_DELAY);
 
             expect(result).toEqual(FILE_RESOURCE);
             expect(calls).toHaveLength(1);
@@ -183,7 +170,7 @@ describe("uploadStreamChunked", () => {
             const calls = mockFetch([finalChunkResponse()]);
 
             const data = bytes(50, 0xff);
-            await uploadStreamChunked(makeStream(data), UPLOAD_SESSION_URL);
+            await uploadStreamChunked(makeStream(data), UPLOAD_SESSION_URL, NO_DELAY);
 
             expect(calls[0]?.body).toEqual(data);
         });
@@ -193,7 +180,11 @@ describe("uploadStreamChunked", () => {
         test("first chunk uses 'upload', last uses 'upload, finalize'", async () => {
             const calls = mockFetch([activeChunkResponse(), finalChunkResponse()]);
 
-            await uploadStreamChunked(makeStream(bytes(CHUNK_SIZE, 0x01), bytes(512, 0x02)), UPLOAD_SESSION_URL);
+            await uploadStreamChunked(
+                makeStream(bytes(CHUNK_SIZE, 0x01), bytes(512, 0x02)),
+                UPLOAD_SESSION_URL,
+                NO_DELAY,
+            );
 
             expect(calls).toHaveLength(2);
             expect(calls[0]?.headers["x-goog-upload-command"]).toBe("upload");
@@ -209,7 +200,7 @@ describe("uploadStreamChunked", () => {
 
             const chunk1 = bytes(CHUNK_SIZE, 0x01);
             const chunk2 = bytes(512, 0x02);
-            await uploadStreamChunked(makeStream(chunk1, chunk2), UPLOAD_SESSION_URL);
+            await uploadStreamChunked(makeStream(chunk1, chunk2), UPLOAD_SESSION_URL, NO_DELAY);
 
             expect(calls[0]?.body).toEqual(chunk1);
             expect(calls[1]?.body).toEqual(chunk2);
@@ -219,7 +210,7 @@ describe("uploadStreamChunked", () => {
             const calls = mockFetch([activeChunkResponse(), finalChunkResponse()]);
 
             const oversized = bytes(CHUNK_SIZE + 100, 0x03);
-            await uploadStreamChunked(makeStream(oversized), UPLOAD_SESSION_URL);
+            await uploadStreamChunked(makeStream(oversized), UPLOAD_SESSION_URL, NO_DELAY);
 
             expect(calls).toHaveLength(2);
             expect(calls[0]?.headers["content-length"]).toBe(String(CHUNK_SIZE));
@@ -241,7 +232,7 @@ describe("uploadStreamChunked", () => {
                 finalChunkResponse(), // attempt 3 — succeeds
             ]);
 
-            const result = await uploadStreamChunked(makeStream(bytes(100)), UPLOAD_SESSION_URL);
+            const result = await uploadStreamChunked(makeStream(bytes(100)), UPLOAD_SESSION_URL, NO_DELAY);
 
             expect(result).toEqual(FILE_RESOURCE);
             expect(calls).toHaveLength(3);
@@ -250,7 +241,7 @@ describe("uploadStreamChunked", () => {
         test("throws after MAX_RETRY_COUNT (3) failed attempts", async () => {
             mockFetch([makeResponse({}), makeResponse({}), makeResponse({}), makeResponse({})]);
 
-            await expect(uploadStreamChunked(makeStream(bytes(100)), UPLOAD_SESSION_URL)).rejects.toThrow(
+            await expect(uploadStreamChunked(makeStream(bytes(100)), UPLOAD_SESSION_URL, NO_DELAY)).rejects.toThrow(
                 "Gemini chunk upload failed after 3 retries",
             );
         });
@@ -260,7 +251,7 @@ describe("uploadStreamChunked", () => {
         test.each([401, 403, 429])("throws a GeminiUploadHttpError for %d without retrying", async (status) => {
             const calls = mockFetch([new Response("Denied", { status }), finalChunkResponse()]);
 
-            const thrown = await uploadStreamChunked(makeStream(bytes(100)), UPLOAD_SESSION_URL).catch(
+            const thrown = await uploadStreamChunked(makeStream(bytes(100)), UPLOAD_SESSION_URL, NO_DELAY).catch(
                 (err: unknown) => err,
             );
 
@@ -275,7 +266,11 @@ describe("uploadStreamChunked", () => {
             const calls = mockFetch([finalChunkResponse()]);
 
             const data = bytes(100, 0xcd);
-            await uploadStreamChunked(makeStream(new Uint8Array(0), new Uint8Array(0), data), UPLOAD_SESSION_URL);
+            await uploadStreamChunked(
+                makeStream(new Uint8Array(0), new Uint8Array(0), data),
+                UPLOAD_SESSION_URL,
+                NO_DELAY,
+            );
 
             expect(calls).toHaveLength(1);
             expect(calls[0]?.body).toEqual(data);
@@ -291,7 +286,7 @@ describe("uploadStreamChunked", () => {
                 }),
             ]);
 
-            const thrown = await uploadStreamChunked(makeStream(bytes(100)), UPLOAD_SESSION_URL).catch(
+            const thrown = await uploadStreamChunked(makeStream(bytes(100)), UPLOAD_SESSION_URL, NO_DELAY).catch(
                 (err: unknown) => err,
             );
 
@@ -303,21 +298,15 @@ describe("uploadStreamChunked", () => {
 });
 
 describe("uploadStreamSingleRequest", () => {
-    beforeEach(() => {
-        globalThis.setTimeout = ((fn: () => void) => {
-            fn();
-            return 0;
-        }) as unknown as typeof setTimeout;
-    });
-
-    afterEach(() => {
-        globalThis.setTimeout = originalSetTimeout;
-    });
-
     test("POSTs to the correct URL with multipart protocol headers", async () => {
         const calls = mockFetch([makeResponse({}, { file: FILE_RESOURCE })]);
 
-        await uploadStreamSingleRequest("my-api-key", makeStream(bytes(100)), { ...BASE_CONFIG, byteLength: 100 });
+        await uploadStreamSingleRequest(
+            "my-api-key",
+            makeStream(bytes(100)),
+            { ...BASE_CONFIG, byteLength: 100 },
+            NO_DELAY,
+        );
 
         expect(calls[0]?.url).toBe("https://generativelanguage.googleapis.com/upload/v1beta/files?key=my-api-key");
         expect(calls[0]?.headers["content-type"]).toContain("multipart/related");
@@ -329,10 +318,15 @@ describe("uploadStreamSingleRequest", () => {
     test("returns the file resource on success", async () => {
         mockFetch([makeResponse({}, { file: FILE_RESOURCE })]);
 
-        const result = await uploadStreamSingleRequest("key", makeStream(bytes(512)), {
-            ...BASE_CONFIG,
-            byteLength: 512,
-        });
+        const result = await uploadStreamSingleRequest(
+            "key",
+            makeStream(bytes(512)),
+            {
+                ...BASE_CONFIG,
+                byteLength: 512,
+            },
+            NO_DELAY,
+        );
 
         expect(result).toEqual(FILE_RESOURCE);
     });
@@ -341,7 +335,7 @@ describe("uploadStreamSingleRequest", () => {
         const calls = mockFetch([makeResponse({}, { file: FILE_RESOURCE })]);
         const data = bytes(64, 0xab);
 
-        await uploadStreamSingleRequest("key", makeStream(data), { ...BASE_CONFIG, byteLength: 64 });
+        await uploadStreamSingleRequest("key", makeStream(data), { ...BASE_CONFIG, byteLength: 64 }, NO_DELAY);
 
         // Body is a multipart envelope — file bytes must appear somewhere within it
         const body = calls[0]?.body;
@@ -355,7 +349,7 @@ describe("uploadStreamSingleRequest", () => {
     test("includes file metadata (name, displayName) in multipart body", async () => {
         const calls = mockFetch([makeResponse({}, { file: FILE_RESOURCE })]);
 
-        await uploadStreamSingleRequest("key", makeStream(bytes(16)), { ...BASE_CONFIG, byteLength: 16 });
+        await uploadStreamSingleRequest("key", makeStream(bytes(16)), { ...BASE_CONFIG, byteLength: 16 }, NO_DELAY);
 
         const bodyStr = new TextDecoder().decode(calls[0]?.body as Uint8Array);
         expect(bodyStr).toContain('"name":"files/test123"');
@@ -369,10 +363,15 @@ describe("uploadStreamSingleRequest", () => {
             makeResponse({}, { file: FILE_RESOURCE }),
         ]);
 
-        const result = await uploadStreamSingleRequest("key", makeStream(bytes(64)), {
-            ...BASE_CONFIG,
-            byteLength: 64,
-        });
+        const result = await uploadStreamSingleRequest(
+            "key",
+            makeStream(bytes(64)),
+            {
+                ...BASE_CONFIG,
+                byteLength: 64,
+            },
+            NO_DELAY,
+        );
 
         expect(result).toEqual(FILE_RESOURCE);
         expect(calls).toHaveLength(2);
@@ -387,7 +386,7 @@ describe("uploadStreamSingleRequest", () => {
         ]);
 
         await expect(
-            uploadStreamSingleRequest("key", makeStream(bytes(64)), { ...BASE_CONFIG, byteLength: 64 }),
+            uploadStreamSingleRequest("key", makeStream(bytes(64)), { ...BASE_CONFIG, byteLength: 64 }, NO_DELAY),
         ).rejects.toThrow("Gemini File API single request upload failed (500) after 3 retries");
     });
 
@@ -399,10 +398,15 @@ describe("uploadStreamSingleRequest", () => {
             new Response("Error", { status: 503 }),
         ]);
 
-        const thrown = await uploadStreamSingleRequest("key", makeStream(bytes(64)), {
-            ...BASE_CONFIG,
-            byteLength: 64,
-        }).catch((err: unknown) => err);
+        const thrown = await uploadStreamSingleRequest(
+            "key",
+            makeStream(bytes(64)),
+            {
+                ...BASE_CONFIG,
+                byteLength: 64,
+            },
+            NO_DELAY,
+        ).catch((err: unknown) => err);
 
         expect(thrown).toBeInstanceOf(GeminiUploadHttpError);
         expect((thrown as GeminiUploadHttpError).status).toBe(503);
@@ -412,10 +416,15 @@ describe("uploadStreamSingleRequest", () => {
     test.each([401, 402, 403, 429])("throws a GeminiUploadHttpError for %d without retrying", async (status) => {
         const calls = mockFetch([new Response("Denied", { status }), makeResponse({}, { file: FILE_RESOURCE })]);
 
-        const thrown = await uploadStreamSingleRequest("key", makeStream(bytes(64)), {
-            ...BASE_CONFIG,
-            byteLength: 64,
-        }).catch((err: unknown) => err);
+        const thrown = await uploadStreamSingleRequest(
+            "key",
+            makeStream(bytes(64)),
+            {
+                ...BASE_CONFIG,
+                byteLength: 64,
+            },
+            NO_DELAY,
+        ).catch((err: unknown) => err);
 
         expect(thrown).toBeInstanceOf(GeminiUploadHttpError);
         expect((thrown as GeminiUploadHttpError).status).toBe(status);

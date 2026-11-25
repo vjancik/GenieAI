@@ -1,8 +1,8 @@
 import { tool } from "@langchain/core/tools";
-import { TavilySearch } from "@langchain/tavily";
 import { z } from "zod";
 import type { Logger } from "../../../application/types/Logger.ts";
 import { ToolName } from "../../../application/types/ToolName.ts";
+import type { KeyRotatingTavilySearch } from "../../search/KeyRotatingTavilySearch.ts";
 
 export const TavilySearchResultSchema = z.object({
     url: z.string(),
@@ -34,15 +34,13 @@ const TavilySearchResponseResultsSchema = z.object({
 // export type TavilySearchResponse = z.infer<typeof TavilySearchResponseSchema>;
 
 /**
- * Safely parses a raw Tavily invoke result (which may be a pre-parsed object or a JSON string).
- * Returns the normalised object and the Zod parse result.
+ * Safely parses a raw Tavily response body, returning it together with the Zod parse result.
  * Only the results array is required — metadata fields are optional so a partial response
  * still succeeds. The caller receives the raw object regardless of parse success so the tool
  * result can still be forwarded to the LLM; grounding sources should only be populated on success.
  */
 export function safeParseTavilyResponse(raw: unknown) {
-    const objResponse: unknown = typeof raw === "string" ? JSON.parse(raw) : raw;
-    return { objResponse, parsed: TavilySearchResponseResultsSchema.safeParse(objResponse) };
+    return { objResponse: raw, parsed: TavilySearchResponseResultsSchema.safeParse(raw) };
 }
 
 /**
@@ -52,7 +50,7 @@ export function safeParseTavilyResponse(raw: unknown) {
  * A response that doesn't match the expected schema is reported and still forwarded as far as
  * possible, so the model gets whatever Tavily returned.
  *
- * @param raw - The raw Tavily invoke result
+ * @param raw - The raw Tavily response body
  * @param logger - Used to report responses that don't match the expected schema
  * @returns The untouched results array, or the whole response when it has no such array
  */
@@ -174,30 +172,19 @@ const TAVILY_SEARCH_DESCRIPTION =
 
 const QUERY_DESCRIPTION = "A one sentence natural language search query that can span multiple topics.";
 
+/** Runs a web search, resolving to the raw response body. */
+type WebSearch = Pick<KeyRotatingTavilySearch, "search">;
+
 /**
- * Creates a LangChain tool that wraps TavilySearch and exposes a simple { query } schema.
+ * Creates the web search LangChain tool, exposing a simple { query } schema.
  * Resolves to the search's results array (see {@link extractTavilyResults}), so like every other
- * tool it yields a plain serializable result.
- * Must only be called when TAVILY_API_KEY is set.
+ * tool it yields a plain serializable result. Search failures are thrown, not returned as a result.
  *
  * @param logger - Used to report responses that don't match the expected schema
+ * @param search - Runs the search, e.g. with key rotation
  */
-export function createTavilyTool(logger: Logger) {
-    const inner = new TavilySearch({
-        maxResults: 10,
-        includeUsage: true,
-        responseFormat: "content",
-        searchDepth: "advanced",
-        chunksPerSource: 3,
-        includeAnswer: false,
-        includeFavicon: false,
-        includeImages: false,
-        includeImageDescriptions: false,
-        // TODO: debug env var
-        verbose: false,
-    });
-
-    return tool(async ({ query }) => extractTavilyResults(await inner.invoke({ query }), logger), {
+export function createTavilyTool(logger: Logger, search: WebSearch) {
+    return tool(async ({ query }) => extractTavilyResults(await search.search(query), logger), {
         name: ToolName.WEB_SEARCH,
         description: TAVILY_SEARCH_DESCRIPTION,
         schema: z.object({
@@ -205,5 +192,3 @@ export function createTavilyTool(logger: Logger) {
         }),
     });
 }
-
-// export type TavilyTool = ReturnType<typeof createTavilyTool>;

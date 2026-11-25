@@ -64,9 +64,14 @@ function isPlainHttpUrl(url: string): boolean {
 /**
  * Renders a parsed tool result as text, interleaved with file blocks where the result holds
  * files, or returns null when the result does not match the tool's expected shape (the caller
- * then falls back to the raw content).
+ * then falls back to the raw content). `args` are the arguments the tool was called with, empty
+ * when the call cannot be found.
  */
-type ToolResultFormatter = (result: unknown, options: FlattenOptions) => ToolResultPart[] | null;
+type ToolResultFormatter = (
+    result: unknown,
+    options: FlattenOptions,
+    args: Record<string, unknown>,
+) => ToolResultPart[] | null;
 
 function formatWebsiteResults(result: unknown, options: FlattenOptions): ToolResultPart[] | null {
     const parsed = WebsiteResultsSchema.safeParse(result);
@@ -113,10 +118,23 @@ function formatVideoCaptionsResults(result: unknown): ToolResultPart[] | null {
     );
 }
 
-function formatWebSearchResults(result: unknown): ToolResultPart[] | null {
+/**
+ * Explains an empty web search to the model, naming the query when known. Answering nodes have no
+ * tools to search again with, so the model is steered towards being upfront about it instead.
+ */
+function describeEmptyWebSearch(args: Record<string, unknown>): string {
+    const searched = typeof args.query === "string" ? `The web search for "${args.query}"` : "The web search";
+    return (
+        `${searched} found no results, so there is no web content to base the answer on. ` +
+        "Tell the user that nothing relevant could be found online. If you answer from your own knowledge " +
+        "instead, say so, and point out that it may be outdated."
+    );
+}
+
+function formatWebSearchResults(result: unknown, _options: FlattenOptions, args: Record<string, unknown>) {
     const parsed = WebSearchResultsSchema.safeParse(result);
     if (!parsed.success) return null;
-    if (parsed.data.length === 0) return ["Web search context:\nThe web search returned no results."];
+    if (parsed.data.length === 0) return [`Web search context:\n${describeEmptyWebSearch(args)}`];
     const sources = parsed.data.map((entry, i) => `[${i + 1}] ${entry.title} (${entry.url})\n${entry.content}`);
     return [`Web search context:\n${sources.join(SECTION_SEPARATOR)}`];
 }
@@ -145,10 +163,15 @@ function parseToolContent(content: ToolMessage["content"]): unknown {
  * Renders a single ToolMessage. Unknown tools and results that don't match their tool's shape
  * are forwarded verbatim under a neutral label, so no retrieved context is lost.
  */
-function formatToolMessage(message: ToolMessage, logger: Logger, options: FlattenOptions): ToolResultPart[] {
+function formatToolMessage(
+    message: ToolMessage,
+    args: Record<string, unknown>,
+    logger: Logger,
+    options: FlattenOptions,
+): ToolResultPart[] {
     const formatted =
         message.name !== undefined && isToolName(message.name)
-            ? TOOL_RESULT_FORMATTERS[message.name](parseToolContent(message.content), options)
+            ? TOOL_RESULT_FORMATTERS[message.name](parseToolContent(message.content), options, args)
             : null;
     if (formatted !== null) return formatted;
 
@@ -250,7 +273,8 @@ export function flattenToolExchanges(
             );
         }
 
-        const toolCallCount = message instanceof AIMessage ? (message.tool_calls?.length ?? 0) : 0;
+        const toolCalls = message instanceof AIMessage ? (message.tool_calls ?? []) : [];
+        const toolCallCount = toolCalls.length;
         if (toolCallCount === 0) {
             flattened.push(message);
             continue;
@@ -270,7 +294,10 @@ export function flattenToolExchanges(
             );
         }
 
-        flattened.push(toHumanMessage(toolMessages.flatMap((tm) => formatToolMessage(tm, logger, options))));
+        const argsOf = (tm: ToolMessage) => toolCalls.find((call) => call.id === tm.tool_call_id)?.args ?? {};
+        flattened.push(
+            toHumanMessage(toolMessages.flatMap((tm) => formatToolMessage(tm, argsOf(tm), logger, options))),
+        );
         exchangeCount++;
     }
 

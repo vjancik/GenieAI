@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { sleep } from "bun";
 import pino from "pino";
 import type { AppConfig } from "../../../src/application/config/AppConfig.ts";
 import { MEDIA_REQUEST_HEADERS } from "../../../src/application/helpers/mediaRequestHeaders.ts";
@@ -267,7 +268,7 @@ describe("FetchAttachmentDownloader", () => {
         const globalFetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(makeResponse(data, "image/png"));
 
         // Wait long enough for the 1 ms timeout to fire before the response resolves
-        await new Promise((r) => setTimeout(r, 5));
+        await sleep(5);
 
         // Discord metadata wins; HTTP header value is ignored when metadata is present
         const result = await timedOutDownloader.download(testAttachment);
