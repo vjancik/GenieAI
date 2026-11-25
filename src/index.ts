@@ -150,7 +150,10 @@ const tavilyTool =
         ? createTavilyTool(
               logger.child({ module: "tool:search" }),
               new KeyRotatingTavilySearch(
-                  new TavilySearchClient(),
+                  // Transient failures (5xx, network, timeout) are retried on the same key with exponential backoff
+                  new TavilySearchClient(logger.child({ module: "search:tavily" }), {
+                      retry: { maxRetries: 1, initialDelayMs: 500 },
+                  }),
                   new RoundRobinKeyProvider(toTavilyApiKeys(config.tavilyApiKeys)),
                   {
                       maxResults: 10,
@@ -163,8 +166,6 @@ const tavilyTool =
                       includeImageDescriptions: false,
                   },
                   logger.child({ module: "search:tavily" }),
-                  // Transient failures (5xx, network, timeout) are retried on the same key with exponential backoff
-                  { maxRetries: 1, initialDelayMs: 500 },
               ),
           )
         : undefined;

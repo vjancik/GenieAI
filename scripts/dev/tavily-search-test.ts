@@ -23,7 +23,7 @@ if (apiKeys.length === 0) throw new Error("Set TAVILY_API_KEYS or TAVILY_API_KEY
 
 const logger = pino();
 const search = new KeyRotatingTavilySearch(
-    new TavilySearchClient(),
+    new TavilySearchClient(logger),
     new RoundRobinKeyProvider(toTavilyApiKeys(apiKeys)),
     { maxResults: 10, searchDepth: "basic", chunksPerSource: 3, includeUsage: true },
     logger,

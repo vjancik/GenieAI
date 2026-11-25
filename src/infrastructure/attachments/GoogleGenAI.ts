@@ -1,6 +1,6 @@
 import type { File as GenaiFile, GoogleGenAIOptions, UploadFileConfig } from "@google/genai";
 import { GoogleGenAI } from "@google/genai";
-import { type RetryOptions, retryWithBackoff } from "../../application/services/retryWithBackoff.ts";
+import { type RetryOptions, retriesNote, retryWithBackoff } from "../../application/services/retryWithBackoff.ts";
 import { AppError, GeminiUploadHttpError } from "../../domain/errors/AppError.ts";
 
 const GEMINI_UPLOAD_BASE = "https://generativelanguage.googleapis.com";
@@ -38,12 +38,6 @@ class UploadNotAcknowledgedError extends AppError {
 function isRetryableUploadError(err: unknown): boolean {
     if (err instanceof UploadNotAcknowledgedError) return true;
     return err instanceof GeminiUploadHttpError && isRetryableUploadStatus(err.status);
-}
-
-/** Notes the retries that preceded a failure in its message; empty for a first attempt. */
-function retriesNote(retry: number): string {
-    if (retry === 0) return "";
-    return ` after ${retry} ${retry === 1 ? "retry" : "retries"}`;
 }
 
 // Implementation methods were hoisted to module level for easier testing

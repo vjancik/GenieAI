@@ -19,6 +19,17 @@ interface RetryHooks {
 }
 
 /**
+ * Notes the retries that preceded a failure, for its error message, e.g. " after 2 retries";
+ * empty for a first attempt.
+ *
+ * @param retry - The retries so far, as passed to a {@link retryWithBackoff} operation
+ */
+export function retriesNote(retry: number): string {
+    if (retry === 0) return "";
+    return ` after ${retry} ${retry === 1 ? "retry" : "retries"}`;
+}
+
+/**
  * Runs `operation`, retrying it with exponential backoff while it fails with a retryable error.
  * The n-th retry waits `initialDelayMs * 2^(n-1)` ms.
  *
